@@ -1,0 +1,173 @@
+"""地图工具 — 高德地图 API。"""
+import httpx
+from langchain_core.tools import tool
+from config.settings import get_settings
+
+
+async def _amap_request(endpoint: str, params: dict) -> dict:
+    """发起高德地图 API 请求。"""
+    s = get_settings()
+    params["key"] = s.amap_api_key
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"https://restapi.amap.com{endpoint}", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+
+@tool
+async def search_nearby(location: str, keywords: str = "", radius: int = 1000) -> str:
+    """搜索指定位置附近的兴趣点。冷冷可以问「铜锣湾附近有什么咖啡店呀？」
+
+    Args:
+        location: 中心点坐标，格式「经度,纬度」，如「114.17,22.30」。也可以传从 geocode_address 获取的坐标。
+        keywords: 搜索关键词，如「咖啡店」「餐厅」
+        radius: 搜索半径（米），默认 1000m
+    """
+    try:
+        data = await _amap_request("/v3/place/around", {
+            "location": location, "keywords": keywords,
+            "radius": radius, "offset": 10,
+        })
+        if data.get("status") != "1":
+            return "小汐在海里游了一圈，没找到附近有什么……"
+
+        pois = data.get("pois", [])
+        if not pois:
+            return f"小汐在附近没有找到「{keywords}」……要不要换个词试试？"
+
+        result = f"🐋 小汐帮你找到附近的「{keywords}」啦：\n\n"
+        for i, poi in enumerate(pois[:8], 1):
+            name = poi.get("name", "?")
+            address = poi.get("address", "?")
+            distance = poi.get("distance", "?")
+            result += f"{i}. **{name}**\n   📍 {address}"
+            if distance and distance != "?":
+                result += f"  📏 约 {int(distance)}m"
+            result += "\n\n"
+        return result
+    except Exception as e:
+        return f"呜，小汐去找的时候迷路了……（{str(e)[:80]}）"
+
+
+@tool
+async def geocode_address(address: str) -> str:
+    """把中文地址转成经纬度坐标。冷冷可以直接问「铜锣湾在哪里？」
+
+    Args:
+        address: 详细地址，如「香港铜锣湾时代广场」
+    """
+    try:
+        data = await _amap_request("/v3/geocode/geo", {
+            "address": address, "city": "香港",
+        })
+        if data.get("status") != "1" or not data.get("geocodes"):
+            return f"小汐在香港找了找，好像没有「{address}」这个地方……"
+        gc = data["geocodes"][0]
+        return f"📍 {gc.get('formatted_address', address)}：{gc.get('location', '?')}"
+    except Exception as e:
+        return f"小汐定位的时候漂走了……（{str(e)[:80]}）"
+
+
+@tool
+async def fuzzy_search_place(keywords: str, city: str = "香港") -> str:
+    """按关键词模糊搜索香港的地点。冷冷可以直接问「尖沙咀在哪里？」
+
+    Args:
+        keywords: 搜索关键词，如「尖沙咀」「铜锣湾」
+        city: 城市，默认「香港」
+    """
+    try:
+        data = await _amap_request("/v3/place/text", {
+            "keywords": keywords, "city": city, "offset": 5,
+        })
+        if data.get("status") != "1" or not data.get("pois"):
+            return f"小汐在香港找了找，没有找到「{keywords}」……"
+        result = f"🐋 小汐找到了这些「{keywords}」：\n\n"
+        for i, poi in enumerate(data["pois"][:5], 1):
+            result += f"{i}. **{poi.get('name','?')}**\n"
+            result += f"   📍 {poi.get('address','?')}"
+            if poi.get("location"):
+                result += f"  🗺️ {poi['location']}"
+            result += "\n\n"
+        return result
+    except Exception as e:
+        return f"小汐被水母绊了一下……（{str(e)[:80]}）"
+
+
+@tool
+async def get_transit_route(origin: str, destination: str, city: str = "香港") -> str:
+    """查询公交/地铁路线。冷冷可以问「从铜锣湾怎么去中环？」
+
+    Args:
+        origin: 起点，如「铜锣湾」
+        destination: 终点，如「中环」
+        city: 城市，默认「香港」
+    """
+    try:
+        og = await _amap_request("/v3/geocode/geo", {"address": origin, "city": city})
+        dg = await _amap_request("/v3/geocode/geo", {"address": destination, "city": city})
+        og_loc = (og.get("geocodes") or [{}])[0].get("location", "")
+        dg_loc = (dg.get("geocodes") or [{}])[0].get("location", "")
+        if not og_loc or not dg_loc:
+            return "小汐找不到这条路……地址是不是写错了呀？"
+
+        route = await _amap_request("/v3/direction/transit/integrated", {
+            "origin": og_loc, "destination": dg_loc, "city": city,
+        })
+        transits = (route.get("route") or {}).get("transits", [])
+        if not transits:
+            return "小汐没找到公交路线……试试打车？"
+
+        t = transits[0]
+        dur = int(t.get("duration", 0))
+        walk = int(t.get("walking_distance", 0))
+        result = f"🚇 小汐帮你规划好啦！\n"
+        result += f"💰 约 {t.get('cost','?')} 元  ⏱️ 约 {dur // 60} 分钟"
+        if walk:
+            result += f"  🚶 {walk}m"
+        result += "\n\n"
+
+        for seg in t.get("segments", [])[:8]:
+            bus = seg.get("bus", {})
+            if bus and bus.get("buslines"):
+                bl = bus["buslines"][0]
+                dep = (bl.get("departure_stop") or {}).get("name", "?")
+                arr = (bl.get("arrival_stop") or {}).get("name", "?")
+                result += f"  🚌 {bl.get('name','?')}：{dep} → {arr}\n"
+            walk_s = seg.get("walking", {})
+            if walk_s:
+                d = int(walk_s.get("distance", 0))
+                if d > 100:
+                    result += f"  🚶 步行 {d}m\n"
+        return result
+    except Exception as e:
+        return f"小汐被红绿灯搞晕了……（{str(e)[:80]}）"
+
+
+@tool
+async def get_cycling_route(origin: str, destination: str, city: str = "香港") -> str:
+    """查询骑行路线。
+
+    Args:
+        origin: 起点
+        destination: 终点
+        city: 城市，默认「香港」
+    """
+    try:
+        og = await _amap_request("/v3/geocode/geo", {"address": origin, "city": city})
+        dg = await _amap_request("/v3/geocode/geo", {"address": destination, "city": city})
+        og_loc = (og.get("geocodes") or [{}])[0].get("location", "")
+        dg_loc = (dg.get("geocodes") or [{}])[0].get("location", "")
+        if not og_loc or not dg_loc:
+            return "小汐找不到这条路……"
+
+        data = await _amap_request("/v4/direction/bicycling", {
+            "origin": og_loc, "destination": dg_loc,
+        })
+        paths = (data.get("data") or {}).get("paths", [{}])
+        p = paths[0]
+        d = int(p.get("distance", 0))
+        t = int(p.get("duration", 0))
+        return f"🚲 {d}m，约 {t // 60} 分钟"
+    except Exception as e:
+        return f"小汐骑着骑着漂走了……（{str(e)[:80]}）"

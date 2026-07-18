@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# 环境配置（含 API Key）
+config/.env
+backend/config/.env
+
+# 数据文件（用户数据 + checkpoint DB）
+backend/data/*.yaml
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
+
+# Claude Code
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

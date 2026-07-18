@@ -1,0 +1,168 @@
+"""配置路由 — /api/config。
+
+提供前端控制台：模型选择、思考强度调节。
+
+参数真相：
+- DeepSeek API 没有 "reasoning_effort" 或 "thinking_budget" 参数
+- temperature 控制输出随机性（创造性），不是思考深度
+- max_tokens 控制最大输出长度，V3/R1 上限都是 8192
+- R1 的思维链是模型内置能力，不受外部参数控制
+- 上下文窗口：V3 = 64K tokens, R1 = 128K tokens
+"""
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from providers.deepseek import get_available_models, create_deepseek_llm
+from agent.graph import build_agent
+
+router = APIRouter()
+
+
+# ── 运行时配置（内存中保存，重启后重置为默认值） ──────────────
+
+_runtime_config = {
+    "model": "deepseek-v4-flash",
+    "temperature": 0.7,
+    "max_tokens": 8192,
+    "thinking_intensity": "max",
+    "reasoning_effort": 0.5,  # low / medium / high / max
+}
+
+# 思考强度 → temperature 映射
+# 诚实地说：这控制的是创造性/随机性，不是真正的"思考深度"
+# 但对于 V3 来说，高 temperature 确实让回答更发散、更有想象力
+# R1 的深度推理是内置的，跟 temperature 无关
+_THINKING_PRESETS = {
+    "low":    {"temperature": 0.3, "max_tokens": 4096,  "label": "轻柔"},
+    "medium": {"temperature": 0.7, "max_tokens": 8192,  "label": "适中"},
+    "high":   {"temperature": 1.0, "max_tokens": 8192,  "label": "深度"},
+    "max":    {"temperature": 1.2, "max_tokens": 8192,  "label": "全力"},
+}
+
+
+def get_runtime_config() -> dict:
+    """获取当前运行时配置。"""
+    return _runtime_config.copy()
+
+
+def get_current_temperature() -> float:
+    """获取当前 temperature。"""
+    intensity = _runtime_config.get("thinking_intensity", "max")
+    preset = _THINKING_PRESETS.get(intensity)
+    if preset:
+        return preset["temperature"]
+    return _runtime_config.get("temperature", 0.7)
+
+
+def get_current_max_tokens() -> int:
+    """获取当前 max_tokens。"""
+    intensity = _runtime_config.get("thinking_intensity", "max")
+    preset = _THINKING_PRESETS.get(intensity)
+    if preset:
+        return preset["max_tokens"]
+    return _runtime_config.get("max_tokens", 8192)
+
+
+def get_current_model() -> str:
+    """获取当前模型名称。"""
+    return _runtime_config.get("model", "deepseek-v4-flash")
+
+
+async def rebuild_agent(request: Request):
+    """用当前配置重建 LLM 和 Agent。"""
+    temperature = get_current_temperature()
+    max_tokens = get_current_max_tokens()
+    model = get_current_model()
+    reasoning_effort = _runtime_config.get("reasoning_effort")
+
+    new_llm = create_deepseek_llm(
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+    )
+
+    tools = request.app.state.tools
+    system_prompt = request.app.state.system_prompt
+    checkpointer = request.app.state.checkpointer
+
+    new_agent = build_agent(new_llm, tools, system_prompt, checkpointer)
+    request.app.state.agent = new_agent
+
+
+# ── 请求/响应模型 ──────────────────────────────────────────
+
+class ConfigResponse(BaseModel):
+    model: str
+    temperature: float
+    max_tokens: int
+    thinking_intensity: str
+    reasoning_effort: float | None = None
+    available_models: list[dict]
+
+
+class UpdateConfigRequest(BaseModel):
+    model: str | None = None
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(None, ge=256, le=8192)
+    thinking_intensity: str | None = None  # low / medium / high / max
+    reasoning_effort: float | None = Field(None, ge=0.0, le=1.0)
+
+
+# ── 端点 ────────────────────────────────────────────────────
+
+@router.get("/config", response_model=ConfigResponse)
+async def get_config():
+    """获取当前配置。"""
+    cfg = get_runtime_config()
+    return ConfigResponse(
+        model=cfg["model"],
+        temperature=cfg["temperature"],
+        max_tokens=cfg["max_tokens"],
+        thinking_intensity=cfg["thinking_intensity"],
+        reasoning_effort=cfg.get("reasoning_effort"),
+        available_models=get_available_models(),
+    )
+
+
+@router.post("/config", response_model=ConfigResponse)
+async def update_config(req: UpdateConfigRequest, request: Request):
+    """更新运行时配置，重建 Agent 使其生效。"""
+    old_model = _runtime_config["model"]
+
+    if req.model is not None:
+        valid_ids = [m["id"] for m in get_available_models()]
+        if req.model not in valid_ids:
+            raise HTTPException(400, f"不支持的模型: {req.model}")
+        _runtime_config["model"] = req.model
+
+    if req.thinking_intensity is not None:
+        if req.thinking_intensity not in _THINKING_PRESETS:
+            raise HTTPException(400, "思考强度只能是 low / medium / high / max")
+        _runtime_config["thinking_intensity"] = req.thinking_intensity
+        preset = _THINKING_PRESETS[req.thinking_intensity]
+        _runtime_config["temperature"] = preset["temperature"]
+        _runtime_config["max_tokens"] = preset["max_tokens"]
+
+    if req.temperature is not None:
+        _runtime_config["temperature"] = req.temperature
+        _runtime_config["thinking_intensity"] = "custom"
+
+    if req.reasoning_effort is not None:
+        _runtime_config["reasoning_effort"] = req.reasoning_effort
+
+    if req.max_tokens is not None:
+        _runtime_config["max_tokens"] = req.max_tokens
+
+    # 重建 Agent 使新配置生效
+    await rebuild_agent(request)
+
+    cfg = get_runtime_config()
+    return ConfigResponse(
+        model=cfg["model"],
+        temperature=cfg["temperature"],
+        max_tokens=cfg["max_tokens"],
+        thinking_intensity=cfg["thinking_intensity"],
+        reasoning_effort=cfg.get("reasoning_effort"),
+        available_models=get_available_models(),
+    )
