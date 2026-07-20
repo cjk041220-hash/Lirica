@@ -2,6 +2,7 @@
 import httpx
 from langchain_core.tools import tool
 from config.settings import get_settings
+from memory import location_store
 
 
 async def _amap_request(endpoint: str, params: dict) -> dict:
@@ -15,15 +16,26 @@ async def _amap_request(endpoint: str, params: dict) -> dict:
 
 
 @tool
-async def search_nearby(location: str, keywords: str = "", radius: int = 1000) -> str:
-    """搜索指定位置附近的兴趣点。冷冷可以问「铜锣湾附近有什么咖啡店呀？」
+async def search_nearby(keywords: str = "", radius: int = 1000, location: str = "") -> str:
+    """搜索附近的兴趣点。冷冷可以问「附近有什么咖啡店呀？」
+    如果有 GPS 坐标，location 可以不传，会自动使用冷冷的当前位置。
 
     Args:
-        location: 中心点坐标，格式「经度,纬度」，如「114.17,22.30」。也可以传从 geocode_address 获取的坐标。
         keywords: 搜索关键词，如「咖啡店」「餐厅」
         radius: 搜索半径（米），默认 1000m
+        location: 中心点坐标，格式「经度,纬度」，如「114.17,22.30」。可以不传，自动使用 GPS。
     """
     try:
+        # 如果没有传 location，尝试从会话缓存中获取 GPS 坐标
+        if not location:
+            cached = location_store.get_any()
+            if cached:
+                lat, lon = cached
+                location = f"{lon},{lat}"
+
+        if not location:
+            return "小汐不知道冷冷现在在哪里呢……告诉小汐你的位置，或者开启 GPS 定位好不好？"
+
         data = await _amap_request("/v3/place/around", {
             "location": location, "keywords": keywords,
             "radius": radius, "offset": 10,

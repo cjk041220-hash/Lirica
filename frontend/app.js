@@ -32,7 +32,80 @@ const CONFIG = {
     MAX_RETRIES: 2,                // 最大自动重试次数
     RETRY_BASE_DELAY_MS: 1500,     // 重试基础延迟
     HEALTH_CHECK_INTERVAL_MS: 15_000, // 健康检查间隔：15 秒
+    GPS_CACHE_MS: 30 * 60 * 1000,    // GPS 缓存有效期：30 分钟
 };
+
+// === GPS 定位 ===
+let currentGPS = null;  // { latitude, longitude, time }
+
+/**
+ * 获取 GPS 坐标（带 sessionStorage 缓存，30 分钟有效）
+ */
+function initGeolocation() {
+    if (!navigator.geolocation) {
+        console.warn('浏览器不支持 Geolocation');
+        return;
+    }
+
+    // 先检查缓存
+    const cached = _getGPSFromCache();
+    if (cached) {
+        currentGPS = cached;
+        console.log('GPS: 使用缓存坐标', cached);
+        return;
+    }
+
+    // 请求新坐标
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            currentGPS = {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                time: Date.now(),
+            };
+            // 存入 sessionStorage
+            try {
+                sessionStorage.setItem('xiaoxi_gps', JSON.stringify(currentGPS));
+            } catch (e) { /* ignore */ }
+            console.log('GPS: 获取新坐标', currentGPS);
+        },
+        (err) => {
+            console.warn('GPS 定位失败:', err.message);
+            // 不清除缓存，保持上次已知的坐标
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 5 * 60 * 1000, // 允许使用 5 分钟内的系统缓存
+        }
+    );
+}
+
+/**
+ * 从 sessionStorage 读取未过期的 GPS 缓存
+ */
+function _getGPSFromCache() {
+    try {
+        const raw = sessionStorage.getItem('xiaoxi_gps');
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (Date.now() - data.time > CONFIG.GPS_CACHE_MS) return null;
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 获取当前 GPS 坐标（用于附加到请求中）
+ */
+function getCurrentGPS() {
+    // 检查是否过期
+    if (currentGPS && Date.now() - currentGPS.time > CONFIG.GPS_CACHE_MS) {
+        currentGPS = null;
+    }
+    return currentGPS;
+}
 
 // === 欢迎语 ===
 const WELCOME_MESSAGE = `你好呀～我是小汐 🐋
@@ -76,6 +149,7 @@ function renderMarkdown(text) {
 document.addEventListener('DOMContentLoaded', () => {
     setupMarkdown();
     initSession();
+    initGeolocation();
     setupInputHandlers();
     showWelcomeMessage();
     startHealthChecks();
@@ -272,13 +346,21 @@ async function streamChat(text) {
 
     let response;
     try {
+        // 构建请求体（附带 GPS 坐标）
+        const body = {
+            message: text,
+            session_id: sessionId,
+        };
+        const gps = getCurrentGPS();
+        if (gps) {
+            body.latitude = gps.latitude;
+            body.longitude = gps.longitude;
+        }
+
         response = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                message: text,
-                session_id: sessionId,
-            }),
+            body: JSON.stringify(body),
             signal: currentAbortController.signal,
         });
     } finally {
@@ -523,6 +605,7 @@ document.addEventListener('keydown', (e) => {
 async function openSettings() {
     settingsOverlay.classList.add('visible');
     await loadConfig();
+    loadMemoryCount();
 }
 
 function closeSettings() {
@@ -624,3 +707,88 @@ async function selectThinkingIntensity(intensity) {
 
 // 页面加载时初始化配置
 loadConfig();
+
+// === 记忆管理 ===
+
+const btnExportMemories = document.getElementById('btn-export-memories');
+const btnClearMemories = document.getElementById('btn-clear-memories');
+const memoryCountEl = document.getElementById('memory-count');
+
+btnExportMemories.addEventListener('click', exportMemories);
+btnClearMemories.addEventListener('click', clearMemories);
+
+/**
+ * 加载记忆数量
+ */
+async function loadMemoryCount() {
+    try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+            const data = await res.json();
+            const count = data.memory_count ?? 0;
+            memoryCountEl.textContent = count > 0 ? `${count} 条` : '空空如也';
+        }
+    } catch (e) {
+        memoryCountEl.textContent = '无法获取';
+    }
+}
+
+/**
+ * 导出所有记忆为 JSON 文件
+ */
+async function exportMemories() {
+    try {
+        btnExportMemories.disabled = true;
+        btnExportMemories.textContent = '导出中…';
+
+        const res = await fetch('/api/memories/export');
+        if (!res.ok) throw new Error('导出失败');
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `xiaoxi_memories_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        addSystemMessage('记忆已导出 ✨');
+    } catch (e) {
+        console.warn('导出记忆失败:', e);
+        addSystemMessage('导出记忆失败了，请稍后重试');
+    } finally {
+        btnExportMemories.disabled = false;
+        btnExportMemories.textContent = '📥 导出记忆';
+    }
+}
+
+/**
+ * 清空所有记忆（二次确认）
+ */
+async function clearMemories() {
+    const confirmed = confirm('确定要清空小汐的所有记忆吗？\n\n这个操作不可撤销，映海里将变得空空的……');
+    if (!confirmed) return;
+
+    try {
+        btnClearMemories.disabled = true;
+        btnClearMemories.textContent = '清空中…';
+
+        const res = await fetch('/api/memories/clear', { method: 'POST' });
+        if (!res.ok) throw new Error('清空失败');
+
+        const data = await res.json();
+        memoryCountEl.textContent = '空空如也';
+        addSystemMessage(`已清空 ${data.cleared} 条记忆`);
+    } catch (e) {
+        console.warn('清空记忆失败:', e);
+        addSystemMessage('清空记忆失败了，请稍后重试');
+    } finally {
+        btnClearMemories.disabled = false;
+        btnClearMemories.textContent = '🗑️ 清空记忆';
+    }
+}
+
+// 页面加载时也加载记忆数量
+loadMemoryCount();

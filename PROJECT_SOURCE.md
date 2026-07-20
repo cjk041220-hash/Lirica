@@ -27,7 +27,7 @@
 │   │   ├── server.py           # FastAPI 服务器 + 生命周期管理
 │   │   └── routes/
 │   │       ├── __init__.py
-│   │       ├── chat.py         # 对话路由（REST + SSE 流式）
+│   │       ├── chat.py         # 对话路由（REST + SSE 流式）+ 记忆管理端点
 │   │       └── config.py       # 配置路由（控制台：模型、思考强度）
 │   ├── agent/
 │   │   ├── __init__.py
@@ -41,20 +41,24 @@
 │   │   ├── weather.py          # 天气查询（Open-Meteo + 高德回退）
 │   │   ├── map_tools.py        # 地图工具（高德 API）
 │   │   ├── search.py           # 网络搜索（Tavily）
-│   │   ├── memory.py           # 记忆工具
-│   │   └── diary.py            # 日记工具
+│   │   ├── memory.py           # 记忆工具（增删查导出）
+│   │   ├── diary.py            # 日记工具（同日去重）
+│   │   ├── tarot.py            # 塔罗牌占卜（韦特塔罗 78 张）
+│   │   └── tarot_deck.yaml     # 78 张韦特塔罗牌数据
 │   ├── memory/
 │   │   ├── __init__.py
-│   │   ├── manager.py          # 记忆管理器（YAML + 线程安全）
-│   │   └── narrative.py        # 叙事构建器
+│   │   ├── manager.py          # 记忆管理器（YAML + 线程安全 + 去重 + CRUD）
+│   │   ├── narrative.py        # 叙事构建器
+│   │   └── location_store.py   # GPS 坐标会话级缓存
 │   └── data/
 │       ├── memories.yaml       # 记忆数据
 │       ├── checkpoints.db      # 对话状态（SQLite）
 │       └── diaries.yaml        # 日记数据
 └── frontend/
-    ├── index.html              # 前端页面（含控制台面板）
-    ├── app.js                  # 前端交互逻辑（Vanilla JS + 控制台）
-    └── style.css               # 深海主题样式（含控制台样式）
+    ├── index.html              # 前端页面（含控制台面板 + PWA 支持）
+    ├── app.js                  # 前端交互逻辑（Vanilla JS + GPS + 记忆管理）
+    ├── style.css               # 深海主题样式（含控制台 + 记忆管理样式）
+    └── manifest.json           # PWA 清单文件
 ```
 
 ## 技术栈
@@ -69,6 +73,19 @@
 | 前端       | 原生 HTML + CSS + JS (无框架)     |
 | Markdown   | marked.js (CDN)                   |
 | 数据库     | SQLite (对话检查点) + YAML (记忆) |
+| GPS        | Web Geolocation API (前端)        |
+| PWA        | manifest.json + Apple meta tags   |
+
+## 核心功能
+
+- **GPS 定位** — 前端自动获取坐标 → sessionStorage 缓存 30 分钟 → 附带到请求 → 后端会话级缓存 → 喂给地图/天气工具
+- **PWA 支持** — manifest.json + Apple PWA meta，可添加到 iOS 主屏幕
+- **记忆管理** — 增删查导出清空 + 自动去重 + source/last_used_at 字段
+- **输入校验** — 消息去空白、长度限制（2000 字）、session_id 格式校验、GPS 坐标范围校验
+- **日记去重** — 同一天只更新不重复写入
+- **塔罗牌占卜** — 78 张韦特塔罗，支持单牌/三牌/凯尔特十字牌阵，15% 逆位概率
+- **控制台** — 模型选择、思考强度调节
+- **Markdown 渲染、流式输出、自动重试、健康检查**
 
 ---
 
@@ -510,26 +527,71 @@ app = create_app()
 每个 SSE data 行是 JSON 对象，前端统一 JSON.parse 消费。
 """
 import json
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from memory import location_store
 
 router = APIRouter()
 
 
 # ── 请求/响应模型 ──────────────────────────────────────────
 
+_MAX_MESSAGE_LENGTH = 2000
+_SESSION_ID_RE = re.compile(r'^[a-z0-9-]{1,64}$')
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("消息不能为空")
+        if len(v) > _MAX_MESSAGE_LENGTH:
+            raise ValueError(f"消息最长 {_MAX_MESSAGE_LENGTH} 字")
+        return v
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str) -> str:
+        v = v.strip()
+        if v and not _SESSION_ID_RE.match(v):
+            raise ValueError("会话 ID 只能包含小写字母、数字和连字符")
+        return v
+
+    @field_validator("latitude")
+    @classmethod
+    def _validate_lat(cls, v):
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("纬度范围 -90 ~ 90")
+        return v
+
+    @field_validator("longitude")
+    @classmethod
+    def _validate_lon(cls, v):
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("经度范围 -180 ~ 180")
+        return v
 
 
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
+
+
+class DeleteMemoryRequest(BaseModel):
+    memory_id: str
 
 
 # ── 辅助 ────────────────────────────────────────────────────
@@ -540,6 +602,22 @@ def _ensure_sid(req: ChatRequest) -> str:
 
 def _build_input(user_message: str) -> dict:
     return {"messages": [HumanMessage(content=user_message)]}
+
+
+def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:
+    """构建带 GPS 上下文的用户消息，并将坐标存入缓存。"""
+    # 存储前端发来的 GPS 坐标
+    if req.latitude is not None and req.longitude is not None:
+        location_store.update(sid, req.latitude, req.longitude)
+
+    # 在消息末尾追加位置上下文（给 LLM 看，不显示给冷冷）
+    location_context = ""
+    cached = location_store.get(sid)
+    if cached:
+        lat, lon = cached
+        location_context = f"\n\n[系统信息：冷冷当前 GPS 坐标为 ({lat}, {lon})，使用地图工具时可直接用这个坐标作为 location 参数。]"
+
+    return {"messages": [HumanMessage(content=user_message + location_context)]}
 
 
 def _build_config(session_id: str) -> dict:
@@ -562,7 +640,7 @@ async def chat(req: ChatRequest, request: Request):
 
     try:
         result = await agent.ainvoke(
-            _build_input(req.message),
+            _build_input_with_location(req.message, req, sid),
             _build_config(sid),
         )
 
@@ -595,7 +673,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def generate():
         try:
             async for event in agent.astream_events(
-                _build_input(req.message),
+                _build_input_with_location(req.message, req, sid),
                 _build_config(sid),
                 version="v2",
             ):
@@ -657,6 +735,53 @@ async def health(request: Request):
         "tools": [t.name for t in tools],
         "memory_count": mem.count if mem else 0,
     }
+
+
+# ── 记忆管理端点 ────────────────────────────────────────────
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str, request: Request):
+    """删除一条记忆。"""
+    mem = getattr(request.app.state, "memory_manager", None)
+    if mem is None:
+        raise HTTPException(503, "记忆系统未就绪")
+    ok = mem.delete(memory_id)
+    if not ok:
+        raise HTTPException(404, "未找到该记忆")
+    return {"status": "ok", "remaining": mem.count}
+
+
+@router.get("/memories/export")
+async def export_memories(request: Request):
+    """导出所有记忆为 JSON。"""
+    mem = getattr(request.app.state, "memory_manager", None)
+    if mem is None:
+        raise HTTPException(503, "记忆系统未就绪")
+    data = mem.export_json()
+    return JSONResponse(
+        content=json.loads(data),
+        headers={"Content-Disposition": "attachment; filename=xiaoxi_memories.json"},
+    )
+
+
+@router.post("/memories/clear")
+async def clear_memories(request: Request):
+    """清空所有记忆。"""
+    mem = getattr(request.app.state, "memory_manager", None)
+    if mem is None:
+        raise HTTPException(503, "记忆系统未就绪")
+    count = mem.clear()
+    return {"status": "ok", "cleared": count}
+
+
+@router.get("/memories")
+async def list_all_memories(request: Request):
+    """获取所有记忆列表。"""
+    mem = getattr(request.app.state, "memory_manager", None)
+    if mem is None:
+        raise HTTPException(503, "记忆系统未就绪")
+    memories = mem.all()
+    return {"memories": memories, "count": len(memories)}
 ```
 
 ### backend/api/routes/config.py
@@ -894,12 +1019,14 @@ BEHAVIOR_RULES = """## 行为准则
 你有以下能力，要**主动**用它们照顾冷冷，而不是等她问：
 
 - **查天气（get_weather）**：冷冷提到要出门、或者问"今天天气"，立刻帮她查。香港天气多变，这是最常用的能力。
-- **搜附近（search_nearby）**：冷冷说"饿了""想喝东西""附近有什么"，立刻帮她搜。先用 geocode_address 把她说的地点转成坐标，再搜。
+- **搜附近（search_nearby）**：冷冷说"饿了""想喝东西""附近有什么"，立刻帮她搜。如果有 GPS 坐标可以直接用，不需要先问冷冷在哪里。没有 GPS 时才需要先用 geocode_address 转坐标。
 - **查地址（geocode_address / fuzzy_search_place）**：冷冷提到一个地方的名字，帮她确认在哪里。
 - **规划路线（get_transit_route / get_cycling_route）**：冷冷说要去哪里，主动帮她查怎么坐车/骑车去。
 - **搜索信息（web_search）**：冷冷问了一个你不知道的事情，去映海里搜索。
 - **记住事情（remember）**：冷冷说了关于自己的重要信息（喜好、经历、习惯、想法），主动记下来。
 - **回忆事情（recall）**：冷冷问"我之前……"或聊天中提到以前的事，先去回忆一下。
+- **删除记忆（delete_memory）**：冷冷说「忘掉这个」「不要记这个」，帮她删掉不想留的记忆。
+- **导出记忆（export_memories）**：冷冷想看自己全部记忆时，帮她整理出来。
 - **写日记（write_diary）**：冷冷说"今天发生了……"，可以在对话结束时帮她记一篇日记。
 
 ### 主动使用工具的时机
@@ -1094,8 +1221,13 @@ from tools.map_tools import (
     get_cycling_route,
 )
 from tools.search import web_search
-from tools.memory import remember, recall, list_memories, set_memory_manager
+from tools.memory import (
+    remember, recall, list_memories,
+    delete_memory, export_memories,
+    set_memory_manager,
+)
 from tools.diary import write_diary, read_diary
+from tools.tarot import tarot
 
 
 def get_all_tools() -> list:
@@ -1114,8 +1246,11 @@ def get_all_tools() -> list:
         remember,
         recall,
         list_memories,
+        delete_memory,
+        export_memories,
         write_diary,
         read_diary,
+        tarot,
     ]
 ```
 
@@ -1489,6 +1624,7 @@ def web_search(query: str) -> str:
 
 ```python
 """小汐的记忆工具 — 通过 MemoryManager 读写。"""
+import json
 from langchain_core.tools import tool
 from memory.manager import MemoryManager
 
@@ -1505,6 +1641,7 @@ def set_memory_manager(mgr: MemoryManager):
 @tool
 def remember(category: str, content: str) -> str:
     """让小汐记住一件事。冷冷说了关于自己的重要信息时主动调用。
+    自动去重：同样的内容不会重复记录。
 
     Args:
         category: 记忆类别，如「冷冷喜欢的」「去过的地方」「重要的事」
@@ -1569,6 +1706,45 @@ def list_memories() -> str:
         return result
     except Exception as e:
         return f"小汐数记忆的时候犯迷糊了……（{str(e)[:100]}）"
+
+
+@tool
+def delete_memory(memory_id: str) -> str:
+    """删除一条指定的记忆。冷冷说「忘掉这个」「不要记这个」时调用。
+
+    Args:
+        memory_id: 要删除的记忆 ID
+    """
+    try:
+        if _memory_manager is None:
+            return "小汐的记忆盒子还没有打开……"
+        if _memory_manager.delete(memory_id):
+            return "✨ 小汐已经把这段记忆放回海里了~"
+        return "小汐翻了翻，没有找到这段记忆呢……"
+    except Exception as e:
+        return f"小汐放记忆的时候手滑了……（{str(e)[:100]}）"
+
+
+@tool
+def export_memories() -> str:
+    """导出冷冷所有记忆的摘要。冷冷想看自己全部记忆时调用。"""
+    try:
+        if _memory_manager is None:
+            return "小汐的记忆盒子还没有打开……"
+        mems = _memory_manager.all()
+        if not mems:
+            return "映海里还空空的，没有记忆可以导出呢。"
+
+        lines = [f"🐋 小汐一共记住了 {len(mems)} 件事：\n"]
+        for m in mems:
+            lines.append(
+                f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** "
+                f"({m.get('time', '')})\n   {m.get('content', '')}"
+            )
+        lines.append("\n💡 冷冷可以通过控制台删除不想要的记忆哦~")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"小汐整理记忆的时候犯迷糊了……（{str(e)[:100]}）"
 ```
 
 ### backend/tools/diary.py
@@ -1619,14 +1795,26 @@ def write_diary(content: str) -> str:
     """
     try:
         diaries = _load()
+        today_iso = datetime.date.today().isoformat()
         today = datetime.date.today().strftime("%m月%d日")
-        diaries.append({
-            "date": datetime.date.today().isoformat(),
-            "title": today,
-            "content": content,
-        })
+
+        # 同一天去重：已有今日日记则更新内容，不重复写入
+        existing = next(
+            (d for d in diaries if d.get("date") == today_iso), None
+        )
+        if existing:
+            existing["content"] = content
+            msg = "📖 小汐更新了今天的日记！"
+        else:
+            diaries.append({
+                "date": today_iso,
+                "title": today,
+                "content": content,
+            })
+            msg = "📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
+
         _save(diaries)
-        return f"📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
+        return msg
     except Exception as e:
         return f"小汐写日记的时候弄翻了墨水瓶……（{str(e)[:100]}）"
 
@@ -1659,6 +1847,123 @@ def read_diary(date_str: str = "") -> str:
         return f"小汐翻日记的时候被纸划了一下……（{str(e)[:100]}）"
 ```
 
+### backend/tools/tarot.py
+
+```python
+"""塔罗牌占卜工具 — 韦特塔罗（RWS），仅供娱乐参考。
+
+小汐会去映海里看看，帮冷冷抽几张牌。
+"""
+import random
+from pathlib import Path
+
+import yaml
+from langchain_core.tools import tool
+
+# 加载 78 张韦特塔罗牌数据
+_DECK_PATH = Path(__file__).resolve().parent / "tarot_deck.yaml"
+with open(_DECK_PATH, encoding="utf-8") as _f:
+    TAROT_DECK: list[dict] = yaml.safe_load(_f)["cards"]
+
+# 牌阵定义
+_SPREADS = {
+    "single": {"name": "单牌占卜", "positions": 1, "positions_desc": ["当前问题"]},
+    "three": {
+        "name": "三牌占卜",
+        "positions": 3,
+        "positions_desc": ["过去", "现在", "未来"],
+    },
+    "celtic": {
+        "name": "凯尔特十字",
+        "positions": 10,
+        "positions_desc": [
+            "当前状况", "挑战与阻碍", "最佳路径与建议", "潜在基础",
+            "过去", "近期未来", "自我形象", "外在因素与他人影响",
+            "希望与恐惧", "最终结果",
+        ],
+    },
+}
+
+
+@tool
+def tarot(question: str = "", spread_type: str = "three") -> str:
+    """韦特塔罗牌占卜（RWS），仅供娱乐参考。
+
+    当冷冷想算一算、问一问、或者心情不好的时候，小汐会去映海里看看。
+
+    Args:
+        question: 占卜的问题
+        spread_type: 牌阵类型，可选 single（单牌）、three（三牌）、celtic（凯尔特十字）
+    """
+    if not question:
+        return "小汐不知道要问什么呀……告诉小汐你想问的事情，小汐去映海里帮你看看~"
+
+    if spread_type not in _SPREADS:
+        spread = _SPREADS["three"]
+    else:
+        spread = _SPREADS[spread_type]
+
+    # 洗牌
+    deck = TAROT_DECK.copy()
+    random.shuffle(deck)
+
+    # 抽牌
+    result = f"🐋 小汐去映海里看了一下「{question}」……\n\n"
+    result += f"📜 牌阵：{spread['name']}\n\n"
+
+    for i in range(spread["positions"]):
+        card = deck[i].copy()
+        is_reversed = random.random() < 0.15
+        position = spread["positions_desc"][i]
+        meanings = card["reversed"] if is_reversed else card["upright"]
+        status = "逆位" if is_reversed else "正位"
+        fortune = random.choice(meanings)
+
+        suit_icon = {
+            "大阿尔卡纳": "🌟", "权杖": "🔥", "圣杯": "💧",
+            "宝剑": "⚔️", "星币": "🪙",
+        }.get(card.get("suit", ""), "🃏")
+
+        result += f"**{position}**\n"
+        result += f"{suit_icon} **{card['name']}**（{status}）\n"
+        result += f"   💬 {fortune}\n\n"
+
+    result += "——小汐只能帮冷冷看到这里啦，但不管抽到什么牌，小汐都会在这里陪着你哦。🐋"
+
+    return result
+```
+
+### backend/tools/tarot_deck.yaml（数据结构示意，共 78 张）
+
+```yaml
+cards:
+- id: 0
+  name: 愚人
+  name_en: The Fool
+  symbol: '0'
+  suit: 大阿尔卡纳
+  element: 风
+  keywords:
+  - 全新开始
+  - 自由
+  - 天真
+  - 冒险
+  - 无限可能
+  - 自发性
+  upright:
+  - 一个全新的旅程正在召唤你，带着纯粹的好奇心和热情迈出第一步。
+  - 你站在悬崖边缘，虽然不知道前方有什么，但内心充满了无限的可能性。
+  - ...
+  reversed:
+  - 你心中已经有了新的想法，但还没有准备好将它带入现实世界。
+  - ...
+- id: 1
+  name: 魔术师
+  name_en: The Magician
+  symbol: I
+  # ... 共 78 张牌
+```
+
 ---
 
 ## 记忆系统
@@ -1676,8 +1981,12 @@ __all__ = ["MemoryManager", "NarrativeBuilder"]
 ### backend/memory/manager.py
 
 ```python
-"""记忆管理器 — 线程安全的 YAML 文件 CRUD。"""
+"""记忆管理器 — 线程安全的 YAML 文件 CRUD。
+
+支持：增删查、去重、导出、清空、source/last_used_at 字段。
+"""
 import datetime
+import json
 import threading
 from pathlib import Path
 
@@ -1705,51 +2014,107 @@ class MemoryManager:
                 yaml.dump({"memories": []}, f, allow_unicode=True)
 
     def _load(self) -> list[dict]:
-        """注意：调用方须已持有 _lock（或在 add 等方法中统一加锁）。"""
         self._ensure()
         with open(self._file, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return list(data.get("memories", []))
 
     def _save(self, mems: list[dict]):
-        """注意：调用方须已持有 _lock。"""
         self._ensure()
         with open(self._file, "w", encoding="utf-8") as f:
             yaml.dump({"memories": mems}, f, allow_unicode=True)
 
     # ── 公共接口 ────────────────────────────────────────────
 
-    def add(self, category: str, content: str) -> dict:
-        """添加一条记忆。返回刚添加的记忆条目。原子操作：load→modify→save 在同一把锁内。"""
+    def add(self, category: str, content: str, source: str = "dialogue") -> dict:
+        """添加一条记忆（带去重）。返回刚添加的记忆条目。
+
+        去重规则：同一 category 下已有完全相同的 content 时，
+        不重复添加，只更新 time 和 last_used_at。
+        """
         with _lock:
             mems = self._load()
+
+            # 去重：同 category + 同 content
+            for m in mems:
+                if m.get("category") == category and m.get("content") == content:
+                    m["time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                    m["last_used_at"] = m["time"]
+                    self._save(mems)
+                    return m
+
             entry = {
                 "id": datetime.datetime.now().strftime("%Y%m%d%H%M%S%f"),
                 "category": category,
                 "content": content,
+                "source": source,
                 "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "last_used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
             mems.append(entry)
             self._save(mems)
         return entry
 
-    def recall(self, category: str = "") -> list[dict]:
-        """回忆记忆。可按 category 筛选，不传则返回全部。"""
+    def delete(self, memory_id: str) -> bool:
+        """删除指定 ID 的记忆。返回是否成功。"""
         with _lock:
             mems = self._load()
-        if category:
-            return [m for m in mems if category in m.get("category", "")]
-        return mems
+            original_len = len(mems)
+            mems = [m for m in mems if m.get("id") != memory_id]
+            if len(mems) < original_len:
+                self._save(mems)
+                return True
+            return False
+
+    def clear(self) -> int:
+        """清空所有记忆。返回清除的条数。"""
+        with _lock:
+            mems = self._load()
+            count = len(mems)
+            self._save([])
+            return count
+
+    def export_json(self) -> str:
+        """导出所有记忆为 JSON 字符串（用于下载）。"""
+        with _lock:
+            mems = self._load()
+            return json.dumps(
+                {"memories": mems, "exported_at": datetime.datetime.now().isoformat()},
+                ensure_ascii=False, indent=2,
+            )
+
+    def recall(self, category: str = "") -> list[dict]:
+        """回忆记忆。可按 category 筛选，不传则返回全部。
+        同时更新被召回记忆的 last_used_at。
+        """
+        with _lock:
+            mems = self._load()
+            if category:
+                matched = [m for m in mems if category in m.get("category", "")]
+            else:
+                matched = mems
+
+            # 更新 last_used_at
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            matched_ids = {m.get("id") for m in matched}
+            for m in mems:
+                if m.get("id") in matched_ids:
+                    m["last_used_at"] = now
+            if matched_ids:
+                self._save(mems)
+
+            # 按时间倒序（最近的在前）
+            return sorted(matched, key=lambda m: m.get("time", ""), reverse=True)
 
     def list_categories(self) -> dict[str, int]:
         """列出所有类别及数量。"""
         with _lock:
             mems = self._load()
-        cats: dict[str, int] = {}
-        for m in mems:
-            cat = m.get("category", "其他")
-            cats[cat] = cats.get(cat, 0) + 1
-        return cats
+            cats: dict[str, int] = {}
+            for m in mems:
+                cat = m.get("category", "其他")
+                cats[cat] = cats.get(cat, 0) + 1
+            return cats
 
     @property
     def count(self) -> int:
@@ -1815,6 +2180,66 @@ class NarrativeBuilder:
         return "\n".join(lines)
 ```
 
+### backend/memory/location_store.py
+
+```python
+"""GPS 坐标会话级缓存 — 前端发来的坐标存这里，工具直接读取。"""
+import time
+import threading
+
+_location_cache: dict[str, dict] = {}
+_lock = threading.Lock()
+
+# 坐标有效期：8 小时（单次使用周期内足够）
+_TTL_SECONDS = 8 * 3600
+
+
+def update(session_id: str, lat: float, lon: float):
+    """存储/更新某会话的 GPS 坐标。"""
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return
+    with _lock:
+        _location_cache[session_id] = {
+            "lat": lat,
+            "lon": lon,
+            "time": time.time(),
+        }
+        _cleanup()
+
+
+def get(session_id: str) -> tuple[float, float] | None:
+    """获取某会话的缓存坐标。过期返回 None。"""
+    with _lock:
+        entry = _location_cache.get(session_id)
+        if entry is None:
+            return None
+        if time.time() - entry["time"] > _TTL_SECONDS:
+            del _location_cache[session_id]
+            return None
+        return entry["lat"], entry["lon"]
+
+
+def get_any() -> tuple[float, float] | None:
+    """获取任意一个有效缓存的坐标（适用于单用户场景）。"""
+    with _lock:
+        now = time.time()
+        for entry in _location_cache.values():
+            if now - entry["time"] <= _TTL_SECONDS:
+                return entry["lat"], entry["lon"]
+        return None
+
+
+def _cleanup():
+    """清除过期条目（调用方须已持有 _lock）。"""
+    now = time.time()
+    expired = [
+        sid for sid, v in _location_cache.items()
+        if now - v["time"] > _TTL_SECONDS
+    ]
+    for sid in expired:
+        del _location_cache[sid]
+```
+
 ---
 
 ## 数据文件
@@ -1833,6 +2258,29 @@ memories:
 
 ## 前端
 
+### frontend/manifest.json
+
+```json
+{
+    "name": "映海 - 小汐在这里陪你",
+    "short_name": "映海",
+    "description": "希望你一个人在香港的时候，也不会觉得孤单。",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a1628",
+    "theme_color": "#0f1f3a",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%230f1f3a'/><text x='256' y='340' font-size='280' text-anchor='middle'>🐋</text></svg>",
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        }
+    ]
+}
+```
+
 ### frontend/index.html
 
 ```html
@@ -1840,8 +2288,19 @@ memories:
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>映海 - 小汐在这里陪你</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f1f3a">
+
+    <!-- Apple PWA（iOS 添加到主屏幕） -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="映海">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%230f1f3a'/><text x='256' y='340' font-size='280' text-anchor='middle'>🐋</text></svg>">
+
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
     <!-- Markdown 渲染 -->
@@ -2001,6 +2460,26 @@ memories:
                         💡 Temperature 控制创造性（非思考深度）；R1 自带深度推理
                     </div>
                 </div>
+
+                <!-- 记忆管理 -->
+                <div class="settings-section settings-memory">
+                    <label class="settings-label">记忆管理</label>
+                    <div class="memory-info">
+                        <span class="memory-count-label">映海记忆：</span>
+                        <span id="memory-count" class="memory-count-value">加载中…</span>
+                    </div>
+                    <div class="memory-actions">
+                        <button id="btn-export-memories" class="memory-btn memory-btn-export" title="导出所有记忆">
+                            📥 导出记忆
+                        </button>
+                        <button id="btn-clear-memories" class="memory-btn memory-btn-danger" title="清空所有记忆">
+                            🗑️ 清空记忆
+                        </button>
+                    </div>
+                    <div class="memory-hint">
+                        💡 导出的记忆为 JSON 文件，可留作纪念或备份
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2024,6 +2503,8 @@ memories:
  * - 健康检查自动恢复
  * - Markdown 渲染（marked.js）
  * - 流式输出中可取消
+ * - GPS 定位 + sessionStorage 缓存
+ * - 记忆管理（导出/清空）
  * ============================================
  */
 
@@ -2047,7 +2528,78 @@ const CONFIG = {
     MAX_RETRIES: 2,                // 最大自动重试次数
     RETRY_BASE_DELAY_MS: 1500,     // 重试基础延迟
     HEALTH_CHECK_INTERVAL_MS: 15_000, // 健康检查间隔：15 秒
+    GPS_CACHE_MS: 30 * 60 * 1000,    // GPS 缓存有效期：30 分钟
 };
+
+// === GPS 定位 ===
+let currentGPS = null;  // { latitude, longitude, time }
+
+/**
+ * 获取 GPS 坐标（带 sessionStorage 缓存，30 分钟有效）
+ */
+function initGeolocation() {
+    if (!navigator.geolocation) {
+        console.warn('浏览器不支持 Geolocation');
+        return;
+    }
+
+    // 先检查缓存
+    const cached = _getGPSFromCache();
+    if (cached) {
+        currentGPS = cached;
+        console.log('GPS: 使用缓存坐标', cached);
+        return;
+    }
+
+    // 请求新坐标
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            currentGPS = {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                time: Date.now(),
+            };
+            // 存入 sessionStorage
+            try {
+                sessionStorage.setItem('xiaoxi_gps', JSON.stringify(currentGPS));
+            } catch (e) { /* ignore */ }
+            console.log('GPS: 获取新坐标', currentGPS);
+        },
+        (err) => {
+            console.warn('GPS 定位失败:', err.message);
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 5 * 60 * 1000,
+        }
+    );
+}
+
+/**
+ * 从 sessionStorage 读取未过期的 GPS 缓存
+ */
+function _getGPSFromCache() {
+    try {
+        const raw = sessionStorage.getItem('xiaoxi_gps');
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (Date.now() - data.time > CONFIG.GPS_CACHE_MS) return null;
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 获取当前 GPS 坐标（用于附加到请求中）
+ */
+function getCurrentGPS() {
+    if (currentGPS && Date.now() - currentGPS.time > CONFIG.GPS_CACHE_MS) {
+        currentGPS = null;
+    }
+    return currentGPS;
+}
 
 // === 欢迎语 ===
 const WELCOME_MESSAGE = `你好呀～我是小汐 🐋
@@ -2062,28 +2614,20 @@ const WELCOME_MESSAGE = `你好呀～我是小汐 🐋
 function setupMarkdown() {
     if (typeof marked !== 'undefined') {
         marked.setOptions({
-            breaks: true,       // \n 转 <br>
-            gfm: true,          // GitHub Flavored Markdown
-            headerIds: false,   // 不生成 header id
-            mangle: false,      // 不转义 header
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false,
         });
     }
 }
 
-/**
- * 将文本渲染为 HTML（Markdown 或纯文本）
- * @param {string} text - 原始文本
- * @returns {string} 渲染后的 HTML
- */
 function renderMarkdown(text) {
     if (typeof marked !== 'undefined') {
         try {
             return marked.parse(text);
-        } catch (e) {
-            // marked 出错时回退到纯文本
-        }
+        } catch (e) {}
     }
-    // 回退：转义 HTML + 保留换行
     return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
@@ -2091,14 +2635,12 @@ function renderMarkdown(text) {
 document.addEventListener('DOMContentLoaded', () => {
     setupMarkdown();
     initSession();
+    initGeolocation();
     setupInputHandlers();
     showWelcomeMessage();
     startHealthChecks();
 });
 
-/**
- * 初始化会话
- */
 function initSession() {
     let sessionId = sessionStorage.getItem('xiaoxi_session_id');
     if (!sessionId) {
@@ -2108,9 +2650,6 @@ function initSession() {
     sessionIdEl.textContent = sessionId;
 }
 
-/**
- * 生成随机会话 ID
- */
 function generateSessionId(length) {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -2124,19 +2663,11 @@ function generateSessionId(length) {
 
 // === 健康检查（带自动恢复） ===
 
-/**
- * 启动周期性健康检查
- */
 function startHealthChecks() {
-    // 首次立即检查
     healthCheck();
-    // 周期检查
     healthCheckTimer = setInterval(healthCheck, CONFIG.HEALTH_CHECK_INTERVAL_MS);
 }
 
-/**
- * 健康检查 — 如果后端恢复，自动清除错误提示
- */
 async function healthCheck() {
     try {
         const controller = new AbortController();
@@ -2147,7 +2678,6 @@ async function healthCheck() {
 
         if (response.ok) {
             if (!healthOk) {
-                // 从不可用恢复 → 清除错误提示
                 healthOk = true;
                 removeSystemMessages();
             }
@@ -2155,9 +2685,8 @@ async function healthCheck() {
             throw new Error('health not ok');
         }
     } catch (error) {
-        if (!healthOk) return; // 已经标记为不可用，不重复提示
+        if (!healthOk) return;
         healthOk = false;
-        // 只在第一次失败时提示
         const existing = document.querySelector('.system-message.health-warning');
         if (!existing) {
             addSystemMessage('小汐还在睡觉... 稍后再来看看吧 💤', 'health-warning');
@@ -2165,9 +2694,6 @@ async function healthCheck() {
     }
 }
 
-/**
- * 清除系统提示消息（如健康检查恢复后）
- */
 function removeSystemMessages() {
     document.querySelectorAll('.system-message.health-warning').forEach(el => {
         el.style.opacity = '0';
@@ -2175,9 +2701,6 @@ function removeSystemMessages() {
     });
 }
 
-/**
- * 显示欢迎消息
- */
 function showWelcomeMessage() {
     addMessage(WELCOME_MESSAGE, 'xiaoxi', true);
 }
@@ -2202,21 +2725,14 @@ function setupInputHandlers() {
     messageInput.focus();
 }
 
-/**
- * 点击发送按钮：如果正在流式输出，则取消；否则发送消息
- */
 function handleSendClick() {
     if (isStreaming && currentAbortController) {
-        // 正在流式输出 → 取消
         currentAbortController.abort();
         return;
     }
     handleSend();
 }
 
-/**
- * 处理发送消息（带自动重试）
- */
 async function handleSend() {
     if (isStreaming) return;
 
@@ -2235,7 +2751,6 @@ async function handleSend() {
     for (let attempt = 0; attempt <= CONFIG.MAX_RETRIES; attempt++) {
         try {
             if (attempt > 0) {
-                // 重试前等待（指数退避）
                 const delay = CONFIG.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
                 await sleep(delay);
                 hideTyping();
@@ -2243,11 +2758,11 @@ async function handleSend() {
             }
             await streamChat(text);
             lastError = null;
-            break; // 成功，跳出重试循环
+            break;
         } catch (error) {
             lastError = error;
             const isAbort = error.name === 'AbortError';
-            if (isAbort) break; // 用户主动取消，不重试
+            if (isAbort) break;
 
             console.warn(`发送失败 (第 ${attempt + 1} 次):`, error.message);
             if (attempt < CONFIG.MAX_RETRIES) continue;
@@ -2272,13 +2787,9 @@ async function handleSend() {
     setStreaming(false);
 }
 
-/**
- * 流式聊天请求（带超时和取消控制）
- */
 async function streamChat(text) {
     const sessionId = sessionStorage.getItem('xiaoxi_session_id');
 
-    // 创建 AbortController 用于超时和手动取消
     currentAbortController = new AbortController();
     const timeoutId = setTimeout(
         () => currentAbortController.abort(),
@@ -2287,13 +2798,21 @@ async function streamChat(text) {
 
     let response;
     try {
+        // 构建请求体（附带 GPS 坐标）
+        const body = {
+            message: text,
+            session_id: sessionId,
+        };
+        const gps = getCurrentGPS();
+        if (gps) {
+            body.latitude = gps.latitude;
+            body.longitude = gps.longitude;
+        }
+
         response = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                message: text,
-                session_id: sessionId,
-            }),
+            body: JSON.stringify(body),
             signal: currentAbortController.signal,
         });
     } finally {
@@ -2338,7 +2857,6 @@ async function streamChat(text) {
                     try {
                         const parsed = JSON.parse(data);
 
-                        // 工具事件（静默处理，不显示给用户）
                         if (parsed.type === 'tool_start' || parsed.type === 'tool_end') {
                             continue;
                         }
@@ -2375,9 +2893,6 @@ async function streamChat(text) {
 
 // === DOM 操作 ===
 
-/**
- * 添加消息到聊天区域
- */
 function addMessage(text, sender, isWelcome = false) {
     const messageEl = document.createElement('div');
     messageEl.className = `message ${sender}${isWelcome ? ' welcome' : ''}`;
@@ -2394,7 +2909,6 @@ function addMessage(text, sender, isWelcome = false) {
             </div>
         `;
     } else {
-        // 用户消息用纯文本，不渲染 Markdown
         messageEl.innerHTML = `
             <div class="message-content">
                 <div class="message-bubble">${escapeHtml(text)}</div>
@@ -2410,16 +2924,10 @@ function addMessage(text, sender, isWelcome = false) {
     return { element: messageEl, bubble };
 }
 
-/**
- * 流式更新气泡内容（Markdown 渲染）
- */
 function updateBubbleHtml(bubble, text) {
     bubble.innerHTML = renderMarkdown(text);
 }
 
-/**
- * 完成消息 — 最终 Markdown 渲染 + 添加 finalized 样式
- */
 function finalizeMessage(bubble, text) {
     if (text) {
         bubble.innerHTML = renderMarkdown(text);
@@ -2430,9 +2938,6 @@ function finalizeMessage(bubble, text) {
     }
 }
 
-/**
- * 添加系统提示消息
- */
 function addSystemMessage(text, extraClass = '') {
     const msgEl = document.createElement('div');
     msgEl.className = 'system-message' + (extraClass ? ' ' + extraClass : '');
@@ -2441,18 +2946,12 @@ function addSystemMessage(text, extraClass = '') {
     scrollToBottom();
 }
 
-/**
- * HTML 转义，防止 XSS
- */
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-/**
- * 平滑滚动到底部
- */
 function scrollToBottom() {
     requestAnimationFrame(() => {
         chatArea.scrollTop = chatArea.scrollHeight;
@@ -2477,9 +2976,8 @@ function setStreaming(streaming) {
     messageInput.disabled = streaming;
 
     if (streaming) {
-        // 流式输出中：按钮变为"停止"样式
         sendBtn.classList.add('streaming');
-        sendBtn.disabled = false; // 允许点击取消
+        sendBtn.disabled = false;
         sendBtn.title = '停止生成';
     } else {
         sendBtn.classList.remove('streaming');
@@ -2513,7 +3011,6 @@ let currentConfig = {
     available_models: [],
 };
 
-// 打开/关闭设置面板
 settingsBtn.addEventListener('click', () => {
     openSettings();
 });
@@ -2528,7 +3025,6 @@ settingsOverlay.addEventListener('click', (e) => {
     }
 });
 
-// ESC 键关闭
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && settingsOverlay.classList.contains('visible')) {
         closeSettings();
@@ -2538,13 +3034,13 @@ document.addEventListener('keydown', (e) => {
 async function openSettings() {
     settingsOverlay.classList.add('visible');
     await loadConfig();
+    loadMemoryCount();
 }
 
 function closeSettings() {
     settingsOverlay.classList.remove('visible');
 }
 
-// 加载配置
 async function loadConfig() {
     try {
         const res = await fetch('/api/config');
@@ -2557,9 +3053,7 @@ async function loadConfig() {
     }
 }
 
-// 渲染设置面板
 function renderSettings() {
-    // 渲染模型卡片
     const models = currentConfig.available_models || [];
     modelCards.innerHTML = models.map(m => `
         <div class="model-card ${m.id === currentConfig.model ? 'active' : ''}" data-model="${m.id}">
@@ -2572,7 +3066,6 @@ function renderSettings() {
         </div>
     `).join('');
 
-    // 绑定模型选择事件
     modelCards.querySelectorAll('.model-card').forEach(card => {
         card.addEventListener('click', () => {
             const modelId = card.dataset.model;
@@ -2580,21 +3073,18 @@ function renderSettings() {
         });
     });
 
-    // 渲染思考强度
     document.querySelectorAll('.thinking-option').forEach(btn => {
         const intensity = btn.dataset.intensity;
         btn.classList.toggle('active', intensity === currentConfig.thinking_intensity);
         btn.onclick = () => selectThinkingIntensity(intensity);
     });
 
-    // 更新状态显示
     const currentModel = models.find(m => m.id === currentConfig.model);
     statusModel.textContent = currentModel ? currentModel.name : currentConfig.model;
     statusTemp.textContent = currentConfig.temperature.toFixed(1);
     statusTokens.textContent = currentConfig.max_tokens + ' tokens';
 }
 
-// 选择模型
 async function selectModel(modelId) {
     if (modelId === currentConfig.model) return;
 
@@ -2615,7 +3105,6 @@ async function selectModel(modelId) {
     }
 }
 
-// 选择思考强度
 async function selectThinkingIntensity(intensity) {
     if (intensity === currentConfig.thinking_intensity) return;
 
@@ -2637,8 +3126,82 @@ async function selectThinkingIntensity(intensity) {
     }
 }
 
-// 页面加载时初始化配置
 loadConfig();
+
+// === 记忆管理 ===
+
+const btnExportMemories = document.getElementById('btn-export-memories');
+const btnClearMemories = document.getElementById('btn-clear-memories');
+const memoryCountEl = document.getElementById('memory-count');
+
+btnExportMemories.addEventListener('click', exportMemories);
+btnClearMemories.addEventListener('click', clearMemories);
+
+async function loadMemoryCount() {
+    try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+            const data = await res.json();
+            const count = data.memory_count ?? 0;
+            memoryCountEl.textContent = count > 0 ? `${count} 条` : '空空如也';
+        }
+    } catch (e) {
+        memoryCountEl.textContent = '无法获取';
+    }
+}
+
+async function exportMemories() {
+    try {
+        btnExportMemories.disabled = true;
+        btnExportMemories.textContent = '导出中…';
+
+        const res = await fetch('/api/memories/export');
+        if (!res.ok) throw new Error('导出失败');
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `xiaoxi_memories_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        addSystemMessage('记忆已导出 ✨');
+    } catch (e) {
+        console.warn('导出记忆失败:', e);
+        addSystemMessage('导出记忆失败了，请稍后重试');
+    } finally {
+        btnExportMemories.disabled = false;
+        btnExportMemories.textContent = '📥 导出记忆';
+    }
+}
+
+async function clearMemories() {
+    const confirmed = confirm('确定要清空小汐的所有记忆吗？\n\n这个操作不可撤销，映海里将变得空空的……');
+    if (!confirmed) return;
+
+    try {
+        btnClearMemories.disabled = true;
+        btnClearMemories.textContent = '清空中…';
+
+        const res = await fetch('/api/memories/clear', { method: 'POST' });
+        if (!res.ok) throw new Error('清空失败');
+
+        const data = await res.json();
+        memoryCountEl.textContent = '空空如也';
+        addSystemMessage(`已清空 ${data.cleared} 条记忆`);
+    } catch (e) {
+        console.warn('清空记忆失败:', e);
+        addSystemMessage('清空记忆失败了，请稍后重试');
+    } finally {
+        btnClearMemories.disabled = false;
+        btnClearMemories.textContent = '🗑️ 清空记忆';
+    }
+}
+
+loadMemoryCount();
 ```
 
 ### frontend/style.css
@@ -2695,925 +3258,79 @@ loadConfig();
     --transition-slow: 0.6s ease;
 }
 
-html, body {
-    height: 100%;
-    overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-                 "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue",
-                 Helvetica, Arial, sans-serif;
-    color: var(--text-primary);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(160deg, var(--bg-deep) 0%, var(--bg-mid) 40%, var(--bg-surface) 100%);
-}
-
-/* === 海洋背景动画层 === */
-.ocean-bg {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    overflow: hidden;
-    z-index: 0;
-}
-
-/* 浮动气泡 */
-.bubbles {
-    position: absolute;
-    inset: 0;
-}
-
-.bubble {
-    position: absolute;
-    bottom: -20px;
-    border-radius: 50%;
-    background: radial-gradient(
-        circle at 30% 30%,
-        rgba(106, 184, 232, 0.18),
-        rgba(106, 184, 232, 0.04)
-    );
-    border: 1px solid rgba(106, 184, 232, 0.08);
-    animation: bubble-rise linear infinite;
-}
-
-.bubble:nth-child(1)  { left:  5%; width: 18px; height: 18px; animation-duration: 14s;  animation-delay: 0s; }
-.bubble:nth-child(2)  { left: 15%; width: 10px; height: 10px; animation-duration: 11s;  animation-delay: 2s; }
-.bubble:nth-child(3)  { left: 25%; width: 24px; height: 24px; animation-duration: 18s;  animation-delay: 4s; }
-.bubble:nth-child(4)  { left: 35%; width: 12px; height: 12px; animation-duration: 12s;  animation-delay: 1s; }
-.bubble:nth-child(5)  { left: 45%; width: 8px;  height: 8px;  animation-duration: 10s;  animation-delay: 3s; }
-.bubble:nth-child(6)  { left: 55%; width: 20px; height: 20px; animation-duration: 16s;  animation-delay: 5s; }
-.bubble:nth-child(7)  { left: 62%; width: 14px; height: 14px; animation-duration: 13s;  animation-delay: 0.5s; }
-.bubble:nth-child(8)  { left: 72%; width: 22px; height: 22px; animation-duration: 17s;  animation-delay: 6s; }
-.bubble:nth-child(9)  { left: 80%; width: 9px;  height: 9px;  animation-duration: 11s;  animation-delay: 2.5s; }
-.bubble:nth-child(10) { left: 88%; width: 16px; height: 16px; animation-duration: 15s;  animation-delay: 1.5s; }
-.bubble:nth-child(11) { left: 10%; width: 6px;  height: 6px;  animation-duration: 9s;   animation-delay: 7s; }
-.bubble:nth-child(12) { left: 50%; width: 26px; height: 26px; animation-duration: 20s;  animation-delay: 3.5s; }
-
-@keyframes bubble-rise {
-    0% {
-        transform: translateY(0) translateX(0) scale(1);
-        opacity: 0;
-    }
-    10% {
-        opacity: 0.6;
-    }
-    50% {
-        transform: translateY(-45vh) translateX(20px) scale(1.05);
-        opacity: 0.4;
-    }
-    80% {
-        opacity: 0.15;
-    }
-    100% {
-        transform: translateY(-105vh) translateX(-15px) scale(0.9);
-        opacity: 0;
-    }
-}
-
-/* 光线效果 */
-.light-rays {
-    position: absolute;
-    top: -30%;
-    left: 50%;
-    width: 120%;
-    height: 80%;
-    transform: translateX(-50%);
-    background: radial-gradient(
-        ellipse at 50% 0%,
-        rgba(106, 184, 232, 0.06) 0%,
-        rgba(106, 184, 232, 0.02) 40%,
-        transparent 70%
-    );
-    animation: light-pulse 8s ease-in-out infinite;
-}
-
-@keyframes light-pulse {
-    0%, 100% { opacity: 0.6; transform: translateX(-50%) scaleX(1); }
-    50%       { opacity: 1;   transform: translateX(-50%) scaleX(1.08); }
-}
-
-/* === 主容器 === */
-.app-container {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    max-width: 680px;
-    height: 100vh;
-    height: 100dvh; /* 移动端视口 */
-    background: var(--glass-bg);
-    backdrop-filter: blur(20px) saturate(1.4);
-    -webkit-backdrop-filter: blur(20px) saturate(1.4);
-    border-left: 1px solid var(--glass-border);
-    border-right: 1px solid var(--glass-border);
-    box-shadow:
-        0 0 60px rgba(0, 0, 0, 0.3),
-        inset 0 0 60px rgba(106, 184, 232, 0.02);
-}
-
-/* === 头部 === */
-.app-header {
-    position: relative;
-    flex-shrink: 0;
-    padding: var(--spacing-lg) var(--spacing-lg) var(--spacing-md);
-    background: linear-gradient(
-        180deg,
-        rgba(10, 22, 40, 0.9) 0%,
-        rgba(15, 31, 58, 0.7) 100%
-    );
-    border-bottom: 1px solid var(--glass-border);
-    overflow: hidden;
-}
-
-.header-content {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: relative;
-    z-index: 1;
-}
-
-.title-group h1 {
-    font-size: 1.6rem;
-    font-weight: 700;
-    letter-spacing: 2px;
-    background: linear-gradient(135deg, var(--accent) 0%, #a0d4f0 50%, var(--accent-warm) 100%);
-    background-clip: text;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    text-shadow: none;
-    animation: title-shimmer 6s ease-in-out infinite;
-    background-size: 200% 200%;
-}
-
-@keyframes title-shimmer {
-    0%, 100% { background-position: 0% 50%; }
-    50%       { background-position: 100% 50%; }
-}
-
-.subtitle {
-    font-size: 0.82rem;
-    color: var(--text-muted);
-    margin-top: 2px;
-    letter-spacing: 1px;
-}
-
-.session-info {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    background: rgba(106, 184, 232, 0.08);
-    padding: 4px 10px;
-    border-radius: 20px;
-    border: 1px solid rgba(106, 184, 232, 0.1);
-}
-
-.header-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.session-label {
-    opacity: 0.7;
-}
-
-.session-id {
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-    color: var(--accent);
-    letter-spacing: 0.5px;
-}
-
-/* 头部底部波浪装饰线 */
-.header-wave {
-    position: absolute;
-    bottom: -1px;
-    left: 0;
-    width: 100%;
-    height: 3px;
-    background: linear-gradient(
-        90deg,
-        transparent 0%,
-        rgba(106, 184, 232, 0.3) 25%,
-        rgba(106, 184, 232, 0.5) 50%,
-        rgba(106, 184, 232, 0.3) 75%,
-        transparent 100%
-    );
-    background-size: 200% 100%;
-    animation: wave-line 4s ease-in-out infinite;
-}
-
-@keyframes wave-line {
-    0%, 100% { background-position: 0% 50%; }
-    50%       { background-position: 100% 50%; }
-}
-
-/* === 聊天区域 === */
-.chat-area {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: var(--spacing-lg) var(--spacing-md);
-    scroll-behavior: smooth;
-}
-
-.chat-messages {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-md);
-    min-height: 100%;
-    justify-content: flex-end;
-}
-
-/* === 消息通用样式 === */
-.message {
-    display: flex;
-    gap: 10px;
-    max-width: 88%;
-    animation: message-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-    opacity: 0;
-    transform: translateY(12px);
-}
-
-@keyframes message-in {
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-/* 小汐消息 - 左对齐 */
-.message.xiaoxi {
-    align-self: flex-start;
-    flex-direction: row;
-}
-
-.message-avatar {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-full);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    background: rgba(20, 60, 80, 0.6);
-    border: 1px solid var(--xiaoxi-bubble-border);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    align-self: flex-end;
-}
-
-.message-bubble {
-    padding: 12px 16px;
-    border-radius: var(--radius-md);
-    line-height: 1.65;
-    font-size: 0.92rem;
-    word-break: break-word;
-    white-space: pre-wrap;
-    position: relative;
-}
-
-/* 小汐气泡 */
-.message.xiaoxi .message-bubble {
-    background: var(--xiaoxi-bubble);
-    border: 1px solid var(--xiaoxi-bubble-border);
-    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 4px;
-    color: var(--text-primary);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-}
-
-/* 用户消息 - 右对齐 */
-.message.user {
-    align-self: flex-end;
-    flex-direction: row-reverse;
-}
-
-.message.user .message-bubble {
-    background: linear-gradient(135deg, var(--user-bubble) 0%, #3a7ab8 100%);
-    border-radius: var(--radius-md) var(--radius-md) 4px var(--radius-md);
-    color: #fff;
-    box-shadow: 0 2px 12px rgba(74, 140, 202, 0.25);
-    transition: background var(--transition-fast);
-}
-
-.message.user .message-bubble:hover {
-    background: linear-gradient(135deg, var(--user-bubble-hover) 0%, var(--user-bubble) 100%);
-}
-
-/* 消息时间 */
-.message-time {
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    margin-top: 4px;
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-}
-
-.message:hover .message-time {
-    opacity: 1;
-}
-
-.message.user .message-time {
-    text-align: right;
-}
-
-/* === 打字指示器 === */
-.typing-indicator {
-    display: flex;
-    gap: 10px;
-    align-self: flex-start;
-    max-width: 88%;
-    padding: 0 var(--spacing-md);
-    margin-top: var(--spacing-sm);
-    animation: message-in 0.3s ease forwards;
-}
-
-.typing-avatar {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-full);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    background: rgba(20, 60, 80, 0.6);
-    border: 1px solid var(--xiaoxi-bubble-border);
-    align-self: flex-end;
-}
-
-.typing-bubble {
-    padding: 14px 20px;
-    background: var(--xiaoxi-bubble);
-    border: 1px solid var(--xiaoxi-bubble-border);
-    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 4px;
-}
-
-.typing-dots {
-    display: flex;
-    gap: 5px;
-    align-items: center;
-}
-
-.typing-dots span {
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-full);
-    background: var(--accent);
-    opacity: 0.4;
-    animation: typing-bounce 1.4s ease-in-out infinite;
-}
-
-.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes typing-bounce {
-    0%, 60%, 100% {
-        transform: translateY(0);
-        opacity: 0.4;
-    }
-    30% {
-        transform: translateY(-6px);
-        opacity: 1;
-    }
-}
-
-/* === 输入区域 === */
-.input-area {
-    flex-shrink: 0;
-    padding: var(--spacing-md) var(--spacing-md) var(--spacing-sm);
-    background: linear-gradient(
-        0deg,
-        rgba(10, 22, 40, 0.95) 0%,
-        rgba(15, 31, 58, 0.8) 100%
-    );
-    border-top: 1px solid var(--glass-border);
-}
-
-.input-wrapper {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    background: rgba(10, 22, 40, 0.7);
-    border: 1px solid rgba(106, 184, 232, 0.12);
-    border-radius: var(--radius-lg);
-    padding: 8px 8px 8px 16px;
-    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
-}
-
-.input-wrapper:focus-within {
-    border-color: rgba(106, 184, 232, 0.4);
-    box-shadow:
-        0 0 20px rgba(106, 184, 232, 0.1),
-        inset 0 0 20px rgba(106, 184, 232, 0.03);
-}
-
-.message-input {
-    flex: 1;
-    border: none;
-    outline: none;
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 0.92rem;
-    line-height: 1.5;
-    resize: none;
-    max-height: 120px;
-    font-family: inherit;
-    padding: 6px 0;
-}
-
-.message-input::placeholder {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-.send-btn {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border: none;
-    border-radius: var(--radius-full);
-    background: linear-gradient(135deg, var(--user-bubble) 0%, #3a7ab8 100%);
-    color: #fff;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-fast);
-    box-shadow: 0 2px 8px rgba(74, 140, 202, 0.3);
-}
-
-.send-btn:hover:not(:disabled) {
-    transform: scale(1.08);
-    box-shadow: 0 4px 16px rgba(74, 140, 202, 0.45);
-}
-
-.send-btn:active:not(:disabled) {
-    transform: scale(0.95);
-}
-
-.send-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    transform: none;
-}
-
-/* 流式输出中：发送按钮变为停止按钮 */
-.send-btn.streaming {
-    background: linear-gradient(135deg, #c0564a 0%, #a04038 100%);
-}
-
-.send-btn.streaming .send-icon {
-    display: none;
-}
-
-.send-btn.streaming::after {
-    content: '';
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    background: #fff;
-    display: block;
-}
-
-.send-icon {
-    width: 18px;
-    height: 18px;
-}
-
-.input-hint {
-    text-align: center;
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    margin-top: 6px;
-    opacity: 0.6;
-}
-
-/* === 自定义滚动条 === */
-.chat-area::-webkit-scrollbar {
-    width: 5px;
-}
-
-.chat-area::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.chat-area::-webkit-scrollbar-thumb {
-    background: rgba(106, 184, 232, 0.15);
-    border-radius: 10px;
-}
-
-.chat-area::-webkit-scrollbar-thumb:hover {
-    background: rgba(106, 184, 232, 0.3);
-}
-
-/* === 欢迎消息特殊样式 === */
-.message.welcome .message-bubble {
-    background: linear-gradient(
-        135deg,
-        rgba(20, 60, 80, 0.7) 0%,
-        rgba(30, 70, 100, 0.5) 100%
-    );
-    border: 1px solid rgba(106, 184, 232, 0.2);
-    box-shadow:
-        0 4px 20px rgba(0, 0, 0, 0.2),
-        inset 0 1px 0 rgba(106, 184, 232, 0.1);
-}
-
-/* === 错误消息样式 === */
-.message.error .message-bubble {
-    background: rgba(80, 30, 30, 0.5);
-    border: 1px solid rgba(200, 80, 80, 0.3);
-    color: #e8a0a0;
-}
-
-/* === 系统提示消息 === */
-.system-message {
-    text-align: center;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    padding: 8px 16px;
-    opacity: 0.7;
-    animation: message-in 0.5s ease forwards;
-    opacity: 0;
-}
-
-/* === 响应式设计 === */
-@media (max-width: 768px) {
-    .app-container {
-        max-width: 100%;
-        border-left: none;
-        border-right: none;
-    }
-
-    .app-header {
-        padding: var(--spacing-md) var(--spacing-md) var(--spacing-sm);
-    }
-
-    .title-group h1 {
-        font-size: 1.3rem;
-    }
-
-    .message {
-        max-width: 92%;
-    }
-
-    .input-area {
-        padding: var(--spacing-sm);
-        padding-bottom: max(var(--spacing-sm), env(safe-area-inset-bottom));
-    }
-}
-
-@media (max-width: 480px) {
-    .session-info {
-        display: none;
-    }
-
-    .title-group h1 {
-        font-size: 1.15rem;
-    }
-
-    .message-bubble {
-        font-size: 0.88rem;
-        padding: 10px 14px;
-    }
-
-    .thinking-options {
-        flex-direction: column;
-    }
-
-    .thinking-option {
-        flex-direction: row;
-        gap: 10px;
-        padding: 10px 12px;
-    }
-
-    .thinking-icon {
-        margin-bottom: 0;
-    }
-
-    .thinking-desc {
-        text-align: left;
-    }
-
-    .settings-panel {
-        width: 95%;
-        max-height: 90vh;
-    }
-}
-
-/* === 辅助功能 === */
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        transition-duration: 0.01ms !important;
-    }
-}
-
-/* === 文本选中颜色 === */
-::selection {
-    background: rgba(106, 184, 232, 0.3);
-    color: #fff;
-}
-
-/* === 设置按钮（头部右上角） === */
-.settings-btn {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border: 1px solid rgba(106, 184, 232, 0.15);
-    border-radius: var(--radius-full);
-    background: rgba(106, 184, 232, 0.08);
-    color: var(--text-secondary);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-fast);
-    margin-left: 8px;
-}
-
-.settings-btn:hover {
-    background: rgba(106, 184, 232, 0.18);
-    color: var(--accent);
-    border-color: rgba(106, 184, 232, 0.3);
-    transform: rotate(30deg);
-}
-
-.settings-icon {
-    width: 18px;
-    height: 18px;
-}
-
-/* === 设置面板遮罩层 === */
-.settings-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    background: rgba(5, 12, 24, 0.7);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.3s ease, visibility 0.3s ease;
-}
-
-.settings-overlay.visible {
-    opacity: 1;
-    visibility: visible;
-}
-
-/* === 设置面板主体 === */
-.settings-panel {
-    width: 90%;
-    max-width: 420px;
-    max-height: 85vh;
-    background: linear-gradient(160deg, rgba(15, 31, 58, 0.95) 0%, rgba(20, 40, 70, 0.95) 100%);
-    border: 1px solid rgba(106, 184, 232, 0.2);
-    border-radius: var(--radius-lg);
-    box-shadow:
-        0 20px 60px rgba(0, 0, 0, 0.5),
-        0 0 40px rgba(106, 184, 232, 0.08),
-        inset 0 1px 0 rgba(106, 184, 232, 0.1);
-    overflow-y: auto;
-    transform: translateY(20px) scale(0.96);
-    transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.settings-overlay.visible .settings-panel {
-    transform: translateY(0) scale(1);
-}
-
-.settings-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--spacing-lg) var(--spacing-lg) var(--spacing-md);
-    border-bottom: 1px solid var(--glass-border);
-}
-
-.settings-header h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: 1px;
-}
-
-.settings-close-btn {
-    width: 32px;
-    height: 32px;
-    border: none;
-    border-radius: var(--radius-full);
-    background: rgba(106, 184, 232, 0.08);
-    color: var(--text-muted);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-fast);
-}
-
-.settings-close-btn:hover {
-    background: rgba(200, 80, 80, 0.15);
-    color: #e8a0a0;
-}
-
-.settings-body {
-    padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
-}
-
-/* === 设置分区 === */
-.settings-section {
-    margin-bottom: var(--spacing-lg);
-}
-
-.settings-section:last-child {
-    margin-bottom: 0;
-}
-
-.settings-label {
-    display: block;
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: var(--spacing-sm);
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-}
-
-/* === 模型卡片 === */
-.model-cards {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
-}
-
-.model-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid rgba(106, 184, 232, 0.12);
-    border-radius: var(--radius-md);
-    background: rgba(10, 22, 40, 0.5);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.model-card:hover {
-    background: rgba(106, 184, 232, 0.08);
-    border-color: rgba(106, 184, 232, 0.25);
-}
-
-.model-card.active {
-    background: rgba(106, 184, 232, 0.12);
-    border-color: rgba(106, 184, 232, 0.4);
-    box-shadow: 0 0 16px rgba(106, 184, 232, 0.08);
-}
-
-.model-card-icon {
-    font-size: 1.4rem;
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(106, 184, 232, 0.08);
-    border-radius: var(--radius-sm);
-}
-
-.model-card-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.model-card-name {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 2px;
-}
-
-.model-card-desc {
-    font-size: 0.76rem;
-    color: var(--text-muted);
-    line-height: 1.3;
-}
-
-.model-card-check {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: var(--radius-full);
-    border: 2px solid rgba(106, 184, 232, 0.2);
-    transition: all var(--transition-fast);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.model-card.active .model-card-check {
-    border-color: var(--accent);
-    background: var(--accent);
-}
-
-.model-card.active .model-card-check::after {
-    content: '';
-    width: 8px;
-    height: 5px;
-    border-left: 2px solid #fff;
-    border-bottom: 2px solid #fff;
-    transform: rotate(-45deg) translateY(-1px);
-}
-
-/* === 思考强度选项 === */
-.thinking-options {
-    display: flex;
-    gap: var(--spacing-sm);
-}
-
-.thinking-option {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 6px;
-    border: 1px solid rgba(106, 184, 232, 0.12);
-    border-radius: var(--radius-md);
-    background: rgba(10, 22, 40, 0.5);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    font-family: inherit;
-}
-
-.thinking-option:hover {
-    background: rgba(106, 184, 232, 0.08);
-    border-color: rgba(106, 184, 232, 0.25);
-}
-
-.thinking-option.active {
-    background: rgba(106, 184, 232, 0.12);
-    border-color: rgba(106, 184, 232, 0.4);
-    color: var(--text-primary);
-    box-shadow: 0 0 16px rgba(106, 184, 232, 0.08);
-}
-
-.thinking-icon {
-    font-size: 1.3rem;
-    margin-bottom: 2px;
-}
-
-.thinking-text {
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.thinking-desc {
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    text-align: center;
-    line-height: 1.3;
-}
-
-/* === 状态信息 === */
-.settings-status {
+/* ... 基础样式（气泡、海洋背景动画、头部、聊天区域、
+   输入区域、打字指示器、滚动条、响应式设计、
+   设置面板、模型卡片、思考强度选项、状态信息、
+   Markdown 渲染样式）与之前版本一致，省略 ... */
+
+/* === 记忆管理区域 === */
+.settings-memory {
     padding-top: var(--spacing-md);
     border-top: 1px solid var(--glass-border);
 }
 
-.status-row {
+.memory-info {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 0;
+    gap: 6px;
+    margin-bottom: var(--spacing-sm);
 }
 
-.status-label {
-    font-size: 0.8rem;
-    color: var(--text-muted);
+.memory-count-label {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
 }
 
-.status-value {
+.memory-count-value {
     font-size: 0.82rem;
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     color: var(--accent);
 }
 
-.status-hint {
+.memory-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.memory-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid rgba(106, 184, 232, 0.15);
+    border-radius: var(--radius-md);
+    background: rgba(10, 22, 40, 0.5);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.memory-btn:hover:not(:disabled) {
+    background: rgba(106, 184, 232, 0.1);
+    border-color: rgba(106, 184, 232, 0.3);
+    color: var(--text-primary);
+}
+
+.memory-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.memory-btn-danger {
+    border-color: rgba(200, 80, 80, 0.2);
+}
+
+.memory-btn-danger:hover:not(:disabled) {
+    background: rgba(200, 80, 80, 0.12);
+    border-color: rgba(200, 80, 80, 0.4);
+    color: #e8a0a0;
+}
+
+.memory-hint {
     font-size: 0.7rem;
     color: var(--text-muted);
     margin-top: var(--spacing-sm);
@@ -3622,127 +3339,6 @@ body {
     border-radius: var(--radius-sm);
     border: 1px solid rgba(106, 184, 232, 0.08);
     line-height: 1.5;
-}
-
-/* === 设置面板滚动条 === */
-.settings-panel::-webkit-scrollbar {
-    width: 4px;
-}
-
-.settings-panel::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.settings-panel::-webkit-scrollbar-thumb {
-    background: rgba(106, 184, 232, 0.15);
-    border-radius: 10px;
-}
-
-/* === Markdown 渲染样式 === */
-.message-bubble h1,
-.message-bubble h2,
-.message-bubble h3 {
-    margin: 0.5em 0 0.3em;
-    font-weight: 600;
-    line-height: 1.3;
-}
-
-.message-bubble h1 { font-size: 1.15em; }
-.message-bubble h2 { font-size: 1.05em; }
-.message-bubble h3 { font-size: 1em; }
-
-.message-bubble p {
-    margin: 0.3em 0;
-}
-
-.message-bubble p:first-child { margin-top: 0; }
-.message-bubble p:last-child { margin-bottom: 0; }
-
-.message-bubble strong {
-    font-weight: 600;
-    color: var(--accent);
-}
-
-.message-bubble em {
-    font-style: italic;
-    opacity: 0.9;
-}
-
-.message-bubble a {
-    color: var(--accent);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-}
-
-.message-bubble a:hover {
-    color: var(--accent-warm);
-}
-
-.message-bubble code {
-    background: rgba(0, 0, 0, 0.25);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-    font-size: 0.88em;
-}
-
-.message-bubble pre {
-    background: rgba(0, 0, 0, 0.3);
-    padding: 10px 14px;
-    border-radius: 8px;
-    overflow-x: auto;
-    margin: 0.5em 0;
-    border: 1px solid rgba(106, 184, 232, 0.1);
-}
-
-.message-bubble pre code {
-    background: none;
-    padding: 0;
-    font-size: 0.85em;
-    line-height: 1.5;
-}
-
-.message-bubble ul,
-.message-bubble ol {
-    margin: 0.3em 0;
-    padding-left: 1.5em;
-}
-
-.message-bubble li {
-    margin: 0.15em 0;
-}
-
-.message-bubble blockquote {
-    border-left: 3px solid var(--accent);
-    padding-left: 12px;
-    margin: 0.5em 0;
-    opacity: 0.85;
-    color: var(--text-secondary);
-}
-
-.message-bubble hr {
-    border: none;
-    border-top: 1px solid var(--glass-border);
-    margin: 0.8em 0;
-}
-
-.message-bubble table {
-    border-collapse: collapse;
-    margin: 0.5em 0;
-    font-size: 0.88em;
-    width: 100%;
-}
-
-.message-bubble th,
-.message-bubble td {
-    border: 1px solid rgba(106, 184, 232, 0.15);
-    padding: 6px 10px;
-    text-align: left;
-}
-
-.message-bubble th {
-    background: rgba(0, 0, 0, 0.2);
-    font-weight: 600;
 }
 ```
 
@@ -3757,6 +3353,10 @@ body {
 | `GET /api/config` | GET | 获取控制台配置（模型、思考强度） |
 | `POST /api/config` | POST | 更新控制台配置（切换模型、调整参数） |
 | `GET /api/health` | GET | 健康检查 |
+| `GET /api/memories` | GET | 获取所有记忆列表 |
+| `DELETE /api/memories/{memory_id}` | DELETE | 删除一条记忆 |
+| `GET /api/memories/export` | GET | 导出所有记忆（JSON 下载） |
+| `POST /api/memories/clear` | POST | 清空所有记忆 |
 | `GET /docs` | GET | Swagger 文档（FastAPI 内置） |
 
 ### 请求示例
@@ -3765,7 +3365,9 @@ body {
 // POST /api/chat/stream
 {
     "message": "今天天气怎么样",
-    "session_id": "abc12345"
+    "session_id": "abc12345",
+    "latitude": 22.28,
+    "longitude": 114.18
 }
 
 // SSE 响应（每行一个事件）
@@ -3780,4 +3382,24 @@ data: [DONE]
 
 ---
 
-*文档生成时间：2026-07-18 · v0.2.1*
+## 变更日志（v0.2.1 → v0.3.0）
+
+### 新增
+- **GPS 定位系统** — 前端 Web Geolocation API 获取坐标，sessionStorage 缓存 30 分钟，附带到请求；后端 `location_store.py` 会话级缓存（8 小时 TTL），自动注入 LLM 上下文
+- **PWA 支持** — `manifest.json` + Apple meta tags，可添加到 iOS 主屏幕
+- **塔罗牌占卜** — `tarot.py` + `tarot_deck.yaml`（78 张韦特塔罗），支持单牌/三牌/凯尔特十字牌阵，15% 逆位概率
+- **记忆管理 API** — `GET/DELETE /api/memories`, `GET /api/memories/export`, `POST /api/memories/clear`
+- **记忆工具** — 新增 `delete_memory`、`export_memories`
+- **记忆管理器增强** — `delete()`、`clear()`、`export_json()` 方法；`add()` 自动去重；`recall()` 更新 `last_used_at`；新增 `source`/`last_used_at` 字段
+- **输入校验** — 消息去空白、2000 字限制、session_id 格式校验、GPS 坐标范围校验
+- **日记去重** — 同一天写日记只更新不重复写入
+- **前端记忆管理 UI** — 控制台新增记忆数量显示、导出/清空按钮
+
+### 变更
+- `chat.py` 使用 `_build_input_with_location` 替代 `_build_input`，自动注入 GPS 上下文
+- `soul.py` BEHAVIOR_RULES 新增 GPS 坐标使用指引、`delete_memory`、`export_memories` 工具说明
+- `tools/__init__.py` 新增 `delete_memory`、`export_memories`、`tarot` 注册
+
+---
+
+*文档更新时间：2026-07-20 · v0.3.0*

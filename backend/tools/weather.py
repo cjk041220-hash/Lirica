@@ -1,6 +1,7 @@
 """天气查询工具 — Open-Meteo 免费 API。"""
 import httpx
 from langchain_core.tools import tool
+from memory import location_store
 
 # 城市坐标映射（覆盖更多港澳台及大陆城市）
 _CITY_COORDS = {
@@ -82,15 +83,25 @@ async def _resolve_coords(city: str) -> tuple[float, float, str]:
 
 
 @tool
-async def get_weather(city: str = "香港") -> str:
-    """查询指定城市的实时天气和明天预报。当冷冷问天气、提到出门、或说冷/热时主动调用。
+async def get_weather(
+    city: str = "香港",
+    latitude: float = 0,
+    longitude: float = 0,
+) -> str:
+    """查询指定城市或坐标的实时天气和明天预报。当冷冷问天气、提到出门、或说冷/热时主动调用。
 
     Args:
         city: 城市名称，默认「香港」。支持：香港、北京、上海、广州、深圳等。
+        latitude: 纬度（可选）。如果有 GPS 坐标可直接传入，优先级高于 city。
+        longitude: 经度（可选）。如果有 GPS 坐标可直接传入，优先级高于 city。
     """
     try:
-        lat, lon, resolved_city = await _resolve_coords(city)
-        display_city = resolved_city if resolved_city != city else city
+        # 坐标优先级：参数直传 > 会话缓存 > 城市名查表
+        if latitude and longitude:
+            lat, lon = latitude, longitude
+            display_city = city
+        else:
+            lat, lon, display_city = await _resolve_coords(city)
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(

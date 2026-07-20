@@ -1,4 +1,5 @@
 """小汐的记忆工具 — 通过 MemoryManager 读写。"""
+import json
 from langchain_core.tools import tool
 from memory.manager import MemoryManager
 
@@ -15,6 +16,7 @@ def set_memory_manager(mgr: MemoryManager):
 @tool
 def remember(category: str, content: str) -> str:
     """让小汐记住一件事。冷冷说了关于自己的重要信息时主动调用。
+    自动去重：同样的内容不会重复记录。
 
     Args:
         category: 记忆类别，如「冷冷喜欢的」「去过的地方」「重要的事」
@@ -79,3 +81,42 @@ def list_memories() -> str:
         return result
     except Exception as e:
         return f"小汐数记忆的时候犯迷糊了……（{str(e)[:100]}）"
+
+
+@tool
+def delete_memory(memory_id: str) -> str:
+    """删除一条指定的记忆。冷冷说「忘掉这个」「不要记这个」时调用。
+
+    Args:
+        memory_id: 要删除的记忆 ID
+    """
+    try:
+        if _memory_manager is None:
+            return "小汐的记忆盒子还没有打开……"
+        if _memory_manager.delete(memory_id):
+            return "✨ 小汐已经把这段记忆放回海里了~"
+        return "小汐翻了翻，没有找到这段记忆呢……"
+    except Exception as e:
+        return f"小汐放记忆的时候手滑了……（{str(e)[:100]}）"
+
+
+@tool
+def export_memories() -> str:
+    """导出冷冷所有记忆的摘要。冷冷想看自己全部记忆时调用。"""
+    try:
+        if _memory_manager is None:
+            return "小汐的记忆盒子还没有打开……"
+        mems = _memory_manager.all()
+        if not mems:
+            return "映海里还空空的，没有记忆可以导出呢。"
+
+        lines = [f"🐋 小汐一共记住了 {len(mems)} 件事：\n"]
+        for m in mems:
+            lines.append(
+                f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** "
+                f"({m.get('time', '')})\n   {m.get('content', '')}"
+            )
+        lines.append("\n💡 冷冷可以通过控制台删除不想要的记忆哦~")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"小汐整理记忆的时候犯迷糊了……（{str(e)[:100]}）"

@@ -8,8 +8,13 @@ from tools.map_tools import (
     get_cycling_route,
 )
 from tools.search import web_search
-from tools.memory import remember, recall, list_memories, set_memory_manager
+from tools.memory import (
+    remember, recall, list_memories,
+    delete_memory, export_memories,
+    set_memory_manager,
+)
 from tools.diary import write_diary, read_diary
+from tools.tarot import tarot
 
 
 def get_all_tools() -> list:
@@ -28,6 +33,9 @@ def get_all_tools() -> list:
         remember,
         recall,
         list_memories,
+        delete_memory,
+        export_memories,
         write_diary,
         read_diary,
+        tarot,
     ]

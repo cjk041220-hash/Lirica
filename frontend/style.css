@@ -1098,3 +1098,81 @@ body {
     background: rgba(0, 0, 0, 0.2);
     font-weight: 600;
 }
+
+/* === 记忆管理区域 === */
+.settings-memory {
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--glass-border);
+}
+
+.memory-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: var(--spacing-sm);
+}
+
+.memory-count-label {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.memory-count-value {
+    font-size: 0.82rem;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    color: var(--accent);
+}
+
+.memory-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.memory-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid rgba(106, 184, 232, 0.15);
+    border-radius: var(--radius-md);
+    background: rgba(10, 22, 40, 0.5);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.memory-btn:hover:not(:disabled) {
+    background: rgba(106, 184, 232, 0.1);
+    border-color: rgba(106, 184, 232, 0.3);
+    color: var(--text-primary);
+}
+
+.memory-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.memory-btn-danger {
+    border-color: rgba(200, 80, 80, 0.2);
+}
+
+.memory-btn-danger:hover:not(:disabled) {
+    background: rgba(200, 80, 80, 0.12);
+    border-color: rgba(200, 80, 80, 0.4);
+    color: #e8a0a0;
+}
+
+.memory-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: var(--spacing-sm);
+    padding: 8px 10px;
+    background: rgba(106, 184, 232, 0.06);
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(106, 184, 232, 0.08);
+    line-height: 1.5;
+}

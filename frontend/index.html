@@ -2,8 +2,19 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>映海 - 小汐在这里陪你</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f1f3a">
+
+    <!-- Apple PWA（iOS 添加到主屏幕） -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="映海">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%230f1f3a'/><text x='256' y='340' font-size='280' text-anchor='middle'>🐋</text></svg>">
+
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
     <!-- Markdown 渲染 -->
@@ -161,6 +172,26 @@
                     </div>
                     <div class="status-hint">
                         💡 Temperature 控制创造性（非思考深度）；R1 自带深度推理
+                    </div>
+                </div>
+
+                <!-- 记忆管理 -->
+                <div class="settings-section settings-memory">
+                    <label class="settings-label">记忆管理</label>
+                    <div class="memory-info">
+                        <span class="memory-count-label">映海记忆：</span>
+                        <span id="memory-count" class="memory-count-value">加载中…</span>
+                    </div>
+                    <div class="memory-actions">
+                        <button id="btn-export-memories" class="memory-btn memory-btn-export" title="导出所有记忆">
+                            📥 导出记忆
+                        </button>
+                        <button id="btn-clear-memories" class="memory-btn memory-btn-danger" title="清空所有记忆">
+                            🗑️ 清空记忆
+                        </button>
+                    </div>
+                    <div class="memory-hint">
+                        💡 导出的记忆为 JSON 文件，可留作纪念或备份
                     </div>
                 </div>
             </div>

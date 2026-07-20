@@ -43,14 +43,26 @@ def write_diary(content: str) -> str:
     """
     try:
         diaries = _load()
+        today_iso = datetime.date.today().isoformat()
         today = datetime.date.today().strftime("%m月%d日")
-        diaries.append({
-            "date": datetime.date.today().isoformat(),
-            "title": today,
-            "content": content,
-        })
+
+        # 同一天去重：已有今日日记则更新内容，不重复写入
+        existing = next(
+            (d for d in diaries if d.get("date") == today_iso), None
+        )
+        if existing:
+            existing["content"] = content
+            msg = "📖 小汐更新了今天的日记！"
+        else:
+            diaries.append({
+                "date": today_iso,
+                "title": today,
+                "content": content,
+            })
+            msg = "📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
+
         _save(diaries)
-        return f"📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
+        return msg
     except Exception as e:
         return f"小汐写日记的时候弄翻了墨水瓶……（{str(e)[:100]}）"
 
