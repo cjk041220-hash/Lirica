@@ -6,6 +6,8 @@
 
 ## 快速启动
 
+### 后端
+
 ```bash
 # 1. 复制环境变量文件
 cd backend
@@ -23,6 +25,16 @@ python main.py
 ```
 
 或者双击 `start.bat`。
+
+### 前端（Next.js）
+
+```bash
+cd web
+npm install        # 首次运行前安装依赖
+npm run dev        # 开发模式，默认 http://localhost:3000
+npm run build      # 生产构建
+npm start          # 生产模式启动
+```
 
 ## API 接口
 
@@ -76,13 +88,19 @@ data/
 ├── checkpoints.db       # 对话检查点（SQLite）
 └── diaries.yaml         # 日记数据
 
-frontend/
-└── manifest.json        # PWA 清单
+web/                     # 前端（已迁移至 Next.js）
+├── src/
+│   └── app/             # App Router 页面
+├── public/              # 静态资源（含 PWA manifest）
+├── next.config.ts
+├── tailwind.config.ts
+└── package.json
 ```
 
 ## 技术栈
 
-- **框架**: FastAPI + LangGraph
+- **后端框架**: FastAPI + LangGraph
+- **前端框架**: Next.js 15 (App Router) + TypeScript + Tailwind CSS
 - **模型**: DeepSeek Chat
 - **天气**: Open-Meteo（免费）
 - **地图**: 高德地图 Web服务 API
@@ -100,6 +118,10 @@ frontend/
 - **日记去重** — 同一天只更新不重复写入
 - **控制台** — 模型选择、思考强度调节
 - **Markdown 渲染、流式输出、自动重试、健康检查**
+
+## 迁移记录
+
+- **v0.3.0 → Next.js**: 前端由原生 HTML/JS/CSS（`frontend/`）迁移至 Next.js 15（`web/`）。后端 `backend/` 无变动。
 
 ## 版本
 

@@ -24,6 +24,7 @@ from memory.manager import MemoryManager
 from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router
+import heartbeat
 
 
 # ── 生命周期 ────────────────────────────────────────────────
@@ -77,6 +78,16 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = checkpointer
     app.state._db_conn = db_conn
 
+    # 6. 心跳调度器
+    heartbeat.scheduler.add_job(
+        heartbeat.check_and_proactive_message,
+        "interval",
+        hours=2,
+        id="proactive_check",
+    )
+    heartbeat.scheduler.start()
+    _p("  [heartbeat] 心跳已启动（每 2 小时）")
+
     _p("[xixi] 小汐醒啦！")
     _p("  -> http://127.0.0.1:8000")
     _p("  -> http://127.0.0.1:8000/api/health")
@@ -86,6 +97,7 @@ async def lifespan(app: FastAPI):
 
     # 清理
     _p("[xixi] 小汐去睡觉了……")
+    heartbeat.scheduler.shutdown(wait=False)
     app.state.agent = None
     if db_conn is not None:
         try:

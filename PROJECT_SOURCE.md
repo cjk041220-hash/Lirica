@@ -12,11 +12,13 @@
 小汐sonetto/
 ├── .gitignore
 ├── README.md
+├── PROJECT_SOURCE.md           # 本文档
 ├── start.bat                   # Windows 一键启动（纯 ASCII，避免 CMD 乱码）
 ├── backend/
 │   ├── main.py                 # 启动入口
 │   ├── version.py              # 版本号（唯一定义处）
 │   ├── requirements.txt        # Python 依赖
+│   ├── heartbeat.py            # 心跳调度器（APScheduler，每 2 小时）
 │   ├── config/
 │   │   ├── __init__.py
 │   │   ├── settings.py         # 全局配置（pydantic-settings, .env 加载）
@@ -24,7 +26,7 @@
 │   │   └── .env.example        # 配置模板
 │   ├── api/
 │   │   ├── __init__.py
-│   │   ├── server.py           # FastAPI 服务器 + 生命周期管理
+│   │   ├── server.py           # FastAPI 服务器 + 生命周期管理（含心跳启停）
 │   │   └── routes/
 │   │       ├── __init__.py
 │   │       ├── chat.py         # 对话路由（REST + SSE 流式）+ 记忆管理端点
@@ -54,11 +56,20 @@
 │       ├── memories.yaml       # 记忆数据
 │       ├── checkpoints.db      # 对话状态（SQLite）
 │       └── diaries.yaml        # 日记数据
-└── frontend/
-    ├── index.html              # 前端页面（含控制台面板 + PWA 支持）
-    ├── app.js                  # 前端交互逻辑（Vanilla JS + GPS + 记忆管理）
-    ├── style.css               # 深海主题样式（含控制台 + 记忆管理样式）
-    └── manifest.json           # PWA 清单文件
+└── web/                        # 前端（Next.js 15，已替代旧 frontend/）
+    ├── package.json
+    ├── next.config.ts
+    ├── tsconfig.json
+    ├── postcss.config.mjs
+    ├── eslint.config.mjs
+    ├── public/                 # 静态资源（PWA manifest 等）
+    └── src/
+        ├── app/
+        │   ├── globals.css     # 全局样式 + CSS 变量
+        │   ├── layout.tsx      # 根布局
+        │   └── page.tsx        # 首页（三层 Z 轴布局骨架）
+        └── hooks/
+            └── useXiaoxiChat.ts # 流式聊天 Hook（fetch + ReadableStream + SSE）
 ```
 
 ## 技术栈
@@ -70,7 +81,8 @@
 | 天气       | Open-Meteo (免费 API)             |
 | 地图       | 高德地图 Web服务 API              |
 | 搜索       | Tavily                            |
-| 前端       | 原生 HTML + CSS + JS (无框架)     |
+| 前端       | Next.js 15 (App Router) + TypeScript + Tailwind CSS |
+| 心跳调度   | APScheduler (AsyncIOScheduler)    |
 | Markdown   | marked.js (CDN)                   |
 | 数据库     | SQLite (对话检查点) + YAML (记忆) |
 | GPS        | Web Geolocation API (前端)        |
@@ -217,6 +229,7 @@ httpx>=0.28.0
 python-dotenv>=1.0.0
 tavily-python>=0.7.0
 pyyaml>=6.0
+apscheduler
 ```
 
 ### backend/config/.env.example
@@ -395,6 +408,7 @@ from memory.manager import MemoryManager
 from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router
+import heartbeat
 
 
 # ── 生命周期 ────────────────────────────────────────────────
@@ -448,6 +462,16 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = checkpointer
     app.state._db_conn = db_conn
 
+    # 6. 心跳调度器
+    heartbeat.scheduler.add_job(
+        heartbeat.check_and_proactive_message,
+        "interval",
+        hours=2,
+        id="proactive_check",
+    )
+    heartbeat.scheduler.start()
+    _p("  [heartbeat] 心跳已启动（每 2 小时）")
+
     _p("[xixi] 小汐醒啦！")
     _p("  -> http://127.0.0.1:8000")
     _p("  -> http://127.0.0.1:8000/api/health")
@@ -457,6 +481,7 @@ async def lifespan(app: FastAPI):
 
     # 清理
     _p("[xixi] 小汐去睡觉了……")
+    heartbeat.scheduler.shutdown(wait=False)
     app.state.agent = None
     if db_conn is not None:
         try:
@@ -2256,1089 +2281,308 @@ memories:
 
 ---
 
-## 前端
+## 后端新增
 
-### frontend/manifest.json
+### backend/heartbeat.py
+
+```python
+"""心跳调度器 —— 定时触发主动消息检查。"""
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+scheduler = AsyncIOScheduler()
+
+
+async def check_and_proactive_message():
+    """占位：检查是否需要主动给冷冷发消息。"""
+    print("心跳触发：检查是否需要主动发消息...")
+```
+
+---
+
+## 前端（Next.js 15 — 已迁移）
+
+> 旧版 `frontend/`（原生 HTML/JS/CSS）已删除，前端迁移至 Next.js 15 App Router。
+> 启动命令：`cd web && npm run dev`
+
+### web/package.json
 
 ```json
 {
-    "name": "映海 - 小汐在这里陪你",
-    "short_name": "映海",
-    "description": "希望你一个人在香港的时候，也不会觉得孤单。",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#0a1628",
-    "theme_color": "#0f1f3a",
-    "orientation": "portrait",
-    "icons": [
-        {
-            "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%230f1f3a'/><text x='256' y='340' font-size='280' text-anchor='middle'>🐋</text></svg>",
-            "sizes": "512x512",
-            "type": "image/svg+xml",
-            "purpose": "any"
-        }
-    ]
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
 }
 ```
 
-### frontend/index.html
-
-```html
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>映海 - 小汐在这里陪你</title>
-
-    <!-- PWA -->
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#0f1f3a">
-
-    <!-- Apple PWA（iOS 添加到主屏幕） -->
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="映海">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%230f1f3a'/><text x='256' y='340' font-size='280' text-anchor='middle'>🐋</text></svg>">
-
-    <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
-    <!-- Markdown 渲染 -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-</head>
-<body>
-    <!-- 背景气泡层 -->
-    <div class="ocean-bg">
-        <div class="bubbles">
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-            <span class="bubble"></span>
-        </div>
-        <!-- 光线效果 -->
-        <div class="light-rays"></div>
-    </div>
-
-    <!-- 主容器 -->
-    <div class="app-container">
-        <!-- 头部 -->
-        <header class="app-header">
-            <div class="header-content">
-                <div class="title-group">
-                    <h1>🐋 映海</h1>
-                    <p class="subtitle">小汐在这里陪你</p>
-                </div>
-                <div class="header-right">
-                    <div class="session-info">
-                        <span class="session-label">会话</span>
-                        <span id="session-id" class="session-id"></span>
-                    </div>
-                    <button id="settings-btn" class="settings-btn" title="控制台设置">
-                        <svg class="settings-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-                            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-            <!-- 头部波浪装饰 -->
-            <div class="header-wave"></div>
-        </header>
-
-        <!-- 聊天区域 -->
-        <main class="chat-area" id="chat-area">
-            <div class="chat-messages" id="chat-messages">
-                <!-- 消息会动态插入到这里 -->
-            </div>
-            <!-- 打字指示器 -->
-            <div class="typing-indicator" id="typing-indicator" style="display: none;">
-                <div class="typing-avatar">🐋</div>
-                <div class="typing-bubble">
-                    <div class="typing-dots">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </div>
-                </div>
-            </div>
-        </main>
-
-        <!-- 输入区域 -->
-        <footer class="input-area">
-            <div class="input-wrapper">
-                <textarea
-                    id="message-input"
-                    class="message-input"
-                    placeholder="跟小汐说些什么吧..."
-                    rows="1"
-                    maxlength="2000"
-                ></textarea>
-                <button id="send-btn" class="send-btn" title="发送消息">
-                    <svg class="send-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </button>
-            </div>
-            <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
-        </footer>
-    </div>
-
-    <!-- 控制台设置面板 -->
-    <div class="settings-overlay" id="settings-overlay">
-        <div class="settings-panel">
-            <div class="settings-header">
-                <h2>🎛️ 控制台</h2>
-                <button id="settings-close" class="settings-close-btn" title="关闭">
-                    <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
-                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                </button>
-            </div>
-
-            <div class="settings-body">
-                <!-- 模型选择 -->
-                <div class="settings-section">
-                    <label class="settings-label">模型选择</label>
-                    <div class="model-cards" id="model-cards">
-                        <!-- 动态填充 -->
-                    </div>
-                </div>
-
-                <!-- 思考强度 -->
-                <div class="settings-section">
-                    <label class="settings-label">思考强度</label>
-                    <div class="thinking-intensity">
-                        <div class="thinking-options">
-                            <button class="thinking-option" data-intensity="low">
-                                <span class="thinking-icon">🌊</span>
-                                <span class="thinking-text">轻柔</span>
-                                <span class="thinking-desc">稳定输出，快速回复</span>
-                            </button>
-                            <button class="thinking-option" data-intensity="medium">
-                                <span class="thinking-icon">🐋</span>
-                                <span class="thinking-text">适中</span>
-                                <span class="thinking-desc">平衡创造性与速度</span>
-                            </button>
-                            <button class="thinking-option" data-intensity="high">
-                                <span class="thinking-icon">🌟</span>
-                                <span class="thinking-text">深度</span>
-                                <span class="thinking-desc">更发散、更有想象力</span>
-                            </button>
-                            <button class="thinking-option active" data-intensity="max">
-                                <span class="thinking-icon">🔥</span>
-                                <span class="thinking-text">全力</span>
-                                <span class="thinking-desc">最大输出 + 高创造性</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 当前状态 -->
-                <div class="settings-section settings-status">
-                    <div class="status-row">
-                        <span class="status-label">当前模型</span>
-                        <span class="status-value" id="status-model">DeepSeek Chat</span>
-                    </div>
-                    <div class="status-row">
-                        <span class="status-label">Temperature</span>
-                        <span class="status-value" id="status-temp">1.2</span>
-                    </div>
-                    <div class="status-row">
-                        <span class="status-label">最大输出</span>
-                        <span class="status-value" id="status-tokens">8192 tokens</span>
-                    </div>
-                    <div class="status-hint">
-                        💡 Temperature 控制创造性（非思考深度）；R1 自带深度推理
-                    </div>
-                </div>
-
-                <!-- 记忆管理 -->
-                <div class="settings-section settings-memory">
-                    <label class="settings-label">记忆管理</label>
-                    <div class="memory-info">
-                        <span class="memory-count-label">映海记忆：</span>
-                        <span id="memory-count" class="memory-count-value">加载中…</span>
-                    </div>
-                    <div class="memory-actions">
-                        <button id="btn-export-memories" class="memory-btn memory-btn-export" title="导出所有记忆">
-                            📥 导出记忆
-                        </button>
-                        <button id="btn-clear-memories" class="memory-btn memory-btn-danger" title="清空所有记忆">
-                            🗑️ 清空记忆
-                        </button>
-                    </div>
-                    <div class="memory-hint">
-                        💡 导出的记忆为 JSON 文件，可留作纪念或备份
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="app.js"></script>
-</body>
-</html>
-```
-
-### frontend/app.js
-
-```javascript
-/**
- * ============================================
- * 映海 - 小汐聊天应用 v0.2.1
- * 前端交互逻辑 (Vanilla JS)
- *
- * 改进点：
- * - AbortController 超时控制
- * - 网络错误自动重试（指数退避）
- * - 健康检查自动恢复
- * - Markdown 渲染（marked.js）
- * - 流式输出中可取消
- * - GPS 定位 + sessionStorage 缓存
- * - 记忆管理（导出/清空）
- * ============================================
- */
-
-// === DOM 元素引用 ===
-const chatArea = document.getElementById('chat-area');
-const chatMessages = document.getElementById('chat-messages');
-const messageInput = document.getElementById('message-input');
-const sendBtn = document.getElementById('send-btn');
-const typingIndicator = document.getElementById('typing-indicator');
-const sessionIdEl = document.getElementById('session-id');
-
-// === 状态管理 ===
-let isStreaming = false;
-let currentAbortController = null; // 用于取消正在进行的流式请求
-let healthOk = false;              // 后端健康状态
-let healthCheckTimer = null;        // 健康检查定时器
-
-// === 配置 ===
-const CONFIG = {
-    STREAM_TIMEOUT_MS: 120_000,    // 流式请求超时：2 分钟
-    MAX_RETRIES: 2,                // 最大自动重试次数
-    RETRY_BASE_DELAY_MS: 1500,     // 重试基础延迟
-    HEALTH_CHECK_INTERVAL_MS: 15_000, // 健康检查间隔：15 秒
-    GPS_CACHE_MS: 30 * 60 * 1000,    // GPS 缓存有效期：30 分钟
-};
-
-// === GPS 定位 ===
-let currentGPS = null;  // { latitude, longitude, time }
-
-/**
- * 获取 GPS 坐标（带 sessionStorage 缓存，30 分钟有效）
- */
-function initGeolocation() {
-    if (!navigator.geolocation) {
-        console.warn('浏览器不支持 Geolocation');
-        return;
-    }
-
-    // 先检查缓存
-    const cached = _getGPSFromCache();
-    if (cached) {
-        currentGPS = cached;
-        console.log('GPS: 使用缓存坐标', cached);
-        return;
-    }
-
-    // 请求新坐标
-    navigator.geolocation.getCurrentPosition(
-        (pos) => {
-            currentGPS = {
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-                time: Date.now(),
-            };
-            // 存入 sessionStorage
-            try {
-                sessionStorage.setItem('xiaoxi_gps', JSON.stringify(currentGPS));
-            } catch (e) { /* ignore */ }
-            console.log('GPS: 获取新坐标', currentGPS);
-        },
-        (err) => {
-            console.warn('GPS 定位失败:', err.message);
-        },
-        {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 5 * 60 * 1000,
-        }
-    );
-}
-
-/**
- * 从 sessionStorage 读取未过期的 GPS 缓存
- */
-function _getGPSFromCache() {
-    try {
-        const raw = sessionStorage.getItem('xiaoxi_gps');
-        if (!raw) return null;
-        const data = JSON.parse(raw);
-        if (Date.now() - data.time > CONFIG.GPS_CACHE_MS) return null;
-        return data;
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * 获取当前 GPS 坐标（用于附加到请求中）
- */
-function getCurrentGPS() {
-    if (currentGPS && Date.now() - currentGPS.time > CONFIG.GPS_CACHE_MS) {
-        currentGPS = null;
-    }
-    return currentGPS;
-}
-
-// === 欢迎语 ===
-const WELCOME_MESSAGE = `你好呀～我是小汐 🐋
-
-欢迎来到映海——这片由人们的记忆和情感汇聚而成的海洋。
-
-无论你是想聊聊天、分享开心的事，还是心里有些烦恼想倾诉，小汐都在这里陪你哦。
-
-今天想跟小汐说些什么呢？ ✨`;
-
-// === Markdown 渲染配置 ===
-function setupMarkdown() {
-    if (typeof marked !== 'undefined') {
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            headerIds: false,
-            mangle: false,
-        });
-    }
-}
-
-function renderMarkdown(text) {
-    if (typeof marked !== 'undefined') {
-        try {
-            return marked.parse(text);
-        } catch (e) {}
-    }
-    return escapeHtml(text).replace(/\n/g, '<br>');
-}
-
-// === 初始化 ===
-document.addEventListener('DOMContentLoaded', () => {
-    setupMarkdown();
-    initSession();
-    initGeolocation();
-    setupInputHandlers();
-    showWelcomeMessage();
-    startHealthChecks();
-});
-
-function initSession() {
-    let sessionId = sessionStorage.getItem('xiaoxi_session_id');
-    if (!sessionId) {
-        sessionId = generateSessionId(8);
-        sessionStorage.setItem('xiaoxi_session_id', sessionId);
-    }
-    sessionIdEl.textContent = sessionId;
-}
-
-function generateSessionId(length) {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    const array = new Uint8Array(length);
-    crypto.getRandomValues(array);
-    for (let i = 0; i < length; i++) {
-        result += chars[array[i] % chars.length];
-    }
-    return result;
-}
-
-// === 健康检查（带自动恢复） ===
-
-function startHealthChecks() {
-    healthCheck();
-    healthCheckTimer = setInterval(healthCheck, CONFIG.HEALTH_CHECK_INTERVAL_MS);
-}
-
-async function healthCheck() {
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-        const response = await fetch('/api/health', { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-            if (!healthOk) {
-                healthOk = true;
-                removeSystemMessages();
-            }
-        } else {
-            throw new Error('health not ok');
-        }
-    } catch (error) {
-        if (!healthOk) return;
-        healthOk = false;
-        const existing = document.querySelector('.system-message.health-warning');
-        if (!existing) {
-            addSystemMessage('小汐还在睡觉... 稍后再来看看吧 💤', 'health-warning');
-        }
-    }
-}
-
-function removeSystemMessages() {
-    document.querySelectorAll('.system-message.health-warning').forEach(el => {
-        el.style.opacity = '0';
-        setTimeout(() => el.remove(), 300);
-    });
-}
-
-function showWelcomeMessage() {
-    addMessage(WELCOME_MESSAGE, 'xiaoxi', true);
-}
-
-// === 输入处理 ===
-
-function setupInputHandlers() {
-    sendBtn.addEventListener('click', handleSendClick);
-
-    messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSendClick();
-        }
-    });
-
-    messageInput.addEventListener('input', () => {
-        messageInput.style.height = 'auto';
-        messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
-    });
-
-    messageInput.focus();
-}
-
-function handleSendClick() {
-    if (isStreaming && currentAbortController) {
-        currentAbortController.abort();
-        return;
-    }
-    handleSend();
-}
-
-async function handleSend() {
-    if (isStreaming) return;
-
-    const text = messageInput.value.trim();
-    if (!text) return;
-
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
-
-    addMessage(text, 'user');
-    showTyping();
-    setStreaming(true);
-
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= CONFIG.MAX_RETRIES; attempt++) {
-        try {
-            if (attempt > 0) {
-                const delay = CONFIG.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-                await sleep(delay);
-                hideTyping();
-                showTyping();
-            }
-            await streamChat(text);
-            lastError = null;
-            break;
-        } catch (error) {
-            lastError = error;
-            const isAbort = error.name === 'AbortError';
-            if (isAbort) break;
-
-            console.warn(`发送失败 (第 ${attempt + 1} 次):`, error.message);
-            if (attempt < CONFIG.MAX_RETRIES) continue;
-        }
-    }
-
-    hideTyping();
-
-    if (lastError) {
-        const isAbort = lastError.name === 'AbortError';
-        if (isAbort) {
-            addSystemMessage('已取消发送');
-        } else {
-            const errMsg = lastError.message || String(lastError);
-            addMessage(
-                '哎呀，好像出了点问题... 再试一次吧？ 🥺\n\n（' + errMsg + '）',
-                'xiaoxi'
-            );
-        }
-    }
-
-    setStreaming(false);
-}
-
-async function streamChat(text) {
-    const sessionId = sessionStorage.getItem('xiaoxi_session_id');
-
-    currentAbortController = new AbortController();
-    const timeoutId = setTimeout(
-        () => currentAbortController.abort(),
-        CONFIG.STREAM_TIMEOUT_MS
-    );
-
-    let response;
-    try {
-        // 构建请求体（附带 GPS 坐标）
-        const body = {
-            message: text,
-            session_id: sessionId,
-        };
-        const gps = getCurrentGPS();
-        if (gps) {
-            body.latitude = gps.latitude;
-            body.longitude = gps.longitude;
-        }
-
-        response = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: currentAbortController.signal,
-        });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    hideTyping();
-
-    const { bubble } = addMessage('', 'xiaoxi');
-    let accumulatedText = '';
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith(':')) continue;
-
-                if (trimmed.startsWith('data: ')) {
-                    const data = trimmed.slice(6);
-
-                    if (data === '[DONE]') {
-                        finalizeMessage(bubble, accumulatedText);
-                        currentAbortController = null;
-                        return;
-                    }
-
-                    try {
-                        const parsed = JSON.parse(data);
-
-                        if (parsed.type === 'tool_start' || parsed.type === 'tool_end') {
-                            continue;
-                        }
-
-                        const content = parsed.content
-                            || parsed.delta
-                            || parsed.text
-                            || parsed.message
-                            || (typeof parsed === 'string' ? parsed : '');
-
-                        if (content) {
-                            accumulatedText += content;
-                            updateBubbleHtml(bubble, accumulatedText);
-                            scrollToBottom();
-                        }
-                    } catch (e) {
-                        if (data !== '[DONE]') {
-                            accumulatedText += data;
-                            updateBubbleHtml(bubble, accumulatedText);
-                            scrollToBottom();
-                        }
-                    }
-                }
-            }
-        }
-    } finally {
-        currentAbortController = null;
-    }
-
-    if (accumulatedText) {
-        finalizeMessage(bubble, accumulatedText);
-    }
-}
-
-// === DOM 操作 ===
-
-function addMessage(text, sender, isWelcome = false) {
-    const messageEl = document.createElement('div');
-    messageEl.className = `message ${sender}${isWelcome ? ' welcome' : ''}`;
-
-    const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-
-    if (sender === 'xiaoxi') {
-        messageEl.innerHTML = `
-            <div class="message-avatar">🐋</div>
-            <div class="message-content">
-                <div class="message-bubble">${renderMarkdown(text)}</div>
-                <div class="message-time">${timeStr}</div>
-            </div>
-        `;
-    } else {
-        messageEl.innerHTML = `
-            <div class="message-content">
-                <div class="message-bubble">${escapeHtml(text)}</div>
-                <div class="message-time">${timeStr}</div>
-            </div>
-        `;
-    }
-
-    chatMessages.appendChild(messageEl);
-    scrollToBottom();
-
-    const bubble = messageEl.querySelector('.message-bubble');
-    return { element: messageEl, bubble };
-}
-
-function updateBubbleHtml(bubble, text) {
-    bubble.innerHTML = renderMarkdown(text);
-}
-
-function finalizeMessage(bubble, text) {
-    if (text) {
-        bubble.innerHTML = renderMarkdown(text);
-    }
-    const messageEl = bubble.closest('.message');
-    if (messageEl) {
-        messageEl.classList.add('finalized');
-    }
-}
-
-function addSystemMessage(text, extraClass = '') {
-    const msgEl = document.createElement('div');
-    msgEl.className = 'system-message' + (extraClass ? ' ' + extraClass : '');
-    msgEl.textContent = text;
-    chatMessages.appendChild(msgEl);
-    scrollToBottom();
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function scrollToBottom() {
-    requestAnimationFrame(() => {
-        chatArea.scrollTop = chatArea.scrollHeight;
-    });
-}
-
-// === 打字指示器 ===
-
-function showTyping() {
-    typingIndicator.style.display = 'flex';
-    scrollToBottom();
-}
-
-function hideTyping() {
-    typingIndicator.style.display = 'none';
-}
-
-// === 流式状态控制 ===
-
-function setStreaming(streaming) {
-    isStreaming = streaming;
-    messageInput.disabled = streaming;
-
-    if (streaming) {
-        sendBtn.classList.add('streaming');
-        sendBtn.disabled = false;
-        sendBtn.title = '停止生成';
-    } else {
-        sendBtn.classList.remove('streaming');
-        sendBtn.disabled = false;
-        sendBtn.title = '发送消息';
-        messageInput.focus();
-    }
-}
-
-// === 工具函数 ===
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// === 控制台设置面板 ===
-
-const settingsBtn = document.getElementById('settings-btn');
-const settingsOverlay = document.getElementById('settings-overlay');
-const settingsClose = document.getElementById('settings-close');
-const modelCards = document.getElementById('model-cards');
-const statusModel = document.getElementById('status-model');
-const statusTemp = document.getElementById('status-temp');
-const statusTokens = document.getElementById('status-tokens');
-
-let currentConfig = {
-    model: 'deepseek-chat',
-    temperature: 1.2,
-    max_tokens: 8192,
-    thinking_intensity: 'max',
-    available_models: [],
-};
-
-settingsBtn.addEventListener('click', () => {
-    openSettings();
-});
-
-settingsClose.addEventListener('click', () => {
-    closeSettings();
-});
-
-settingsOverlay.addEventListener('click', (e) => {
-    if (e.target === settingsOverlay) {
-        closeSettings();
-    }
-});
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && settingsOverlay.classList.contains('visible')) {
-        closeSettings();
-    }
-});
-
-async function openSettings() {
-    settingsOverlay.classList.add('visible');
-    await loadConfig();
-    loadMemoryCount();
-}
-
-function closeSettings() {
-    settingsOverlay.classList.remove('visible');
-}
-
-async function loadConfig() {
-    try {
-        const res = await fetch('/api/config');
-        if (res.ok) {
-            currentConfig = await res.json();
-            renderSettings();
-        }
-    } catch (e) {
-        console.warn('加载配置失败:', e);
-    }
-}
-
-function renderSettings() {
-    const models = currentConfig.available_models || [];
-    modelCards.innerHTML = models.map(m => `
-        <div class="model-card ${m.id === currentConfig.model ? 'active' : ''}" data-model="${m.id}">
-            <div class="model-card-icon">${m.supports_thinking ? '🧠' : '💬'}</div>
-            <div class="model-card-info">
-                <div class="model-card-name">${m.name}</div>
-                <div class="model-card-desc">${m.description}</div>
-            </div>
-            <div class="model-card-check"></div>
-        </div>
-    `).join('');
-
-    modelCards.querySelectorAll('.model-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const modelId = card.dataset.model;
-            selectModel(modelId);
-        });
-    });
-
-    document.querySelectorAll('.thinking-option').forEach(btn => {
-        const intensity = btn.dataset.intensity;
-        btn.classList.toggle('active', intensity === currentConfig.thinking_intensity);
-        btn.onclick = () => selectThinkingIntensity(intensity);
-    });
-
-    const currentModel = models.find(m => m.id === currentConfig.model);
-    statusModel.textContent = currentModel ? currentModel.name : currentConfig.model;
-    statusTemp.textContent = currentConfig.temperature.toFixed(1);
-    statusTokens.textContent = currentConfig.max_tokens + ' tokens';
-}
-
-async function selectModel(modelId) {
-    if (modelId === currentConfig.model) return;
-
-    try {
-        const res = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: modelId }),
-        });
-        if (res.ok) {
-            currentConfig = await res.json();
-            renderSettings();
-            addSystemMessage(`已切换到 ${currentConfig.available_models.find(m => m.id === modelId)?.name || modelId}`);
-        }
-    } catch (e) {
-        console.warn('切换模型失败:', e);
-        addSystemMessage('切换模型失败，请稍后重试');
-    }
-}
-
-async function selectThinkingIntensity(intensity) {
-    if (intensity === currentConfig.thinking_intensity) return;
-
-    try {
-        const res = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ thinking_intensity: intensity }),
-        });
-        if (res.ok) {
-            currentConfig = await res.json();
-            renderSettings();
-            const labels = { low: '轻柔', medium: '适中', high: '深度', max: '全力' };
-            addSystemMessage(`思考强度已调整为「${labels[intensity] || intensity}」`);
-        }
-    } catch (e) {
-        console.warn('调整思考强度失败:', e);
-        addSystemMessage('调整失败，请稍后重试');
-    }
-}
-
-loadConfig();
-
-// === 记忆管理 ===
-
-const btnExportMemories = document.getElementById('btn-export-memories');
-const btnClearMemories = document.getElementById('btn-clear-memories');
-const memoryCountEl = document.getElementById('memory-count');
-
-btnExportMemories.addEventListener('click', exportMemories);
-btnClearMemories.addEventListener('click', clearMemories);
-
-async function loadMemoryCount() {
-    try {
-        const res = await fetch('/api/health');
-        if (res.ok) {
-            const data = await res.json();
-            const count = data.memory_count ?? 0;
-            memoryCountEl.textContent = count > 0 ? `${count} 条` : '空空如也';
-        }
-    } catch (e) {
-        memoryCountEl.textContent = '无法获取';
-    }
-}
-
-async function exportMemories() {
-    try {
-        btnExportMemories.disabled = true;
-        btnExportMemories.textContent = '导出中…';
-
-        const res = await fetch('/api/memories/export');
-        if (!res.ok) throw new Error('导出失败');
-
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `xiaoxi_memories_${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        addSystemMessage('记忆已导出 ✨');
-    } catch (e) {
-        console.warn('导出记忆失败:', e);
-        addSystemMessage('导出记忆失败了，请稍后重试');
-    } finally {
-        btnExportMemories.disabled = false;
-        btnExportMemories.textContent = '📥 导出记忆';
-    }
-}
-
-async function clearMemories() {
-    const confirmed = confirm('确定要清空小汐的所有记忆吗？\n\n这个操作不可撤销，映海里将变得空空的……');
-    if (!confirmed) return;
-
-    try {
-        btnClearMemories.disabled = true;
-        btnClearMemories.textContent = '清空中…';
-
-        const res = await fetch('/api/memories/clear', { method: 'POST' });
-        if (!res.ok) throw new Error('清空失败');
-
-        const data = await res.json();
-        memoryCountEl.textContent = '空空如也';
-        addSystemMessage(`已清空 ${data.cleared} 条记忆`);
-    } catch (e) {
-        console.warn('清空记忆失败:', e);
-        addSystemMessage('清空记忆失败了，请稍后重试');
-    } finally {
-        btnClearMemories.disabled = false;
-        btnClearMemories.textContent = '🗑️ 清空记忆';
-    }
-}
-
-loadMemoryCount();
-```
-
-### frontend/style.css
+### web/src/app/globals.css
 
 ```css
-/* ============================================
-   映海 - 小汐聊天应用样式
-   主题：深海夜色，温暖而魔幻
-   ============================================ */
-
-/* === 基础重置 === */
-*, *::before, *::after {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+@import "tailwindcss";
 
 :root {
-    /* 色彩系统 */
-    --bg-deep: #0a1628;
-    --bg-mid: #0f1f3a;
-    --bg-surface: #1a2a4a;
-    --glass-bg: rgba(15, 31, 58, 0.65);
-    --glass-border: rgba(100, 160, 220, 0.15);
-    --glass-glow: rgba(74, 140, 202, 0.25);
+  --color-warm-paper: #FCFAF8;
+  --color-ink-tea: #5C544D;
+  --glass-bg: rgba(252, 250, 248, 0.45);
+}
+```
 
-    --user-bubble: #4a8cca;
-    --user-bubble-hover: #5a9cd8;
-    --xiaoxi-bubble: rgba(20, 60, 80, 0.7);
-    --xiaoxi-bubble-border: rgba(60, 140, 170, 0.25);
+### web/src/app/layout.tsx
 
-    --text-primary: #e8f0f8;
-    --text-secondary: #8aa4c0;
-    --text-muted: #5a7a9a;
-    --accent: #6ab8e8;
-    --accent-warm: #e8a86a;
+```tsx
+import type { Metadata } from "next";
+import "./globals.css";
 
-    /* 间距 */
-    --spacing-xs: 4px;
-    --spacing-sm: 8px;
-    --spacing-md: 16px;
-    --spacing-lg: 24px;
-    --spacing-xl: 32px;
+export const metadata: Metadata = {
+  title: "映海 - 小汐在这里陪你",
+  description: "希望你一个人在香港的时候，也不会觉得孤单。",
+};
 
-    /* 圆角 */
-    --radius-sm: 8px;
-    --radius-md: 14px;
-    --radius-lg: 20px;
-    --radius-full: 50%;
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="zh-CN">
+      <body className="antialiased">{children}</body>
+    </html>
+  );
+}
+```
 
-    /* 动画 */
-    --transition-fast: 0.2s ease;
-    --transition-normal: 0.35s ease;
-    --transition-slow: 0.6s ease;
+### web/src/app/page.tsx
+
+```tsx
+export default function Home() {
+  return (
+    <div className="relative w-full h-[100dvh] overflow-hidden bg-black max-w-[430px] mx-auto">
+      {/* Z-0: 窗外风景 */}
+      <div
+        id="layer-scenery"
+        className="absolute inset-0 z-0"
+      />
+
+      {/* Z-10: 房间框架图 */}
+      <div
+        id="layer-room"
+        className="absolute inset-0 z-10 pointer-events-none"
+      />
+
+      {/* Z-20: 小汐动作图 */}
+      <div
+        id="layer-character"
+        className="absolute bottom-[20%] left-1/2 -translate-x-1/2 z-20"
+      />
+    </div>
+  );
+}
+```
+
+### web/src/hooks/useXiaoxiChat.ts
+
+```typescript
+"use client";
+
+import { useCallback, useRef, useState } from "react";
+
+/* ------------------------------------------------------------------ */
+/*  类型                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
 }
 
-/* ... 基础样式（气泡、海洋背景动画、头部、聊天区域、
-   输入区域、打字指示器、滚动条、响应式设计、
-   设置面板、模型卡片、思考强度选项、状态信息、
-   Markdown 渲染样式）与之前版本一致，省略 ... */
-
-/* === 记忆管理区域 === */
-.settings-memory {
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--glass-border);
+interface SseToolStart {
+  type: "tool_start";
+  name: string;
+  input: unknown;
 }
 
-.memory-info {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: var(--spacing-sm);
+interface SseToolEnd {
+  type: "tool_end";
+  name: string;
+  output: string;
 }
 
-.memory-count-label {
-    font-size: 0.82rem;
-    color: var(--text-secondary);
+interface SseContentChunk {
+  content: string;
 }
 
-.memory-count-value {
-    font-size: 0.82rem;
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-    color: var(--accent);
-}
+type SseEvent = SseContentChunk | SseToolStart | SseToolEnd;
 
-.memory-actions {
-    display: flex;
-    gap: var(--spacing-sm);
-}
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-.memory-btn {
-    flex: 1;
-    padding: 8px 12px;
-    border: 1px solid rgba(106, 184, 232, 0.15);
-    border-radius: var(--radius-md);
-    background: rgba(10, 22, 40, 0.5);
-    color: var(--text-secondary);
-    font-family: inherit;
-    font-size: 0.82rem;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-}
+/* ------------------------------------------------------------------ */
+/*  Hook                                                               */
+/* ------------------------------------------------------------------ */
 
-.memory-btn:hover:not(:disabled) {
-    background: rgba(106, 184, 232, 0.1);
-    border-color: rgba(106, 184, 232, 0.3);
-    color: var(--text-primary);
-}
+export function useXiaoxiChat() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const sessionIdRef = useRef("");
+  const abortRef = useRef<AbortController | null>(null);
 
-.memory-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
+  /* 发送消息并流式接收 */
+  const sendMessage = useCallback(async (message: string, sessionId?: string) => {
+    const text = message.trim();
+    if (!text || isStreaming) return;
 
-.memory-btn-danger {
-    border-color: rgba(200, 80, 80, 0.2);
-}
+    if (sessionId) sessionIdRef.current = sessionId;
 
-.memory-btn-danger:hover:not(:disabled) {
-    background: rgba(200, 80, 80, 0.12);
-    border-color: rgba(200, 80, 80, 0.4);
-    color: #e8a0a0;
-}
+    // 1. 追加用户消息
+    const userMsg: ChatMessage = { role: "user", content: text };
+    setMessages((prev) => [...prev, userMsg]);
 
-.memory-hint {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    margin-top: var(--spacing-sm);
-    padding: 8px 10px;
-    background: rgba(106, 184, 232, 0.06);
-    border-radius: var(--radius-sm);
-    border: 1px solid rgba(106, 184, 232, 0.08);
-    line-height: 1.5;
+    // 2. 追加 AI 占位消息
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    setIsStreaming(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const response = await fetch(`${API_BASE}/api/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          session_id: sessionIdRef.current,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(errorText || `HTTP ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error("浏览器不支持 ReadableStream");
+      }
+
+      // 3. 读取 SSE 流
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+
+          const payload = line.slice(6).trim();
+
+          if (payload === "[DONE]") {
+            setIsStreaming(false);
+            return;
+          }
+
+          let event: SseEvent;
+          try {
+            event = JSON.parse(payload) as SseEvent;
+          } catch {
+            continue;
+          }
+
+          // 屏蔽工具事件
+          if ("type" in event && (event.type === "tool_start" || event.type === "tool_end")) {
+            continue;
+          }
+
+          const chunk = (event as SseContentChunk).content;
+          if (chunk) {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last && last.role === "assistant") {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: last.content + chunk,
+                };
+              }
+              return updated;
+            });
+          }
+        }
+      }
+
+      setIsStreaming(false);
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setIsStreaming(false);
+        return;
+      }
+
+      const errorMessage =
+        err instanceof Error ? err.message : "未知错误";
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last && last.role === "assistant") {
+          updated[updated.length - 1] = {
+            ...last,
+            content:
+              last.content +
+              (last.content ? "\n\n" : "") +
+              `（连接中断：${errorMessage}）`,
+          };
+        }
+        return updated;
+      });
+      setIsStreaming(false);
+    }
+  }, [isStreaming]);
+
+  /* 中止流 */
+  const abort = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+  }, []);
+
+  /* 清空消息 */
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+  }, []);
+
+  return {
+    messages,
+    isStreaming,
+    sendMessage,
+    abort,
+    clearMessages,
+  } as const;
 }
 ```
 
@@ -3402,4 +2646,23 @@ data: [DONE]
 
 ---
 
-*文档更新时间：2026-07-20 · v0.3.0*
+## 变更日志（v0.3.0 → Next.js 迁移）
+
+### 新增
+- **前端迁移至 Next.js 15** — `web/` 目录，App Router + TypeScript + Tailwind CSS，替代旧 `frontend/`
+- **三层 Z 轴布局骨架** — `page.tsx`：`layer-scenery`（Z-0）、`layer-room`（Z-10）、`layer-character`（Z-20）
+- **CSS 变量系统** — `--color-warm-paper`、`--color-ink-tea`、`--glass-bg`
+- **流式聊天 Hook** — `web/src/hooks/useXiaoxiChat.ts`：`fetch` + `ReadableStream` + `AbortController`，屏蔽 `tool_start`/`tool_end` 事件，安全 JSON 解析
+- **心跳调度器** — `backend/heartbeat.py`：APScheduler `AsyncIOScheduler`，每 2 小时触发占位检查
+- **lifespan 增强** — `server.py` 启动时 `scheduler.start()`，关闭时 `scheduler.shutdown(wait=False)`
+
+### 变更
+- `requirements.txt` 新增 `apscheduler`
+- `PROJECT_SOURCE.md` 同步更新项目结构、技术栈、源码文档
+
+### 移除
+- `frontend/` 目录（`index.html`、`app.js`、`style.css`、`manifest.json`）——已删除
+
+---
+
+*文档更新时间：2026-07-20 · v0.3.0 + Next.js 迁移*

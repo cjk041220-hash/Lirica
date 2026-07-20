@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+:root {
+  --color-warm-paper: #FCFAF8;
+  --color-ink-tea: #5C544D;
+  --glass-bg: rgba(252, 250, 248, 0.45);
+}
