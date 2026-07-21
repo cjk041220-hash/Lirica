@@ -11,7 +11,7 @@ if errorlevel 1 (
 
 echo.
 echo    ========================================
-echo      xiaoxi v0.2.1
+echo      xiaoxi v0.4.1
 echo    ========================================
 echo.
 
@@ -46,7 +46,9 @@ if not exist "config\.env" (
 
 REM --- Free port 8000 ---
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000 "') do (
-    echo    [...] Port 8000 in use by PID %%a, releasing...
+    echo    [WARN] Port 8000 in use by PID %%a
+    echo    [WARN] Please close the other process, or press any key to force kill
+    pause
     taskkill /PID %%a /F >nul 2>&1
     timeout /t 2 /nobreak >nul
 )

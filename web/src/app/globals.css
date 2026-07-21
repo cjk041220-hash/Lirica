@@ -1,7 +1,17 @@
 @import "tailwindcss";
 
+@theme {
+  --color-warm-paper: #FCFAF8;
+  --color-ink-tea: #5C544D;
+  --color-healing-aqua: #88B5B5;
+  --color-glass-bg: rgba(252, 250, 248, 0.45);
+  --color-glass-border: rgba(255, 255, 255, 0.3);
+}
+
 :root {
   --color-warm-paper: #FCFAF8;
   --color-ink-tea: #5C544D;
+  --color-healing-aqua: #88B5B5;
   --glass-bg: rgba(252, 250, 248, 0.45);
+  --glass-border: rgba(255, 255, 255, 0.3);
 }

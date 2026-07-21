@@ -8,10 +8,13 @@ from pathlib import Path
 import yaml
 from langchain_core.tools import tool
 
-# 加载 78 张韦特塔罗牌数据
+# 加载 78 张韦特塔罗牌数据（失败时降级为空牌组，不影响其他工具加载）
 _DECK_PATH = Path(__file__).resolve().parent / "tarot_deck.yaml"
-with open(_DECK_PATH, encoding="utf-8") as _f:
-    TAROT_DECK: list[dict] = yaml.safe_load(_f)["cards"]
+try:
+    with open(_DECK_PATH, encoding="utf-8") as _f:
+        TAROT_DECK: list[dict] = yaml.safe_load(_f)["cards"]
+except Exception:
+    TAROT_DECK: list[dict] = []
 
 # 牌阵定义
 _SPREADS = {
@@ -34,7 +37,7 @@ _SPREADS = {
 
 
 @tool
-def tarot(question: str = "", spread_type: str = "three") -> str:
+async def tarot(question: str = "", spread_type: str = "three") -> str:
     """韦特塔罗牌占卜（RWS），仅供娱乐参考。
 
     当冷冷想算一算、问一问、或者心情不好的时候，小汐会去映海里看看。
@@ -43,6 +46,9 @@ def tarot(question: str = "", spread_type: str = "three") -> str:
         question: 占卜的问题
         spread_type: 牌阵类型，可选 single（单牌）、three（三牌）、celtic（凯尔特十字）
     """
+    if not TAROT_DECK:
+        return "小汐的塔罗牌组还没有准备好……映海里的牌被浪花卷走了，等它们漂回来再试试吧~"
+
     if not question:
         return "小汐不知道要问什么呀……告诉小汐你想问的事情，小汐去映海里帮你看看~"
 

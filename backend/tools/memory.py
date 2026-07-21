@@ -1,5 +1,11 @@
-"""小汐的记忆工具 — 通过 MemoryManager 读写。"""
-import json
+"""小汐的记忆工具 — 通过 MemoryManager 读写。
+
+v2 重构：
+- remember: 存储前检测同类别旧记忆，引导 LLM 处理矛盾
+- update_memory: 新增工具，用于覆盖矛盾旧记忆
+- recall: 使用相关性评分排序（由 manager 层实现）
+- 所有工具适配新 schema 字段名
+"""
 from langchain_core.tools import tool
 from memory.manager import MemoryManager
 
@@ -14,9 +20,12 @@ def set_memory_manager(mgr: MemoryManager):
 
 
 @tool
-def remember(category: str, content: str) -> str:
+async def remember(category: str, content: str) -> str:
     """让小汐记住一件事。冷冷说了关于自己的重要信息时主动调用。
-    自动去重：同样的内容不会重复记录。
+
+    如果同类别下已有记忆，会展示给你看。如果发现矛盾（比如以前说爱吃火锅，现在说不爱了），
+    请调用 update_memory(id, new_content) 覆盖旧记忆。
+    如果不矛盾，再次调用 remember 确认存储即可。
 
     Args:
         category: 记忆类别，如「冷冷喜欢的」「去过的地方」「重要的事」
@@ -25,15 +34,59 @@ def remember(category: str, content: str) -> str:
     try:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
-        _memory_manager.add(category, content)
+
+        # 查询同类别现有记忆（用于矛盾检测）
+        existing = await _memory_manager.recall_by_category(category, limit=5)
+
+        if existing:
+            # 展示现有记忆，引导 LLM 决定新增还是覆盖
+            lines = [f"小汐在映海的「{category}」里已经记住了这些：\n"]
+            for m in existing:
+                lines.append(f"  📌 [{m['id']}] {m['content']}")
+            lines.append(f"\n新记忆：{content}")
+            lines.append("")
+            lines.append(
+                "如果新记忆和旧记忆矛盾（比如偏好变了），"
+                "请调用 update_memory(memory_id, new_content) 覆盖旧的那条。"
+            )
+            lines.append(
+                "如果不矛盾，请再次调用 remember(category, content) 确认存储。"
+            )
+            return "\n".join(lines)
+
+        # 无冲突，直接存储
+        await _memory_manager.add(category, content)
         return f"✨ 小汐帮你收好啦！放在映海的「{category}」里。"
+
     except Exception as e:
         return f"呜，小汐没接住这段记忆……（{str(e)[:100]}）"
 
 
 @tool
-def recall(category: str = "") -> str:
+async def update_memory(memory_id: str, new_content: str) -> str:
+    """覆盖一条旧记忆的内容。当冷冷说了和之前矛盾的信息时使用。
+
+    比如之前记住「爱吃火锅」，现在冷冷说不爱吃了，就用这个工具更新。
+
+    Args:
+        memory_id: 要更新的记忆 ID（从 remember 或 recall 返回的 ID）
+        new_content: 新的记忆内容
+    """
+    try:
+        if _memory_manager is None:
+            return "小汐的记忆盒子还没有打开……"
+        if await _memory_manager.update_content(memory_id, new_content):
+            return f"✨ 小汐已经把旧记忆更新成新的啦！"
+        return "小汐翻了翻，没有找到这段记忆呢……ID 是不是写错了？"
+    except Exception as e:
+        return f"呜，小汐更新记忆的时候手滑了……（{str(e)[:100]}）"
+
+
+@tool
+async def recall(category: str = "") -> str:
     """让小汐回忆之前记住的事情。冷冷问"我之前……"或聊天中提到过去的事时主动调用。
+
+    按相关性排序：越近、越常被回忆的记忆排在前面。
 
     Args:
         category: 按类别筛选记忆，不传则返回全部
@@ -42,7 +95,7 @@ def recall(category: str = "") -> str:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
 
-        mems = _memory_manager.recall(category)
+        mems = await _memory_manager.recall(category)
         if category:
             if not mems:
                 return f"小汐在映海里翻了翻，没有找到关于「{category}」的记忆……"
@@ -54,7 +107,7 @@ def recall(category: str = "") -> str:
 
         result = header
         for m in mems[-10:]:
-            result += f"📌 **{m.get('category', '')}** ({m.get('time', '')})\n"
+            result += f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** ({m.get('created_at', '')})\n"
             result += f"   {m.get('content', '')}\n\n"
 
         return result
@@ -63,13 +116,13 @@ def recall(category: str = "") -> str:
 
 
 @tool
-def list_memories() -> str:
+async def list_memories() -> str:
     """列出小汐记住的所有记忆类别和数量。冷冷想看记忆总览时调用。"""
     try:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
 
-        cats = _memory_manager.list_categories()
+        cats = await _memory_manager.list_categories()
         if not cats:
             return "小汐的映海里还什么都没有……"
 
@@ -84,7 +137,7 @@ def list_memories() -> str:
 
 
 @tool
-def delete_memory(memory_id: str) -> str:
+async def delete_memory(memory_id: str) -> str:
     """删除一条指定的记忆。冷冷说「忘掉这个」「不要记这个」时调用。
 
     Args:
@@ -93,7 +146,7 @@ def delete_memory(memory_id: str) -> str:
     try:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
-        if _memory_manager.delete(memory_id):
+        if await _memory_manager.delete(memory_id):
             return "✨ 小汐已经把这段记忆放回海里了~"
         return "小汐翻了翻，没有找到这段记忆呢……"
     except Exception as e:
@@ -101,12 +154,12 @@ def delete_memory(memory_id: str) -> str:
 
 
 @tool
-def export_memories() -> str:
+async def export_memories() -> str:
     """导出冷冷所有记忆的摘要。冷冷想看自己全部记忆时调用。"""
     try:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
-        mems = _memory_manager.all()
+        mems = await _memory_manager.all()
         if not mems:
             return "映海里还空空的，没有记忆可以导出呢。"
 
@@ -114,7 +167,7 @@ def export_memories() -> str:
         for m in mems:
             lines.append(
                 f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** "
-                f"({m.get('time', '')})\n   {m.get('content', '')}"
+                f"({m.get('created_at', '')})\n   {m.get('content', '')}"
             )
         lines.append("\n💡 冷冷可以通过控制台删除不想要的记忆哦~")
         return "\n".join(lines)

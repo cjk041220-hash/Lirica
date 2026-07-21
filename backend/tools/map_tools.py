@@ -3,16 +3,33 @@ import httpx
 from langchain_core.tools import tool
 from config.settings import get_settings
 from memory import location_store
+from utils.retry import with_retry
+
+# 共享 HTTP 客户端（由 server.py lifespan 注入）
+_shared_client: httpx.AsyncClient | None = None
 
 
+def set_http_client(client: httpx.AsyncClient):
+    """注入共享 HTTP 客户端（在 lifespan 中调用）。"""
+    global _shared_client
+    _shared_client = client
+
+
+@with_retry(max_attempts=2, base_delay=0.5)
 async def _amap_request(endpoint: str, params: dict) -> dict:
-    """发起高德地图 API 请求。"""
+    """发起高德地图 API 请求（带重试）。优先使用共享客户端，回退到临时客户端。"""
     s = get_settings()
     params["key"] = s.amap_api_key
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"https://restapi.amap.com{endpoint}", params=params)
+
+    if _shared_client is not None:
+        resp = await _shared_client.get(f"https://restapi.amap.com{endpoint}", params=params)
         resp.raise_for_status()
         return resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"https://restapi.amap.com{endpoint}", params=params)
+            resp.raise_for_status()
+            return resp.json()
 
 
 @tool
@@ -28,7 +45,7 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
     try:
         # 如果没有传 location，尝试从会话缓存中获取 GPS 坐标
         if not location:
-            cached = location_store.get_any()
+            cached = await location_store.get_any()
             if cached:
                 lat, lon = cached
                 location = f"{lon},{lat}"

@@ -10,14 +10,30 @@ venv/
 config/.env
 backend/config/.env
 
-# 数据文件（用户数据 + checkpoint DB）
-backend/data/*.yaml
-backend/data/*.db
-backend/data/*.db-shm
-backend/data/*.db-wal
+# 数据文件（用户数据 + checkpoint DB + 备份）
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# 测试产物
+backend/test_output.txt
+backend/.pytest_cache/
 
 # Claude Code
 .claude/
+
+# 临时研究文件
+base.py
+prompts.py
+scoring.py
+storage.py
+mem0-research-report.md
+
+# Next.js
+web/.next/
+web/node_modules/
+web/out/
 
 # IDE
 .idea/
@@ -28,3 +44,4 @@ backend/data/*.db-wal
 # OS
 .DS_Store
 Thumbs.db
+main.py

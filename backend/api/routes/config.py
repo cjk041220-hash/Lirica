@@ -1,21 +1,20 @@
 """配置路由 — /api/config。
 
 提供前端控制台：模型选择、思考强度调节。
-
-参数真相：
-- DeepSeek API 没有 "reasoning_effort" 或 "thinking_budget" 参数
-- temperature 控制输出随机性（创造性），不是思考深度
-- max_tokens 控制最大输出长度，V3/R1 上限都是 8192
-- R1 的思维链是模型内置能力，不受外部参数控制
-- 上下文窗口：V3 = 64K tokens, R1 = 128K tokens
 """
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from providers.deepseek import get_available_models, create_deepseek_llm
-from agent.graph import build_agent
+from agent.graph import build_agent, make_pre_model_hook
+from agent.soul import build_system_prompt
 
 router = APIRouter()
+
+# Agent 重建锁，防止并发 config 变更与 chat 请求之间的竞态
+_agent_lock = asyncio.Lock()
 
 
 # ── 运行时配置（内存中保存，重启后重置为默认值） ──────────────
@@ -25,13 +24,12 @@ _runtime_config = {
     "temperature": 0.7,
     "max_tokens": 8192,
     "thinking_intensity": "max",
-    "reasoning_effort": 0.5,  # low / medium / high / max
 }
 
 # 思考强度 → temperature 映射
 # 诚实地说：这控制的是创造性/随机性，不是真正的"思考深度"
-# 但对于 V3 来说，高 temperature 确实让回答更发散、更有想象力
-# R1 的深度推理是内置的，跟 temperature 无关
+# 对于 V4 Flash/Pro 来说，高 temperature 让回答更发散、更有想象力
+# V4 Pro 支持深度推理模式，但推理深度由模型内部控制，与 temperature 无关
 _THINKING_PRESETS = {
     "low":    {"temperature": 0.3, "max_tokens": 4096,  "label": "轻柔"},
     "medium": {"temperature": 0.7, "max_tokens": 8192,  "label": "适中"},
@@ -69,25 +67,34 @@ def get_current_model() -> str:
 
 
 async def rebuild_agent(request: Request):
-    """用当前配置重建 LLM 和 Agent。"""
-    temperature = get_current_temperature()
-    max_tokens = get_current_max_tokens()
-    model = get_current_model()
-    reasoning_effort = _runtime_config.get("reasoning_effort")
+    """用当前配置重建 LLM 和 Agent（同时刷新生命状态注入的 system_prompt）。
 
-    new_llm = create_deepseek_llm(
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        reasoning_effort=reasoning_effort,
-    )
+    使用 asyncio.Lock 防止与并发 chat 请求之间的竞态条件。
+    """
+    async with _agent_lock:
+        temperature = get_current_temperature()
+        max_tokens = get_current_max_tokens()
+        model = get_current_model()
 
-    tools = request.app.state.tools
-    system_prompt = request.app.state.system_prompt
-    checkpointer = request.app.state.checkpointer
+        new_llm = create_deepseek_llm(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
-    new_agent = build_agent(new_llm, tools, system_prompt, checkpointer)
-    request.app.state.agent = new_agent
+        tools = request.app.state.tools
+        checkpointer = request.app.state.checkpointer
+
+        # 刷新 system_prompt（注入最新生命状态）
+        system_prompt = await build_system_prompt()
+        request.app.state.system_prompt = system_prompt
+
+        # 创建 pre_model_hook（记忆注入）
+        narrative_builder = getattr(request.app.state, "narrative_builder", None)
+        pre_model_hook = make_pre_model_hook(narrative_builder)
+
+        new_agent = build_agent(new_llm, tools, system_prompt, checkpointer, pre_model_hook)
+        request.app.state.agent = new_agent
 
 
 # ── 请求/响应模型 ──────────────────────────────────────────
@@ -97,7 +104,6 @@ class ConfigResponse(BaseModel):
     temperature: float
     max_tokens: int
     thinking_intensity: str
-    reasoning_effort: float | None = None
     available_models: list[dict]
 
 
@@ -106,7 +112,6 @@ class UpdateConfigRequest(BaseModel):
     temperature: float | None = Field(None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(None, ge=256, le=8192)
     thinking_intensity: str | None = None  # low / medium / high / max
-    reasoning_effort: float | None = Field(None, ge=0.0, le=1.0)
 
 
 # ── 端点 ────────────────────────────────────────────────────
@@ -120,7 +125,6 @@ async def get_config():
         temperature=cfg["temperature"],
         max_tokens=cfg["max_tokens"],
         thinking_intensity=cfg["thinking_intensity"],
-        reasoning_effort=cfg.get("reasoning_effort"),
         available_models=get_available_models(),
     )
 
@@ -148,9 +152,6 @@ async def update_config(req: UpdateConfigRequest, request: Request):
         _runtime_config["temperature"] = req.temperature
         _runtime_config["thinking_intensity"] = "custom"
 
-    if req.reasoning_effort is not None:
-        _runtime_config["reasoning_effort"] = req.reasoning_effort
-
     if req.max_tokens is not None:
         _runtime_config["max_tokens"] = req.max_tokens
 
@@ -163,6 +164,5 @@ async def update_config(req: UpdateConfigRequest, request: Request):
         temperature=cfg["temperature"],
         max_tokens=cfg["max_tokens"],
         thinking_intensity=cfg["thinking_intensity"],
-        reasoning_effort=cfg.get("reasoning_effort"),
         available_models=get_available_models(),
     )

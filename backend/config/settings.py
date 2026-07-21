@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # DeepSeek
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-v4-flash"
 
     # 高德地图
     amap_api_key: str = ""
@@ -19,8 +19,16 @@ class Settings(BaseSettings):
     # Tavily 网络搜索
     tavily_api_key: str = ""
 
-    # 高德天气（如果未来使用高德天气 API）
-    amap_weather_key: str = ""
+    # API 认证 Token（留空则不启用认证；部署到公网时务必设置）
+    xiaoxi_api_token: str = ""
+
+    # Web Push (VAPID 密钥，用于向 PWA 客户端推送通知)
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_claim_mailto: str = "mailto:xiaoxi@yinghai.local"
+
+    # CORS 允许的前端来源（逗号分隔，开发默认 localhost:3000）
+    cors_origins: str = "http://localhost:3000"
 
     model_config = {
         "env_file": str(_CONFIG_DIR / ".env"),

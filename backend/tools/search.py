@@ -1,23 +1,30 @@
 """网络搜索工具 — Tavily。"""
 from langchain_core.tools import tool
 from config.settings import get_settings
+from utils.retry import with_retry
+
+
+@with_retry(max_attempts=2, base_delay=1.0)
+async def _tavily_search(client, query: str) -> dict:
+    """带重试的 Tavily 搜索调用。"""
+    return await client.search(query, search_depth="basic", max_results=5)
 
 
 @tool
-def web_search(query: str) -> str:
+async def web_search(query: str) -> str:
     """在网络上搜索资讯。小汐会去映海里帮冷冷找人类世界的信息。
 
     Args:
         query: 搜索关键词，如「香港近期活动」
     """
     try:
-        from tavily import TavilyClient
+        from tavily import AsyncTavilyClient
 
         s = get_settings()
         if not s.tavily_api_key:
             return "小汐的映海搜索功能还没有开启……冷冷需要先配置 TAVILY_API_KEY 哦。"
-        client = TavilyClient(api_key=s.tavily_api_key)
-        result = client.search(query, search_depth="basic", max_results=5)
+        client = AsyncTavilyClient(api_key=s.tavily_api_key)
+        result = await _tavily_search(client, query)
 
         if not result.get("results"):
             return "小汐去海里找了一圈，但是没有找到相关的信息……"

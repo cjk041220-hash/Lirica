@@ -1,7 +1,7 @@
 """天气查询工具 — Open-Meteo 免费 API。"""
 import httpx
 from langchain_core.tools import tool
-from memory import location_store
+from utils.retry import with_retry
 
 # 城市坐标映射（覆盖更多港澳台及大陆城市）
 _CITY_COORDS = {
@@ -51,15 +51,37 @@ _RAIN_CODES = {51, 53, 55, 61, 63, 65, 80, 81, 82}
 _STORM_CODES = {95, 96, 99}
 
 
-async def _resolve_coords(city: str) -> tuple[float, float, str]:
-    """解析城市名到坐标。优先查本地字典，回退到高德地理编码。"""
-    lat, lon = _CITY_COORDS.get(city, _CITY_COORDS.get(city.lower(), (0, 0)))
-    if lat:
-        return lat, lon, city
+@with_retry(max_attempts=3, base_delay=1.0)
+async def _fetch_open_meteo(client: httpx.AsyncClient, lat: float, lon: float) -> dict:
+    """带重试的 Open-Meteo API 调用（仅对网络瞬时错误重试）。"""
+    resp = await client.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": lat, "longitude": lon,
+            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            "timezone": "Asia/Hong_Kong",
+            "forecast_days": 2,
+        },
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
+    """解析城市名到坐标。优先查本地字典，回退到高德地理编码。
+
+    Returns:
+        (lat, lon, display_name) — lat/lon 为 None 表示解析失败。
+    """
+    coords = _CITY_COORDS.get(city) or _CITY_COORDS.get(city.lower())
+    if coords is not None:
+        return coords[0], coords[1], city
 
     # 回退：通过高德地理编码 API 获取坐标
     try:
         from config.settings import get_settings
+        from utils.logger import get_logger
         s = get_settings()
         if s.amap_api_key:
             async with httpx.AsyncClient(timeout=8) as client:
@@ -75,11 +97,12 @@ async def _resolve_coords(city: str) -> tuple[float, float, str]:
                     if "," in location:
                         lon_s, lat_s = location.split(",")
                         return float(lat_s), float(lon_s), resolved_name
-    except Exception:
-        pass
+    except Exception as e:
+        from utils.logger import get_logger
+        get_logger(__name__).warning("高德地理编码失败（%s）：%s", city, e)
 
-    # 最终回退：香港
-    return 22.30, 114.17, city
+    # 最终回退：无法定位，返回 None
+    return None, None, city
 
 
 @tool
@@ -103,18 +126,15 @@ async def get_weather(
         else:
             lat, lon, display_city = await _resolve_coords(city)
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": lat, "longitude": lon,
-                    "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
-                    "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-                    "timezone": "Asia/Hong_Kong",
-                    "forecast_days": 2,
-                },
+        # 地理编码失败（不在本地字典且高德 API 不可用）
+        if lat is None or lon is None:
+            return (
+                f"小汐在映海里找了找，没有找到「{city}」的位置……\n"
+                f"冷冷可以试试输入更具体的城市名，比如「香港」「北京」「上海」~"
             )
-            data = resp.json()
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            data = await _fetch_open_meteo(client, lat, lon)
 
         current = data.get("current", {})
         daily = data.get("daily", {})
@@ -150,5 +170,21 @@ async def get_weather(
                     result += f"（降水概率 {rp[1]}%）"
 
         return result
-    except Exception as e:
-        return f"呜，小汐去查天气的时候被浪花卷了一下……等浪退了再试试？"
+
+    except httpx.TimeoutException:
+        return (
+            f"呜，天气服务响应太慢了，小汐等了好久都没等到……\n"
+            f"冷冷稍等一下再问小汐好不好？"
+        )
+    except httpx.HTTPStatusError as e:
+        return (
+            f"天气服务暂时出了点问题（状态码 {e.response.status_code}），"
+            f"小汐再去映海里看看，冷冷等一下再试试~"
+        )
+    except (KeyError, ValueError, TypeError):
+        return (
+            f"小汐拿到了天气数据但是看不懂……映海里的信号好像有点乱，"
+            f"冷冷过一会儿再问问小汐吧~"
+        )
+    except Exception:
+        return f"呜，小汐去查「{city}」天气的时候被浪花卷了一下……等浪退了再试试？"

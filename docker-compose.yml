@@ -1,0 +1,20 @@
+services:
+  xiaoxi:
+    build: .
+    container_name: xiaoxi
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - backend/config/.env
+    volumes:
+      - xiaoxi-data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  xiaoxi-data:
