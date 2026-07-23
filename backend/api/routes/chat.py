@@ -28,6 +28,30 @@ router = APIRouter()
 _MAX_MESSAGE_LENGTH = 2000
 _SESSION_ID_RE = re.compile(r'^[a-z0-9-]{1,64}$')
 
+# ReAct 工具循环深度上限。120 过高：工具失败重试 + LLM 自决策
+# 容易放大成烧钱的长调用链；真实场景（查路线+查天气+记记忆）
+# 极少超过 15 步。25 留有余量，异常路径由 LLM 自行降级收尾。
+_RECURSION_LIMIT = 25
+
+
+# ── 会话级并发互斥 ─────────────────────────────────────────
+# 同一 session 的两条流并发执行会让 checkpointer 交错写入。
+# 单用户场景下「串行化等待」比「拒绝 409」体验更好（连点发送
+# 只是排队，不会报错）。锁表定期清理未持锁条目防止内存膨胀。
+
+_session_locks: dict[str, asyncio.Lock] = {}
+
+
+def _session_lock(sid: str) -> asyncio.Lock:
+    """获取/创建 session 级锁（懒清理，单用户下开销可忽略）。"""
+    if len(_session_locks) > 512:
+        for key in [k for k, v in _session_locks.items() if not v.locked()]:
+            _session_locks.pop(key, None)
+    lock = _session_locks.get(sid)
+    if lock is None:
+        lock = _session_locks[sid] = asyncio.Lock()
+    return lock
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -104,7 +128,7 @@ async def _build_input_with_location(user_message: str, req: ChatRequest, sid: s
 def _build_config(session_id: str) -> dict:
     return {
         "configurable": {"thread_id": session_id},
-        "recursion_limit": 120,
+        "recursion_limit": _RECURSION_LIMIT,
     }
 
 
@@ -123,10 +147,12 @@ async def chat(req: ChatRequest, request: Request):
         # 构建带 GPS 上下文的输入（记忆由 pre_model_hook 注入，不在此处）
         input_data = await _build_input_with_location(req.message, req, sid)
 
-        result = await agent.ainvoke(
-            input_data,
-            _build_config(sid),
-        )
+        # 同 session 串行化，防止 checkpointer 交错写入
+        async with _session_lock(sid):
+            result = await agent.ainvoke(
+                input_data,
+                _build_config(sid),
+            )
 
         messages = result.get("messages", [])
         reply = ""
@@ -168,6 +194,9 @@ async def chat_stream(req: ChatRequest, request: Request):
         user_content += f"\n\n[系统信息：冷冷当前 GPS 坐标为 ({lat}, {lon})，使用地图工具时可直接用这个坐标作为 location 参数。]"
 
     async def generate():
+        # 同 session 串行化：第二条流排队等待而非并发写 checkpointer
+        lock = _session_lock(sid)
+        await lock.acquire()
         try:
             async for event in agent.astream_events(
                 {"messages": [HumanMessage(content=user_content)]},
@@ -190,12 +219,9 @@ async def chat_stream(req: ChatRequest, request: Request):
 
                 elif kind == "on_tool_start":
                     name = event.get("name", "unknown")
-                    tool_input = event.get("data", {}).get("input", {})
-                    try:
-                        safe_input = json.loads(json.dumps(tool_input, default=str))
-                    except (TypeError, ValueError):
-                        safe_input = str(tool_input)
-                    yield f"data: {json.dumps({'type': 'tool_start', 'name': name, 'input': safe_input}, ensure_ascii=False)}\n\n"
+                    # 只下发工具名，不回传完整入参（含坐标/搜索词等，
+                    # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
+                    yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
 
                 elif kind == "on_tool_end":
                     name = event.get("name", "unknown")
@@ -213,6 +239,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             yield f"data: {json.dumps({'content': '呜，小汐被浪花打了一下……等浪退了再试一次好不好？'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
         finally:
+            lock.release()
             log.debug("流式生成器退出 (sid=%s)", sid)
 
     return StreamingResponse(
@@ -232,14 +259,19 @@ async def health(request: Request):
     """健康检查。未认证时只返回基本状态，已认证时返回完整诊断信息。"""
     checkpointer = getattr(request.app.state, "checkpointer", None)
 
-    # 检查是否已认证（持有有效 Bearer Token）
+    # 检查是否已认证（持有有效 Bearer Token）。
+    # 与认证中间件保持一致：常量时间比较，防时序侧信道。
+    import hmac
     from config.settings import get_settings
     token = get_settings().xiaoxi_api_token
     is_authenticated = False
     if token:
         auth_header = request.headers.get("authorization", "")
-        if auth_header == f"Bearer {token}":
-            is_authenticated = True
+        if auth_header.startswith("Bearer ") and auth_header[len("Bearer "):]:
+            is_authenticated = hmac.compare_digest(
+                auth_header[len("Bearer "):].encode("utf-8"),
+                token.encode("utf-8"),
+            )
     else:
         # 未配置 token 时视为开发模式，允许完整访问
         is_authenticated = True
@@ -266,6 +298,55 @@ async def health(request: Request):
         "tools": [t.name for t in tools],
         "memory_count": memory_count,
     }
+
+
+# ── 会话历史（陪伴连续性）────────────────────────────────────
+
+
+def _strip_location_suffix(text: str) -> str:
+    """去掉用户消息尾部注入的 GPS 系统信息（不应回显给前端）。"""
+    return re.split(r"\n\n\[系统信息：", text, maxsplit=1)[0]
+
+
+@router.get("/chat/history")
+async def chat_history(
+    request: Request,
+    session_id: str = Query(..., pattern=r"^[a-z0-9-]{1,64}$"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """从 checkpoint 读取会话历史，供前端刷新后恢复「刚才聊过什么」。
+
+    只回 human/ai 的文本消息；工具调用中间态不回显。
+    记忆注入的 SystemMessage 走 llm_input_messages，不进 checkpoint，
+    因此不会出现在这里。
+    """
+    agent = request.app.state.agent
+    if agent is None:
+        raise HTTPException(503, "小汐还在睡觉……过一会儿再来找她吧")
+
+    try:
+        state = await agent.aget_state(
+            {"configurable": {"thread_id": session_id}}
+        )
+    except Exception:
+        log.exception("读取会话历史失败 (sid=%s)", session_id)
+        raise HTTPException(500, "映海里的记忆有点模糊……再试一次？")
+
+    if state is None:
+        return {"messages": [], "session_id": session_id}
+
+    out = []
+    for m in state.values.get("messages", []):
+        mtype = getattr(m, "type", "")
+        content = getattr(m, "content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue  # 多模态 content 列表 / 纯工具调用的空 AIMessage
+        if mtype == "human":
+            out.append({"role": "user", "content": _strip_location_suffix(content)})
+        elif mtype == "ai":
+            out.append({"role": "assistant", "content": content})
+
+    return {"messages": out[-limit:], "session_id": session_id}
 
 
 # ── 记忆管理端点 ────────────────────────────────────────────

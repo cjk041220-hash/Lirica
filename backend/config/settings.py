@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     # 直连部署时开启会让攻击者伪造 XFF 绕过限流。
     trust_proxy: bool = False
 
+    # 显式承担"无 token 绑定非回环地址"的风险（仅限受控内网）。
+    # 默认 False：非回环绑定 + 空 token 直接拒绝启动（fail closed）。
+    xiaoxi_allow_insecure: bool = False
+
+    # 备份时剔除高敏数据（生理期记录 cycle_records）。
+    # 开启后每份备份生成时会清空该表——备份不再含生理期数据，
+    # 代价是无法用备份恢复该表。默认 False（完整备份）。
+    backup_scrub_sensitive: bool = False
+
     # Web Push (VAPID 密钥，用于向 PWA 客户端推送通知)
     vapid_public_key: str = ""
     vapid_private_key: str = ""

@@ -80,11 +80,13 @@ const apiFails = [];
       (await pro.evaluate(el => el.className.includes('border-healing-aqua'))) ? ok('切换模型 → Pro（高亮 + POST 200）') : bad('切换模型 Pro', '未高亮');
     } else bad('模型卡片', '未找到 V4 Pro');
 
-    const deep = page.locator('button', { hasText: /^深度$/ }).first();
+    // v0.4.5：「思考强度」已更名为「回复风格」，档位文案 轻柔/适中/深度/全力
+    // → 稳重/自然/发散/灵感（P2-4 文案诚实化，实际映射 temperature）
+    const deep = page.locator('button', { hasText: /^发散$/ }).first();
     if (await deep.count()) {
       await deep.click(); await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(200);
-      (await deep.evaluate(el => el.className.includes('bg-white'))) ? ok('思考强度 → 深度（选中 + 联动温度）') : bad('思考强度', '未选中');
-    } else bad('思考强度按钮', '未找到 深度');
+      (await deep.evaluate(el => el.className.includes('bg-white'))) ? ok('回复风格 → 发散（选中 + 联动温度）') : bad('回复风格', '未选中');
+    } else bad('回复风格按钮', '未找到 发散');
 
     const tBefore = await page.locator('input[type=range]').evaluate(el => el.value);
     await page.evaluate(() => {
@@ -98,17 +100,38 @@ const apiFails = [];
     await page.waitForTimeout(450); // 等防抖 POST
     await shot(page, '03-config-changed');
 
-    const sw = page.locator('button[role="switch"]');
+    // v0.4.5：设置面板新增「位置辅助」开关，role=switch 不再唯一，按 aria-label 精确定位
+    const sw = page.locator('button[aria-label="消息通知开关"]');
     if (await sw.count()) {
       const before = await sw.getAttribute('aria-checked');
       await sw.click(); await page.waitForTimeout(700);
       const after = await sw.getAttribute('aria-checked');
       ok(`推送开关可点击（aria-checked ${before}→${after}；headless 订阅按预期降级，无崩溃）`);
-    } else bad('推送开关', '未找到 role=switch');
+    } else bad('推送开关', '未找到 消息通知开关');
+
+    // v0.4.5 新增：位置辅助开关
+    const gpsSw = page.locator('button[aria-label="位置辅助开关"]');
+    if (await gpsSw.count()) {
+      const gBefore = await gpsSw.getAttribute('aria-checked');
+      await gpsSw.click(); await page.waitForTimeout(300);
+      const gAfter = await gpsSw.getAttribute('aria-checked');
+      (gBefore !== gAfter) ? ok(`位置辅助开关可切换（aria-checked ${gBefore}→${gAfter}）`) : bad('位置辅助开关', '状态未变化');
+      await gpsSw.click(); await page.waitForTimeout(200); // 还原为开启
+    } else bad('位置辅助开关', '未找到');
 
     await page.locator('button[aria-label="关闭设置"]').click();
     await page.waitForTimeout(300);
     (await page.locator('h2:has-text("设置")').count()) === 0 ? ok('关闭设置面板') : bad('关闭设置', '面板仍在');
+
+    // v0.4.5：配置阶段切到了 Pro + 发散 + 高温，Pro 深度推理首 token 可能
+    // 超过对话阶段的 45s 等待——聊天前恢复 flash 基线，保证回复及时完成
+    await page.evaluate(async () => {
+      await fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'deepseek-v4-flash', thinking_intensity: 'medium', temperature: 0.7 }),
+      });
+    });
+    await page.waitForTimeout(300);
 
     // ── 记忆面板 ──
     await page.locator('button[aria-label="小汐的记忆"]').click();

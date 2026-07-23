@@ -58,3 +58,15 @@ async def memory_mgr(tmp_db):
     """MemoryManager backed by a temporary database."""
     from memory.manager import MemoryManager
     return MemoryManager(tmp_db)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tool_globals():
+    """每个用例后重置工具模块的进程级全局注入（P2-1 测试隔离）。
+
+    工具仍依赖模块级全局（memory_manager / diary conn / http client），
+    在改为请求级 DI 之前，用 autouse fixture 防止跨用例串扰。
+    """
+    yield
+    from tools import reset_tool_globals
+    reset_tool_globals()

@@ -24,8 +24,11 @@ _PUBLIC_PATHS = ("/api/push/vapid-key",)
 _rate_buckets: dict[str, list[float]] = {}
 
 _RATE_LIMITS = {
-    "/api/chat": 10,       # 聊天：10 次/分钟
-    "/api/config": 10,     # 配置：10 次/分钟
+    "/api/chat": 10,       # 聊天：10 次/分钟（LLM 成本防线，不放宽）
+    # 配置：30 次/分钟。重建 Agent 只是进程内对象替换，开销很小；
+    # 温度滑杆已做 250ms 前端防抖。10 次/分钟对设置页交互过紧
+    # （连点模型+风格+拖温度即可触发 429），30 足够防滥用。
+    "/api/config": 30,
     "/api/memories": 30,   # 记忆管理：30 次/分钟
     "/api/push": 30,       # 推送订阅/已读：30 次/分钟
 }

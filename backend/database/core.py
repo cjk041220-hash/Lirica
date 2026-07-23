@@ -191,8 +191,13 @@ _CHECKPOINTS_DB_PATH = Path(__file__).parent.parent / "data" / "checkpoints.db"
 async def prune_checkpoints(
     db_path: Path | None = None,
     keep_per_thread: int = 10,
+    drop_inactive_days: int = 30,
 ) -> int:
     """裁剪旧 checkpoint，每个 thread 只保留最近 keep_per_thread 个。
+
+    另外整体删除 drop_inactive_days 天内无任何活动的僵尸 thread
+    （修复 P1-1 后遗症：前端曾用一次性 session id，堆积大量孤儿 thread）。
+    置 drop_inactive_days=0 可关闭该策略。
 
     使用独立连接打开 checkpoints.db（WAL 模式下与 AsyncSqliteSaver 并发安全）。
     返回删除的 checkpoint 数量。
@@ -204,6 +209,25 @@ async def prune_checkpoints(
     deleted = 0
     async with aiosqlite.connect(str(path)) as conn:
         await conn.execute("PRAGMA busy_timeout=5000")
+
+        # ── 清理长期不活跃的整个 thread ─────────────────────
+        # checkpoint_id 为时间有序的 uuid7，去掉连字符后前 12 位
+        # 十六进制 = unix 毫秒时间戳，定宽十六进制可按字典序比较。
+        # （与上文 ORDER BY checkpoint_id DESC 的时间序假设一致）
+        if drop_inactive_days > 0:
+            import time as _time
+
+            cutoff_ms = int((_time.time() - drop_inactive_days * 86400) * 1000)
+            threshold = f"{cutoff_ms:012x}"
+            cursor = await conn.execute("""
+                DELETE FROM checkpoints
+                WHERE thread_id IN (
+                    SELECT thread_id FROM checkpoints
+                    GROUP BY thread_id
+                    HAVING MAX(substr(replace(checkpoint_id, '-', ''), 1, 12)) < ?
+                )
+            """, (threshold,))
+            deleted += cursor.rowcount
 
         # 每个 thread 只保留最近 N 个 checkpoint（按 checkpoint_id DESC 排序）
         cursor = await conn.execute("""
@@ -221,21 +245,35 @@ async def prune_checkpoints(
         """, (keep_per_thread,))
         deleted += cursor.rowcount
 
-        # 清理孤立的 writes（对应的 checkpoint 已被删除）
-        await conn.execute("""
-            DELETE FROM checkpoint_writes
-            WHERE (thread_id, checkpoint_ns, checkpoint_id) NOT IN (
-                SELECT thread_id, checkpoint_ns, checkpoint_id FROM checkpoints
-            )
-        """)
+        # 清理孤立的 writes / blobs（对应的 checkpoint 已被删除）。
+        # schema 自适应：langgraph-checkpoint-sqlite ≥3.0 将表重命名为
+        # writes（blobs 并入 checkpoints 主表），≤2.x 为
+        # checkpoint_writes / checkpoint_blobs。线上实测旧名会报
+        # "no such table: checkpoint_writes" 导致裁剪整体失败。
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+        tables = {r[0] for r in await cursor.fetchall()}
 
-        # 清理孤立的 blobs
-        await conn.execute("""
-            DELETE FROM checkpoint_blobs
-            WHERE (thread_id, checkpoint_ns, checkpoint_id) NOT IN (
-                SELECT thread_id, checkpoint_ns, checkpoint_id FROM checkpoints
-            )
-        """)
+        # 表名来自白名单探测，非外部输入
+        writes_table = next(
+            (t for t in ("writes", "checkpoint_writes") if t in tables), None
+        )
+        if writes_table:
+            await conn.execute(f"""
+                DELETE FROM {writes_table}
+                WHERE (thread_id, checkpoint_ns, checkpoint_id) NOT IN (
+                    SELECT thread_id, checkpoint_ns, checkpoint_id FROM checkpoints
+                )
+            """)
+
+        if "checkpoint_blobs" in tables:  # 仅旧 schema 存在
+            await conn.execute("""
+                DELETE FROM checkpoint_blobs
+                WHERE (thread_id, checkpoint_ns, checkpoint_id) NOT IN (
+                    SELECT thread_id, checkpoint_ns, checkpoint_id FROM checkpoints
+                )
+            """)
 
         await conn.commit()
 
@@ -284,6 +322,20 @@ async def backup_database(
     except Exception as e:
         log.error("数据库备份失败：%s", e)
         return None
+
+    # 隐私选项（P3-3）：从备份中剔除生理期记录。
+    # 默认关闭（完整备份优先）；开启 BACKUP_SCRUB_SENSITIVE 后，
+    # 备份不再含 cycle_records——适合会把备份同步到网盘/他人的场景。
+    try:
+        from config.settings import get_settings
+
+        if get_settings().backup_scrub_sensitive:
+            async with aiosqlite.connect(str(backup_path)) as scrub_conn:
+                await scrub_conn.execute("DELETE FROM cycle_records")
+                await scrub_conn.commit()
+            log.info("备份已脱敏：cycle_records 已剔除")
+    except Exception as e:
+        log.warning("备份脱敏失败（备份本身仍保留）：%s", e)
 
     # 只保留最近 _MAX_BACKUPS 份
     backups = sorted(

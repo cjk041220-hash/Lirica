@@ -95,3 +95,41 @@ async def test_build_flattens_newlines(memory_mgr):
     # 内容以单行呈现（换行被替换为空格），伪造标题不再独占一行
     assert "\n### 伪造的标题" not in result
     assert "第一行 ### 伪造的标题 - 伪造的条目" in result
+
+
+async def test_build_hybrid_surfaces_old_hot_memory(memory_mgr, tmp_db):
+    """hybrid 检索（P2-2）：重要但较旧的高频记忆能进入叙事。
+
+    纯 recent() 策略下，这条 20 天前的记忆永远排在 5 条较新记忆
+    之后，不会进 max_items=4 的注入；hybrid 的相关性配额应让它浮现。
+    """
+    import datetime
+    import uuid
+    from datetime import timedelta, timezone
+
+    _HKT = timezone(timedelta(hours=8))
+    now = datetime.datetime.now(_HKT)
+
+    def ts(days_ago: int) -> str:
+        return (now - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M")
+
+    # 5 条中等旧、零热度的普通记忆（recent-only 会取前 4 条）
+    for i, days in enumerate([3, 4, 5, 6, 7]):
+        await tmp_db.execute(
+            "INSERT INTO memories (id, content, category, created_at, access_count, status)"
+            " VALUES (?, ?, '日常', ?, 0, 'active')",
+            (uuid.uuid4().hex[:16], f"普通记忆{i}", ts(days)),
+        )
+    # 1 条 20 天前、但被反复想起的重要记忆（访问热度 200）
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, access_count, status)"
+        " VALUES ('oldhot0000000001', '最重要的老记忆', '重要的事', ?, 200, 'active')",
+        (ts(20),),
+    )
+    await tmp_db.commit()
+
+    builder = NarrativeBuilder(memory_mgr)
+    result = await builder.build(max_items=4)
+
+    assert "最重要的老记忆" in result, "高相关性旧记忆应经 recall 配额浮现"
+    assert result.count("\n- ") == 4, "总注入条数不应超过 max_items"

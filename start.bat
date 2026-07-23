@@ -11,7 +11,7 @@ if errorlevel 1 (
 
 echo.
 echo    ========================================
-echo      xiaoxi v0.4.4
+echo      xiaoxi v0.4.5
 echo    ========================================
 echo.
 

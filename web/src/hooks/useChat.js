@@ -1,7 +1,25 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { apiFetch } from '../api/client'
+import { getGpsCoords } from '../api/location'
 
 let msgId = 0
 const nextId = () => `msg-${++msgId}-${Date.now()}`
+
+// 会话 ID 持久化（修复 P1-1）：刷新页面不再是"陌生人"，
+// checkpoint 连续性与产品叙事"一直在网页里陪你"对齐。
+const SESSION_KEY = 'xiaoxi-session'
+const getSessionId = () => {
+  try {
+    const existing = localStorage.getItem(SESSION_KEY)
+    if (existing) return existing
+    // 后端校验 ^[a-z0-9-]{1,64}$：小写字母数字连字符
+    const fresh = `s-${Date.now().toString(36)}`
+    localStorage.setItem(SESSION_KEY, fresh)
+    return fresh
+  } catch {
+    return `s-${Date.now().toString(36)}`
+  }
+}
 
 // 工具调用 → 友好的状态提示文案（按后端工具名前缀匹配）
 const toolHints = [
@@ -14,12 +32,36 @@ const toolHints = [
 const hintFor = (name) =>
   toolHints.find(h => h.match.test(name || ''))?.text || '小汐在忙一会儿……'
 
+// 工具结果摘要：原始输出较长，气泡里只折叠展示一小段
+const summarizeOutput = (output) => {
+  const text = String(output || '').trim()
+  return text.length > 300 ? text.slice(0, 300) + '……' : text
+}
+
 export function useChat() {
   const [messages, setMessages] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [characterState, setCharacterState] = useState('idle')
   const abortRef = useRef(null)
-  const sessionId = useRef(`session-${Date.now()}`)
+  const sessionId = useRef(getSessionId())
+
+  // 刷新后从 checkpoint 恢复对话历史（修复 P1-1 的"刷新即失忆"）
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId.current)}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const history = (data.messages || [])
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map(m => ({ id: nextId(), role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+      if (history.length === 0) return
+      // 仅在当前为空时注入，避免覆盖已到达的主动消息
+      setMessages(prev => (prev.length === 0 ? history : prev))
+    } catch {}
+  }, [])
+
+  // 挂载时拉一次历史
+  useEffect(() => { loadHistory() }, [loadHistory])
 
   const sendMessage = useCallback(async (text) => {
     // 添加用户消息
@@ -35,16 +77,35 @@ export function useChat() {
     const controller = new AbortController()
     abortRef.current = controller
 
+    // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null
+    const coords = await getGpsCoords()
+
     try {
       setCharacterState('thinking')
-      const res = await fetch('/api/chat/stream', {
+      const res = await apiFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sessionId.current }),
+        body: JSON.stringify({
+          message: text,
+          session_id: sessionId.current,
+          ...(coords || {}),
+        }),
         signal: controller.signal,
       })
 
-      // 非 2xx（含限流 429 / 认证 401 等）直接走错误兜底
+      // 401：需要访问令牌
+      if (res.status === 401) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantId
+              ? { ...m, content: '呜……门没开。先在右上角设置里填一下访问令牌，再来找小汐玩吧。' }
+              : m
+          )
+        )
+        return
+      }
+
+      // 非 2xx（含限流 429 等）直接走错误兜底
       if (!res.ok || !res.body) {
         throw new Error(`HTTP ${res.status}`)
       }
@@ -76,18 +137,35 @@ export function useChat() {
           try {
             const parsed = JSON.parse(data)
 
-            // 工具调用事件
+            // 工具调用事件（v0.4.5：后端不再下发入参，只有工具名）
             if (parsed.type === 'tool_start') {
               setMessages(prev => [...prev, {
                 id: nextId(),
                 role: 'system',
                 type: 'tool_hint',
+                toolName: parsed.name,
                 content: hintFor(parsed.name),
               }])
               setCharacterState('thinking')
               continue
             }
-            if (parsed.type === 'tool_end') continue
+            // 工具结果（修复 P2-5）：挂到最近一条同名提示上，可折叠查看
+            if (parsed.type === 'tool_end') {
+              const output = summarizeOutput(parsed.output)
+              if (output) {
+                setMessages(prev => {
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    if (prev[i].type === 'tool_hint' && prev[i].toolName === parsed.name && !prev[i].output) {
+                      const updated = [...prev]
+                      updated[i] = { ...updated[i], output }
+                      return updated
+                    }
+                  }
+                  return prev
+                })
+              }
+              continue
+            }
 
             // 角色状态事件（协议预留：后端可下发 {"type":"state","state":"happy"} 等切换立绘）
             if (parsed.type === 'state' && parsed.state) {
@@ -148,5 +226,5 @@ export function useChat() {
     ])
   }, [])
 
-  return { messages, isStreaming, characterState, sendMessage, stopStreaming, receiveProactive }
+  return { messages, isStreaming, characterState, sendMessage, stopStreaming, receiveProactive, loadHistory }
 }

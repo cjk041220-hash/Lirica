@@ -1,19 +1,27 @@
-"""小汐 Agent 图 — 基于 LangGraph create_react_agent。
+"""小汐 Agent 图 — 基于 langchain.agents.create_agent。
 
 v2 重构：
-- 使用 create_react_agent 替代 create_agent
 - 新增 pre_model_hook：每次 LLM 调用前动态注入记忆上下文
   - 记忆通过 llm_input_messages 注入，不进入 checkpoint（解决上下文污染）
   - 可选的消息裁剪通过 RemoveMessage 执行（解决状态膨胀）
+
+v2.2 迁移（修复 P3-2）：
+- langgraph.prebuilt.create_react_agent 已废弃（LangGraph V1.0，V2.0 移除），
+  迁移到其官方继任者 langchain.agents.create_agent（同一实现的上移）；
+- pre_model_hook 机制在新 API 中演化为 middleware.before_model，
+  语义一致（返回 llm_input_messages / RemoveMessage 更新），
+  由 _PreModelHookMiddleware 桥接，现有 hook 逻辑与单测零改动。
 """
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     HumanMessage,
     RemoveMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import create_react_agent, ToolNode
 from langchain_core.tools import BaseTool
 
 from utils.logger import get_logger
@@ -100,6 +108,61 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
     return pre_model_hook
 
 
+# ── middleware 桥接 ─────────────────────────────────────────────
+
+
+class _PreModelHookMiddleware(AgentMiddleware):
+    """将 pre_model_hook 风格的函数桥接到 create_agent 的 middleware API。
+
+    abefore_model 与旧 pre_model_hook 契约相同：接收含 "messages" 的
+    state，返回 {"llm_input_messages": [...]} 和/或带 RemoveMessage 的
+    {"messages": [...]}。langchain 1.x 内部按同一 reducer 语义处理。
+
+    注意：新 API 同步/异步钩子分离——异步实现必须叫 abefore_model，
+    覆写 before_model 会被当作同步钩子直接调用（协程不被 await，
+    抛 InvalidUpdateError）。
+    """
+
+    def __init__(self, hook):
+        self._hook = hook
+
+    async def abefore_model(self, state, runtime):
+        return await self._hook(state)
+
+
+class _ToolErrorGuardMiddleware(AgentMiddleware):
+    """工具异常总闸：未捕获的工具异常 → status='error' 的 ToolMessage。
+
+    create_agent 内部 ToolNode 的默认错误处理只接住 ToolInvocationError
+    （调用参数错误），其他异常会击穿整轮对话直接 500。旧版
+    create_react_agent(handle_tool_errors=True) 捕获所有异常——
+    本 middleware 恢复该行为：异常转成错误消息交还 LLM，由它自行决定
+    重试或角色化降级（与每个工具自身的 try/except 形成双重兜底）。
+    """
+
+    @staticmethod
+    def _error_message(request, exc: Exception):
+        call = request.tool_call
+        return ToolMessage(
+            content=f"工具执行出错：{type(exc).__name__}: {exc}",
+            tool_call_id=call["id"],
+            name=call.get("name"),
+            status="error",
+        )
+
+    def wrap_tool_call(self, request, handler):
+        try:
+            return handler(request)
+        except Exception as exc:
+            return self._error_message(request, exc)
+
+    async def awrap_tool_call(self, request, handler):
+        try:
+            return await handler(request)
+        except Exception as exc:
+            return self._error_message(request, exc)
+
+
 # ── Agent 构建 ──────────────────────────────────────────────────
 
 
@@ -127,19 +190,18 @@ def build_agent(
         from langgraph.checkpoint.memory import MemorySaver
         checkpointer = MemorySaver()
 
-    # 工具节点开启 handle_tool_errors：任何工具抛出未捕获异常时，
-    # 异常会被转成带错误信息的 ToolMessage 交还给 LLM 自行决定重试或降级，
-    # 而不是击穿整轮对话返回 500（与每个工具自身的 try/except 形成双重兜底）
-    tool_node = ToolNode(tools, handle_tool_errors=True)
+    # middleware 列表首位为最外层：工具异常兜底包住一切工具执行，
+    # 记忆注入钩子在每次 LLM 调用前运行
+    middleware = [_ToolErrorGuardMiddleware()]
+    if pre_model_hook is not None:
+        middleware.append(_PreModelHookMiddleware(pre_model_hook))
 
     kwargs = dict(
         model=model,
-        tools=tool_node,
-        prompt=system_prompt,
+        tools=list(tools),
+        system_prompt=system_prompt,
         checkpointer=checkpointer,
+        middleware=middleware,
     )
 
-    if pre_model_hook is not None:
-        kwargs["pre_model_hook"] = pre_model_hook
-
-    return create_react_agent(**kwargs)
+    return create_agent(**kwargs)

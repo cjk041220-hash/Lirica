@@ -27,15 +27,40 @@ class NarrativeBuilder:
         self._manager = manager
 
     async def build(self, max_items: int = 30) -> str:
-        """从 MemoryManager 读取记忆，构建叙事文本。"""
+        """从 MemoryManager 读取记忆，构建叙事文本。
+
+        检索策略为 hybrid（修复 P2-2）：
+        - top-K 相关性（recall：时间衰减 × 访问热度）——让"重要但较旧"
+          的记忆（如核心偏好、重要约定）也能进入系统侧叙事，而不是
+          只有最近几天的流水账被"自然想起"；
+        - 其余配额给最新记忆（recent）——保证"刚发生的事"在场。
+        两路去重后不足 max_items 时用 recent 补足，最终按时间正序渲染。
+        """
         if self._manager is None:
             return ""
         total = await self._manager.count()
         if total == 0:
             return ""
 
-        # SQL 层面 LIMIT，避免全表扫描
-        memories = await self._manager.recent(max_items)
+        relevance_k = min(3, max_items)
+        relevant = await self._manager.recall(limit=relevance_k)
+        recent = await self._manager.recent(max_items)
+
+        picked: list[dict] = []
+        seen: set[str] = set()
+        for m in relevant:  # 相关性在前：重要/热门记忆优先浮现
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                picked.append(m)
+        for m in reversed(recent):  # 最新的在前，补足配额
+            if len(picked) >= max_items:
+                break
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                picked.append(m)
+
+        # 渲染按时间正序（与 recent() 原语义一致）
+        memories = sorted(picked, key=lambda m: m.get("created_at") or "")
 
         if not memories:
             return ""

@@ -9,6 +9,10 @@
     触发条件：非深夜 + 距上次主动消息 >= 4h + 50% 随机概率。
     消息由 LLM 以小汐人格生成，存入 DB 后通过 Web Push 推送。
 
+早安问候：
+    每日 8:00 HKT 触发，获取天气信息后由 LLM 生成早安问候 +
+    美食推荐，存入 proactive_messages 并推送。
+
 扩展方式：
     直接向对应时段的 moods / events 列表追加新条目即可。
 """
@@ -351,3 +355,219 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int):
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)
+
+
+# ── 每日早安问候 ──────────────────────────────────────────────
+
+# 默认香港坐标（定位缓存不可用时的回退）
+_DEFAULT_LAT = 22.3193
+_DEFAULT_LON = 114.1694
+
+# 默认早安文案（LLM 生成内容过短时的回退）
+_DEFAULT_GOOD_MORNING = "冷冷早安呀～新的一天开始啦，小汐陪你一起！"
+
+
+async def daily_morning_greeting():
+    """每日 8:00 HKT 早安问候：获取天气 -> LLM 生成问候 -> 存库 -> 推送。
+
+    使用独立轻量 LLM 调用（不走 Agent 图），天气 API 失败时降级为
+    纯问候，不阻断推送。
+    """
+    import httpx as _httpx
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from agent.soul import BASE_PERSONA
+    from providers.deepseek import create_deepseek_llm
+    from memory import location_store
+    from tools.weather import _fetch_open_meteo, _WMO
+
+    log.info("早安问候任务触发")
+
+    # 1. 获取定位
+    coords = None
+    location_known = True
+    try:
+        coords = await location_store.get_any()
+    except Exception as e:
+        log.warning("获取缓存坐标失败: %s", e)
+
+    if coords:
+        lat, lon = coords
+    else:
+        lat, lon = _DEFAULT_LAT, _DEFAULT_LON
+        location_known = False
+        log.info("无缓存坐标，使用默认香港坐标")
+
+    # 2. 获取天气
+    weather_text = ""
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            data = await _fetch_open_meteo(client, lat, lon)
+
+        current = data.get("current", {})
+        daily = data.get("daily", {})
+        code = current.get("weather_code", 0)
+
+        weather_text = (
+            f"当前天气：{_WMO.get(code, '未知')}，"
+            f"气温 {current.get('temperature_2m', '?')}°C"
+            f"（体感 {current.get('apparent_temperature', '?')}°C），"
+            f"湿度 {current.get('relative_humidity_2m', '?')}%，"
+            f"风速 {current.get('wind_speed_10m', '?')} km/h。"
+        )
+
+        # 今日预报
+        if daily:
+            tm = daily.get("temperature_2m_max", ["?"])
+            tn = daily.get("temperature_2m_min", ["?"])
+            wc = daily.get("weather_code", [0])
+            rp = daily.get("precipitation_probability_max", [0])
+            weather_text += (
+                f" 今天 {_WMO.get(wc[0], '未知')}，"
+                f"{tn[0]}°C ~ {tm[0]}°C"
+            )
+            if rp and int(rp[0]) > 50:
+                weather_text += f"，降水概率 {rp[0]}%"
+
+        log.info("天气数据获取成功")
+    except Exception as e:
+        log.warning("天气 API 调用失败，将省略天气部分: %s", e)
+        weather_text = ""
+
+    # 3. 构建 prompt
+    today = datetime.datetime.now(_HKT).strftime("%Y年%m月%d日")
+
+    if weather_text:
+        if location_known:
+            weather_part = f"冷冷那边现在的天气：{weather_text}"
+        else:
+            weather_part = f"小汐不知道冷冷现在在哪里呢，不过香港今天的天气是：{weather_text}"
+    else:
+        weather_part = "小汐今天没查到天气信息"
+
+    prompt_text = (
+        f"今天是{today}，早上 8 点。\n"
+        f"{weather_part}\n\n"
+        f"请给冷冷发一条早安问候消息。要求：\n"
+        f"1. 包含早安问候\n"
+        f"2. 自然地提到天气信息（如果有的话）\n"
+        f"3. 推荐一道适合今天的美食\n"
+        f"4. 保持小汐的语气风格，温暖可爱\n"
+        f"5. 简短自然，不要超过 150 字"
+    )
+
+    # 4. LLM 生成
+    content = ""
+    try:
+        llm = create_deepseek_llm(temperature=1.0, max_tokens=200)
+        response = await llm.ainvoke([
+            SystemMessage(content=BASE_PERSONA),
+            HumanMessage(content=prompt_text),
+        ])
+        content = response.content.strip()
+    except Exception as e:
+        log.error("LLM 生成早安消息失败: %s", e)
+
+    # 5. 安全过滤：太长截断，太短回退为默认文案
+    if len(content) > 200:
+        content = content[:200]
+    if len(content) < 5:
+        content = _DEFAULT_GOOD_MORNING
+
+    # 6. 存入数据库
+    now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
+    msg_id = uuid.uuid4().hex[:16]
+    try:
+        conn = await get_db()
+        await conn.execute(
+            """INSERT INTO proactive_messages (id, content, created_at, status)
+               VALUES (?, ?, ?, 'pending')""",
+            (msg_id, content, now),
+        )
+        await conn.commit()
+        log.info("早安消息已生成 [%s]: %s", msg_id[:8], content[:50])
+    except Exception as e:
+        log.error("早安消息存储失败: %s", e)
+
+    # 7. 推送通知
+    try:
+        from utils.web_push import send_push
+        sent = await send_push(
+            title="小汐",
+            body=content,
+            url="/",
+        )
+        if sent > 0:
+            conn = await get_db()
+            await conn.execute(
+                "UPDATE proactive_messages SET delivered_at = ?, status = 'delivered' WHERE id = ?",
+                (now, msg_id),
+            )
+            await conn.commit()
+            log.info("早安消息已推送至 %d 个设备", sent)
+        else:
+            # 无订阅设备，标记为待拉取
+            conn = await get_db()
+            await conn.execute(
+                "UPDATE proactive_messages SET status = 'delivered' WHERE id = ?",
+                (msg_id,),
+            )
+            await conn.commit()
+    except ImportError:
+        log.warning("web_push 模块不可用，早安消息仅存储在数据库中")
+    except Exception as e:
+        log.warning("早安消息推送失败: %s", e)
+
+    log.info("早安问候任务完成")
+
+
+# ── 调度注册（唯一入口）──────────────────────────────────────
+
+def register_jobs(app=None) -> None:
+    """将所有心跳任务注册到调度器。由 server.py lifespan 调用。
+
+    ⚠️ 注册纪律（v0.4.4 线上缺陷的教训，务必遵守）：
+
+    AsyncIOScheduler 只对「协程函数」（async def）走 await 执行路径。
+    若用 lambda / 普通函数包裹 async 调用再注册，例如::
+
+        scheduler.add_job(lambda: check_and_proactive_message(app), ...)
+
+    调度器会同步调用该 lambda——它只创建了一个协程对象随即丢弃，
+    任务**永远不会执行**，日志中伴随
+    ``RuntimeWarning: coroutine ... was never awaited``。
+    v0.4.4 正是因此导致心跳链路（生命状态刷新 / 随机搭话 /
+    生理期关心）整体静默。
+
+    正确做法：直接注册协程函数本身，参数走 kwargs::
+
+        scheduler.add_job(check_and_proactive_message, kwargs={"app": app}, ...)
+
+    回归防线：tests/test_heartbeat.py 中
+    ``test_registered_jobs_are_awaitable`` 与
+    ``test_scheduler_actually_runs_proactive_chain`` 两个测试
+    分别钉死「注册形态正确」与「job 本体真的执行并产生主动消息」。
+    """
+    # 心跳：每 2 小时 + 启动脉冲（next_run_time=now，醒来后立刻更新一次生命状态）
+    scheduler.add_job(
+        check_and_proactive_message,
+        "interval",
+        hours=2,
+        id="proactive_check",
+        kwargs={"app": app},
+        replace_existing=True,
+        next_run_time=datetime.datetime.now(_HKT),
+        # 事件循环短暂繁忙（启动、Agent 重建）导致错过触发时，
+        # 10 分钟内仍补跑，而不是静默跳过
+        misfire_grace_time=600,
+    )
+    # 早安问候：每日 8:00 HKT
+    scheduler.add_job(
+        daily_morning_greeting,
+        "cron",
+        hour=8,
+        minute=0,
+        timezone="Asia/Hong_Kong",
+        id="daily_morning_greeting",
+        replace_existing=True,
+        misfire_grace_time=3600,  # 1小时宽容窗口，防止Docker重启错过
+    )

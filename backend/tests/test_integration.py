@@ -225,3 +225,45 @@ async def test_chat_message_too_long(client):
         "session_id": "test-long",
     })
     assert resp.status_code == 422
+
+
+async def test_chat_history_returns_messages(client, integration_app):
+    """GET /api/chat/history 从 checkpoint 恢复对话（P1-1）。
+
+    GPS 系统信息后缀应被剥离，纯工具调用的空 AIMessage 应被跳过。
+    """
+    from types import SimpleNamespace
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    gps_suffix = "\n\n[系统信息：冷冷当前 GPS 坐标为 (22.3, 114.1)，使用地图工具时可直接用这个坐标作为 location 参数。]"
+    integration_app.state.agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={
+        "messages": [
+            HumanMessage(content="你好呀" + gps_suffix),
+            AIMessage(content="你好！小汐在哦~"),
+            AIMessage(content=""),  # 纯工具调用，无文本 → 跳过
+        ]
+    }))
+
+    resp = await client.get("/api/chat/history?session_id=hist-1")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["messages"] == [
+        {"role": "user", "content": "你好呀"},        # GPS 后缀已剥离
+        {"role": "assistant", "content": "你好！小汐在哦~"},
+    ]
+
+
+async def test_chat_history_empty_thread(client, integration_app):
+    """不存在的会话返回空列表（刷新一个全新 session 不报错）。"""
+    integration_app.state.agent.aget_state = AsyncMock(return_value=None)
+    resp = await client.get("/api/chat/history?session_id=brand-new")
+    assert resp.status_code == 200
+    assert resp.json()["messages"] == []
+
+
+def test_session_lock_reused_per_session():
+    """同 session 复用同一把锁（P1-3 并发互斥的基础）。"""
+    from api.routes.chat import _session_lock
+
+    assert _session_lock("same-id") is _session_lock("same-id")
+    assert _session_lock("id-a") is not _session_lock("id-b")

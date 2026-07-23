@@ -30,15 +30,15 @@ export default function CharacterSprite({ state = 'idle' }) {
   const src = spriteMap[displayState] || spriteMap.idle
 
   return (
-    <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-[15%]">
+    <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-[8%]">
       {/* 脚下光晕 */}
       <div
-        className="absolute left-1/2 bottom-0 -translate-x-1/2 w-[88%] h-[16%] rounded-[50%] opacity-25 pointer-events-none"
+        className="absolute left-1/2 bottom-0 -translate-x-1/2 w-[92%] h-[14%] rounded-[50%] opacity-25 pointer-events-none"
         style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.5) 0%, transparent 70%)' }}
       />
       {/* 身后柔光 */}
       <div
-        className="absolute left-1/2 top-[32%] -translate-x-1/2 -translate-y-1/2 w-[120%] h-[72%] rounded-full opacity-15 pointer-events-none"
+        className="absolute left-1/2 top-[35%] -translate-x-1/2 -translate-y-1/2 w-[130%] h-[75%] rounded-full opacity-15 pointer-events-none"
         style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 60%)' }}
       />
 
@@ -47,7 +47,7 @@ export default function CharacterSprite({ state = 'idle' }) {
         <img
           src={src}
           alt="小汐"
-          className={`h-[80vh] max-h-[720px] w-auto object-contain select-none transition-opacity duration-300 ease-out ${
+          className={`h-[92vh] w-auto object-contain select-none transition-opacity duration-300 ease-out ${
             transitioning ? 'opacity-0 scale-[0.99]' : 'opacity-100 scale-100'
           }`}
           style={{

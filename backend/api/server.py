@@ -1,5 +1,4 @@
 """小汐的后端 — FastAPI 应用工厂 + 生命周期管理。"""
-import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,11 +43,32 @@ async def lifespan(app: FastAPI):
         )
     log.info("DEEPSEEK_API_KEY 已配置")
 
+    # 0.5 启动加固（fail closed）— 见 utils/security.py：
+    #   - 非回环绑定 + 空 token → 拒绝启动（除非显式 XIAOXI_ALLOW_INSECURE=1）
+    #   - workers > 1 → 拒绝启动（心跳/限流/配置都是进程内状态）
+    from utils.security import detect_bind_host, detect_workers, assert_safe_startup
+
+    assert_safe_startup(
+        bind_host=detect_bind_host(),
+        api_token=settings.xiaoxi_api_token,
+        allow_insecure=settings.xiaoxi_allow_insecure,
+        workers=detect_workers(),
+    )
+
     # 认证状态告警 — 空 token 仅适用于本机开发，暴露公网极度危险
     if not settings.xiaoxi_api_token:
         log.warning(
             "XIAOXI_API_TOKEN 未设置，API 处于无认证状态！"
             "仅限本机使用；暴露到公网前必须设置 token 或前置反向代理认证。"
+        )
+
+    # Web Push 未配置 — 主动消息无法推送系统通知，只能在页面打开时送达
+    if not settings.vapid_public_key or not settings.vapid_private_key:
+        log.warning(
+            "VAPID 密钥未配置，小汐的主动消息无法发送浏览器系统通知"
+            "（页面打开时仍会注入对话）。"
+            "生成密钥：npx web-push generate-vapid-keys，"
+            "填入 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY。"
         )
 
     # 1. 业务数据库（userdata.db）— 建立全局长连接 + PRAGMA + 建表建索引
@@ -115,16 +135,12 @@ async def lifespan(app: FastAPI):
     app.state.agent = agent
     app.state.checkpointer = checkpointer
 
-    # 8. 心跳调度器（传入 app 引用，使心跳可以刷新 system prompt）
-    heartbeat.scheduler.add_job(
-        lambda: heartbeat.check_and_proactive_message(app),
-        "interval",
-        hours=2,
-        id="proactive_check",
-        next_run_time=datetime.datetime.now(heartbeat._HKT),
-    )
+    # 8. 心跳调度器 —— 统一注册入口见 heartbeat.register_jobs。
+    #    异步任务必须以协程函数直接注册（lambda 包裹会导致协程被丢弃、
+    #    主动消息链路整体静默，见 register_jobs 文档字符串与回归测试）
+    heartbeat.register_jobs(app)
     heartbeat.scheduler.start()
-    log.info("心跳已启动（每 2 小时，首次立即触发）")
+    log.info("心跳已启动（每 2 小时 + 每日 8:00 早安）")
 
     log.info("小汐醒啦！ -> http://127.0.0.1:8000")
 

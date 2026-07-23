@@ -10,6 +10,16 @@
 
 双击 `start.bat`，自动创建虚拟环境、安装依赖、启动服务。
 
+### 一键启动（macOS / Linux）
+
+```bash
+chmod +x start.sh   # 首次需要
+./start.sh          # 自动创建虚拟环境、安装依赖、构建前端、启动服务
+```
+
+手动启动路径与 Windows 相同，把 `.venv\Scripts\python` 换成
+`.venv/bin/python` 即可。Python 需要 3.10+（推荐 3.12，见 `.python-version`）。
+
 ### 手动启动
 
 ```bash

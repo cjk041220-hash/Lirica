@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { apiFetch } from '../api/client'
 
 // 与后端 GET /api/config 的 ConfigResponse 对齐：
 // { model, temperature, max_tokens, thinking_intensity, available_models }
@@ -17,7 +18,7 @@ export function useConfig() {
 
   // 挂载时拉取后端配置
   useEffect(() => {
-    fetch('/api/config')
+    apiFetch('/api/config')
       .then(res => (res.ok ? res.json() : null))
       .then(data => {
         if (data && typeof data === 'object') {
@@ -40,8 +41,8 @@ export function useConfig() {
     const send = () => {
       // 只发送变更字段（后端为部分更新语义）。
       // 响应返回合并后的完整配置 —— 用它同步 state，
-      // 因为选择思考强度预设会联动修改 temperature / max_tokens。
-      fetch('/api/config', {
+      // 因为选择回复风格预设会联动修改 temperature / max_tokens。
+      apiFetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [key]: value }),

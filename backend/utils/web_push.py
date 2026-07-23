@@ -43,12 +43,18 @@ def _get_vapid_claims() -> dict:
 
 
 def _is_stale_subscription(exc: WebPushException) -> bool:
-    """判断推送失败是否因为订阅已过期（410 Gone / 用户取消）。"""
+    """判断推送失败是否因为订阅已过期（410 Gone / 404 Not Found / 用户取消）。
+
+    410：RFC 8030 标准的订阅失效信号；
+    404：WNS 等部分推送服务对已失效订阅返回 404 而非 410。
+    """
     response = getattr(exc, "response", None)
-    if response is not None and getattr(response, "status", None) == 410:
+    status = getattr(response, "status", None)
+    if status in (404, 410):
         return True
     # 兜底：异常文本匹配（部分错误路径不携带 response 对象）
-    return "410" in str(exc) or "Gone" in str(exc)
+    text = str(exc)
+    return "410" in text or "404" in text or "Gone" in text
 
 
 async def send_push(title: str, body: str, url: str = "/") -> int:
@@ -100,6 +106,12 @@ async def send_push(title: str, body: str, url: str = "/") -> int:
                 vapid_private_key=s.vapid_private_key,
                 vapid_claims=_get_vapid_claims(),  # 每次全新字典，见函数说明
                 timeout=_PUSH_TIMEOUT,
+                # TTL 必须显式给非零值：pywebpush 默认 ttl=0，
+                # 而 WNS（Windows 推送服务）在默认 cache-policy 下
+                # 收到 TTL: 0 会返回 400 "Ttl value conflicts with
+                # X-WNS-Cache-Policy"，导致所有 Windows 设备收不到推送。
+                # 86400s = 设备离线时通知最多保留一天。
+                ttl=86400,
             )
             return ("ok", sub_id, endpoint, None)
         except WebPushException as e:
