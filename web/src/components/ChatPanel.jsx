@@ -1,0 +1,146 @@
+import { useRef, useEffect, useState, useCallback } from 'react'
+import MessageBubble from './MessageBubble'
+import ChatInput from './ChatInput'
+
+const statusTexts = {
+  idle: '小汐在看着窗外',
+  talking: '小汐在说话',
+  listening: '小汐在认真听',
+  thinking: '小汐在想办法',
+  happy: '小汐心情很好',
+  sleepy: '小汐有点困了',
+}
+
+const DEFAULT_HEIGHT = 38
+const MIN_VH = 10
+const MAX_VH = 85
+
+export default function ChatPanel({ chat }) {
+  const { messages, isStreaming, characterState, sendMessage, stopStreaming } = chat
+  const listRef = useRef(null)
+  const panelRef = useRef(null)
+  const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragData = useRef({ startY: 0, startH: 0, raf: null })
+  // 用户是否停留在底部附近 —— 向上翻看历史时不再被流式输出拽回底部
+  const stickBottomRef = useRef(true)
+
+  const handleScroll = useCallback(() => {
+    const el = listRef.current
+    if (!el) return
+    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+  }, [])
+
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const last = messages[messages.length - 1]
+    // 新消息是用户自己发的 → 强制滚到底；流式追加 → 仅在已停留底部时跟随
+    if (last?.role === 'user' || stickBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages])
+
+  const onPointerDown = useCallback((e) => {
+    e.preventDefault()
+    setIsDragging(true)
+    dragData.current.startY = e.clientY
+    dragData.current.startH = panelRef.current.offsetHeight
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }, [])
+
+  const onPointerMove = useCallback((e) => {
+    if (!dragData.current.startH) return
+    // 用 rAF 节流，直接操作 DOM，不触发 React 渲染
+    if (dragData.current.raf) return
+    dragData.current.raf = requestAnimationFrame(() => {
+      dragData.current.raf = null
+      const delta = dragData.current.startY - e.clientY
+      const nextPx = Math.min(
+        window.innerHeight * MAX_VH / 100,
+        Math.max(window.innerHeight * MIN_VH / 100, dragData.current.startH + delta)
+      )
+      if (panelRef.current) {
+        panelRef.current.style.height = `${nextPx}px`
+      }
+    })
+  }, [])
+
+  const onPointerUp = useCallback(() => {
+    setIsDragging(false)
+    if (dragData.current.raf) {
+      cancelAnimationFrame(dragData.current.raf)
+      dragData.current.raf = null
+    }
+    // 松手后把最终高度同步回 state（转为 dvh 单位）
+    if (panelRef.current) {
+      const px = panelRef.current.offsetHeight
+      const vh = (px / window.innerHeight) * 100
+      setHeightVh(vh)
+      panelRef.current.style.height = ''  // 清除内联，交回 state 控制
+    }
+    dragData.current.startH = 0
+  }, [])
+
+  const collapsed = heightVh < 14
+
+  return (
+    <div
+      ref={panelRef}
+      data-testid="chat-panel"
+      className={`absolute bottom-0 left-0 right-0 z-50 flex flex-col glass-panel rounded-t-[24px] safe-bottom ${
+        isDragging ? '' : 'transition-[height] duration-200 ease-out'
+      }`}
+      style={{ height: isDragging ? undefined : `${heightVh}dvh` }}
+    >
+      {/* 拖拽把手 */}
+      <div
+        data-testid="chat-handle"
+        className="flex items-center justify-center pt-3 pb-1.5 cursor-grab active:cursor-grabbing touch-none shrink-0"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-healing-aqua/50' : 'bg-ink-tea/15'}`} />
+      </div>
+
+      {/* 状态栏 */}
+      {!collapsed && (
+        <div className="flex items-center gap-2 px-4 pb-2 shrink-0">
+          <div className="w-2 h-2 rounded-full bg-healing-aqua animate-pulse-dot" />
+          <span className="text-[11px] text-ink-tea/50 tracking-wide">
+            {statusTexts[characterState] || '小汐在发呆'}
+          </span>
+        </div>
+      )}
+
+      {/* 消息列表 */}
+      {!collapsed && (
+        <div ref={listRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-2 chat-scroll min-h-0">
+          {messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center">
+              <p className="text-sm text-ink-tea/40">你回来啦。小汐在看窗外的云。</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {messages.map(msg => (
+                <MessageBubble key={msg.id} message={msg} />
+              ))}
+              {isStreaming && (
+                <div className="flex items-center gap-1 pl-4">
+                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" style={{ animationDelay: '0.4s' }} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 输入框 */}
+      <ChatInput onSend={sendMessage} isStreaming={isStreaming} onStop={stopStreaming} />
+    </div>
+  )
+}

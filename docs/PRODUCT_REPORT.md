@@ -189,8 +189,8 @@
 冷冷 (iPhone)
     │
     ▼
-Next.js 16 前端 (Vercel)
-    │  page.tsx → LivingPanel → useXiaoxiChat
+Vite + React 前端（FastAPI 一体托管 :8000，亦可静态部署）
+    │  App.jsx → ChatPanel / ConfigPanel / MemoriesPanel → useChat (SSE)
     │  POST /api/chat/stream
     ▼
 FastAPI 后端 (Docker on VPS)

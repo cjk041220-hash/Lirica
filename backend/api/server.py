@@ -9,14 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from version import __version__
-from providers.deepseek import create_deepseek_llm
 from agent.graph import build_agent, make_pre_model_hook
 from agent.soul import build_system_prompt
 from tools import get_all_tools, set_memory_manager, set_diary_db_conn, set_http_client
 from memory.manager import MemoryManager
 from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
-from api.routes.config import router as config_router
+from api.routes.config import router as config_router, create_llm_from_runtime_config
 from api.routes.push import router as push_router
 from api.middleware import AuthAndRateLimitMiddleware, RejectWebSocketMiddleware
 from database.core import init_db_connection, get_db, close_db_connection, init_db
@@ -45,6 +44,13 @@ async def lifespan(app: FastAPI):
         )
     log.info("DEEPSEEK_API_KEY 已配置")
 
+    # 认证状态告警 — 空 token 仅适用于本机开发，暴露公网极度危险
+    if not settings.xiaoxi_api_token:
+        log.warning(
+            "XIAOXI_API_TOKEN 未设置，API 处于无认证状态！"
+            "仅限本机使用；暴露到公网前必须设置 token 或前置反向代理认证。"
+        )
+
     # 1. 业务数据库（userdata.db）— 建立全局长连接 + PRAGMA + 建表建索引
     await init_db_connection()
     conn = await get_db()
@@ -71,8 +77,9 @@ async def lifespan(app: FastAPI):
     app.state.tools = tools
     log.info("%s 个工具已加载", len(tools))
 
-    # 5. LLM 模型
-    model = create_deepseek_llm()
+    # 5. LLM 模型 — 从运行时配置创建，保证与 GET /api/config 报告的
+    #    默认值（medium / 0.7 / 8192 / flash）完全一致（单一数据源）
+    model = create_llm_from_runtime_config()
     log.info("DeepSeek 模型已连接")
 
     # 6. 系统提示词（不含记忆叙事——叙事由 chat.py 按请求动态注入）
@@ -80,6 +87,7 @@ async def lifespan(app: FastAPI):
     app.state.system_prompt = system_prompt
 
     # 保存模型引用，供心跳刷新 / 配置变更时重建 agent 使用
+    # （rebuild_agent_for_app 会在每次重建时同步更新此引用）
     app.state.model = model
 
     # 7. Agent 图 + Checkpointer + pre_model_hook
@@ -167,17 +175,26 @@ def create_app() -> FastAPI:
     app.add_middleware(RejectWebSocketMiddleware)
 
     # 认证 + 限流中间件（在 CORS 之后、路由之前）
-    app.add_middleware(AuthAndRateLimitMiddleware, api_token=settings.xiaoxi_api_token)
+    app.add_middleware(
+        AuthAndRateLimitMiddleware,
+        api_token=settings.xiaoxi_api_token,
+        trust_proxy=settings.trust_proxy,
+    )
 
     # REST 路由
     app.include_router(chat_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(push_router, prefix="/api")
 
-    # 前端静态文件（Next.js 生产导出；开发模式下前端独立运行在 :3000，无需此挂载）
-    frontend_dir = Path(__file__).parent.parent.parent / "web" / "out"
-    if frontend_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+    # 前端静态文件（Vite 生产构建 web/dist；开发模式下前端独立运行在 :3000，
+    # 由 vite.config.js 将 /api 代理到 :8000，无需此挂载）
+    # 兼容旧版 Next.js 导出目录 web/out 作为回退
+    web_root = Path(__file__).parent.parent.parent / "web"
+    for dist_name in ("dist", "out"):
+        frontend_dir = web_root / dist_name
+        if frontend_dir.is_dir():
+            app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+            break
 
     return app
 

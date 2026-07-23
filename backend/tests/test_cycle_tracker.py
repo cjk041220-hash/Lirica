@@ -32,12 +32,24 @@ async def test_add_record_inserts(tmp_db):
 
 
 async def test_add_record_dedup(tmp_db):
-    """同一日期不重复插入。"""
+    """同一日期不重复插入，且返回值如实反映是否插入（回归：此前恒返回 True）。"""
     db_core._db = tmp_db
-    await add_record("2026-04-22")
-    await add_record("2026-04-22")  # 重复
+    first = await add_record("2026-04-22")
+    second = await add_record("2026-04-22")  # 重复
+    assert first is True
+    assert second is False
     records = await get_records()
     assert len(records) == 1
+
+
+async def test_seed_initial_counts_only_real_inserts(tmp_db):
+    """回归：seed 计数不再把重复日期虚报为成功插入。"""
+    db_core._db = tmp_db
+    inserted = await seed_initial_records(
+        ["2026-04-22", "2026-05-20", "2026-04-22", "2026-05-20"]
+    )
+    assert inserted == 2
+    assert len(await get_records()) == 2
 
 
 async def test_seed_initial_records(tmp_db):

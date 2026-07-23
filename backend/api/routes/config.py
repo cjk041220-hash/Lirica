@@ -5,6 +5,7 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
+from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
 
 from providers.deepseek import get_available_models, create_deepseek_llm
@@ -13,17 +14,24 @@ from agent.soul import build_system_prompt
 
 router = APIRouter()
 
-# Agent 重建锁，防止并发 config 变更与 chat 请求之间的竞态
+# Agent 重建锁：串行化所有重建路径（配置变更 / 心跳刷新），
+# 防止两条路径并发构建并互相覆盖 app.state.agent / app.state.model
 _agent_lock = asyncio.Lock()
 
 
 # ── 运行时配置（内存中保存，重启后重置为默认值） ──────────────
+# 注意：这份配置是 LLM 参数的唯一权威来源（single source of truth）。
+# 启动时（server.py lifespan）与运行中的所有 Agent 重建都必须经由
+# create_llm_from_runtime_config() / rebuild_agent_for_app()，
+# 保证「GET /api/config 报告的值」「app.state.model」「app.state.agent」
+# 三者永远一致。默认值必须与 create_deepseek_llm() 的默认参数
+# （temperature=0.7 / max_tokens=8192 / flash 模型）保持一致。
 
 _runtime_config = {
     "model": "deepseek-v4-flash",
     "temperature": 0.7,
     "max_tokens": 8192,
-    "thinking_intensity": "max",
+    "thinking_intensity": "medium",
 }
 
 # 思考强度 → temperature 映射
@@ -66,35 +74,60 @@ def get_current_model() -> str:
     return _runtime_config.get("model", "deepseek-v4-flash")
 
 
-async def rebuild_agent(request: Request):
-    """用当前配置重建 LLM 和 Agent（同时刷新生命状态注入的 system_prompt）。
+def create_llm_from_runtime_config() -> BaseChatModel:
+    """按当前运行时配置创建 LLM 实例。
 
-    使用 asyncio.Lock 防止与并发 chat 请求之间的竞态条件。
+    所有创建 LLM 的路径（启动 / 配置变更 / 心跳刷新）都应经由此函数，
+    确保 LLM 参数永远来自 _runtime_config 这一唯一权威来源。
+    """
+    return create_deepseek_llm(
+        model=get_current_model(),
+        temperature=get_current_temperature(),
+        max_tokens=get_current_max_tokens(),
+    )
+
+
+async def rebuild_agent_for_app(app) -> None:
+    """统一的 Agent 重建入口 —— 用当前运行时配置重建 LLM 和 Agent。
+
+    所有重建路径（POST /api/config 配置变更、心跳生命状态刷新）都必须
+    经由本函数，以保证：
+    1. app.state.model / app.state.agent / app.state.system_prompt 三者
+       在锁内同时更新，永远相互一致；
+    2. 心跳刷新不会用启动时的默认 LLM 覆盖用户配置的模型/思考强度
+       （v0.4.2 的缺陷：心跳直接拿 app.state.model 重建，而配置变更
+       从不回写 app.state.model，导致用户设置最多 2 小时被静默回滚）。
+
+    asyncio.Lock 串行化并发重建。CPython GIL 保证引用赋值原子性：
+    进行中的请求持有旧 agent 引用继续完成，新请求拿到新 agent。
     """
     async with _agent_lock:
-        temperature = get_current_temperature()
-        max_tokens = get_current_max_tokens()
-        model = get_current_model()
-
-        new_llm = create_deepseek_llm(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-        tools = request.app.state.tools
-        checkpointer = request.app.state.checkpointer
+        new_llm = create_llm_from_runtime_config()
 
         # 刷新 system_prompt（注入最新生命状态）
         system_prompt = await build_system_prompt()
-        request.app.state.system_prompt = system_prompt
 
         # 创建 pre_model_hook（记忆注入）
-        narrative_builder = getattr(request.app.state, "narrative_builder", None)
+        narrative_builder = getattr(app.state, "narrative_builder", None)
         pre_model_hook = make_pre_model_hook(narrative_builder)
 
-        new_agent = build_agent(new_llm, tools, system_prompt, checkpointer, pre_model_hook)
-        request.app.state.agent = new_agent
+        new_agent = build_agent(
+            new_llm,
+            app.state.tools,
+            system_prompt,
+            app.state.checkpointer,
+            pre_model_hook,
+        )
+
+        # 三者同时更新，保持单一数据源
+        app.state.model = new_llm
+        app.state.system_prompt = system_prompt
+        app.state.agent = new_agent
+
+
+async def rebuild_agent(request: Request):
+    """兼容包装：用当前配置重建 LLM 和 Agent。"""
+    await rebuild_agent_for_app(request.app)
 
 
 # ── 请求/响应模型 ──────────────────────────────────────────

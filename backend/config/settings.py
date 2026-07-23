@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # API 认证 Token（留空则不启用认证；部署到公网时务必设置）
     xiaoxi_api_token: str = ""
 
+    # 是否信任反向代理的 X-Forwarded-For（限流 IP 归因用）。
+    # 仅在明确部署于可信代理（Nginx/Caddy 等）之后时才开启；
+    # 直连部署时开启会让攻击者伪造 XFF 绕过限流。
+    trust_proxy: bool = False
+
     # Web Push (VAPID 密钥，用于向 PWA 客户端推送通知)
     vapid_public_key: str = ""
     vapid_private_key: str = ""

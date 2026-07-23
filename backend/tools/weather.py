@@ -1,7 +1,11 @@
 """天气查询工具 — Open-Meteo 免费 API。"""
 import httpx
 from langchain_core.tools import tool
+from utils.errors import log_tool_error, sanitize_sensitive_text
+from utils.logger import get_logger
 from utils.retry import with_retry
+
+log = get_logger(__name__)
 
 # 城市坐标映射（覆盖更多港澳台及大陆城市）
 _CITY_COORDS = {
@@ -98,8 +102,10 @@ async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
                         lon_s, lat_s = location.split(",")
                         return float(lat_s), float(lon_s), resolved_name
     except Exception as e:
-        from utils.logger import get_logger
-        get_logger(__name__).warning("高德地理编码失败（%s）：%s", city, e)
+        # 异常文本含带 key= 参数的完整 URL，必须脱敏后再落日志
+        log.warning(
+            "高德地理编码失败（%s）：%s", city, sanitize_sensitive_text(str(e))
+        )
 
     # 最终回退：无法定位，返回 None
     return None, None, city
@@ -177,14 +183,17 @@ async def get_weather(
             f"冷冷稍等一下再问小汐好不好？"
         )
     except httpx.HTTPStatusError as e:
+        log_tool_error("get_weather", e)
         return (
             f"天气服务暂时出了点问题（状态码 {e.response.status_code}），"
             f"小汐再去映海里看看，冷冷等一下再试试~"
         )
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError) as e:
+        log_tool_error("get_weather", e)
         return (
             f"小汐拿到了天气数据但是看不懂……映海里的信号好像有点乱，"
             f"冷冷过一会儿再问问小汐吧~"
         )
-    except Exception:
+    except Exception as e:
+        log_tool_error("get_weather", e)
         return f"呜，小汐去查「{city}」天气的时候被浪花卷了一下……等浪退了再试试？"

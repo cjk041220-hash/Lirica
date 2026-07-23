@@ -92,22 +92,20 @@
 │           ├── userdata_backup_*.db     # SQLite Online Backup 快照（保留最近 5 份）
 │           └── memories_backup_*.json   # 清空记忆前的 JSON 备份
 │
-└── web/                         # 前端 Next.js 16（App Router + TypeScript + Tailwind v4）
+└── web/                         # 前端 Vite 8 + React 19 + Tailwind v4（PWA + Web Push）
     ├── package.json
-    ├── next.config.ts
-    ├── tsconfig.json
-    ├── postcss.config.mjs
-    ├── eslint.config.mjs
-    ├── public/                  # 静态资源
+    ├── vite.config.js           # 开发期 /api → :8000 代理
+    ├── index.html
+    ├── public/
+    │   ├── sprites/             # 9 张角色立绘（WebP，已压缩）
+    │   ├── sw.js                # Service Worker（cache-first + 推送通知）
+    │   └── manifest.json        # PWA manifest
+    ├── dist/                    # 生产构建产物，由 FastAPI 挂到 :8000 根路径
     └── src/
-        ├── app/
-        │   ├── globals.css      # 全局样式 + CSS 变量（温暖纸色/治愈水色/毛玻璃）
-        │   ├── layout.tsx       # 根布局
-        │   └── page.tsx         # 首页（三层 Z 轴布局骨架）
-        ├── components/
-        │   └── LivingPanel.tsx  # 毛玻璃聊天面板（静态骨架）
-        └── hooks/
-            └── useXiaoxiChat.ts # 流式聊天 Hook（SSE, 已就绪待接通）
+        ├── App.jsx              # 组合场景/聊天/设置/记忆 + 主动消息注入
+        ├── components/          # RoomScene / CharacterSprite / ChatPanel / ConfigPanel / MemoriesPanel / MessageBubble
+        ├── hooks/               # useChat（SSE 流式）/ useConfig / usePush
+        └── assets/icons/        # 内联 SVG 图标组件
 ```
 
 ---
@@ -128,8 +126,8 @@
 | 数据库迁移 | 自研轻量框架（schema_version 表 + 版本函数） |
 | HTTP 客户端 | httpx（lifespan 管理的共享 AsyncClient） |
 | 网络重试 | 自研 `with_retry` 装饰器（指数退避，按 API 分档） |
-| 前端 | Next.js 16 (App Router) + TypeScript + Tailwind CSS v4 |
-| 动画 | Framer Motion |
+| 前端 | Vite 8 + React 19 + Tailwind CSS v4（PWA，Web Push） |
+| 动画 | CSS / Tailwind 自定义动画（呼吸/淡入/星空/浮云） |
 | 容器化 | Docker 多阶段构建 + docker-compose（--workers 1） |
 | 测试 | pytest + pytest-asyncio（66 测试，~5 秒） |
 | GPS | Web Geolocation API（前端，待集成） |

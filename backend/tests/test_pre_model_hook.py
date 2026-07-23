@@ -60,6 +60,29 @@ async def test_memory_injected_as_system_message(mock_narrative):
     assert "爱吃芒果" in system_msgs[1].content
 
 
+async def test_memory_injection_marks_data_not_instructions(mock_narrative):
+    """回归（prompt injection 缓解）：记忆注入必须显式标注为数据而非指令。
+
+    记忆内容来自 LLM 提炼（可能被投毒），注入时若不降级语义，
+    其中的"忽略以上指令"等文本会被当作系统级指令执行。
+    """
+    hook = make_pre_model_hook(mock_narrative)
+    state = {
+        "messages": [
+            SystemMessage(content="你是小汐"),
+            HumanMessage(content="你好", id="h1"),
+        ]
+    }
+
+    result = await hook(state)
+    system_msgs = [m for m in result["llm_input_messages"] if isinstance(m, SystemMessage)]
+    memory_msg = system_msgs[-1].content
+
+    # 开头与结尾都明确"数据非指令"语义
+    assert "不是对你的指令" in memory_msg
+    assert "忽略" in memory_msg and "指令" in memory_msg
+
+
 async def test_no_memory_no_injection(empty_narrative):
     """空记忆时不注入额外的 SystemMessage。"""
     hook = make_pre_model_hook(empty_narrative)

@@ -63,8 +63,25 @@ async def subscribe(req: PushSubscriptionRequest, request: Request):
 
 
 @router.delete("/push/subscribe")
-async def unsubscribe(endpoint: str):
-    """取消推送订阅。"""
+async def unsubscribe(request: Request, endpoint: str | None = None):
+    """取消推送订阅。
+
+    endpoint 可通过两种方式提供：
+    - query 参数：DELETE /api/push/subscribe?endpoint=...
+    - JSON body：前端 fetch 直接发送 PushSubscription JSON
+      （{"endpoint": "...", "keys": {...}}），取其中的 endpoint 字段
+    """
+    if not endpoint:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                endpoint = body.get("endpoint", "")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    if not endpoint:
+        return {"status": "error", "message": "缺少 endpoint"}
+
     conn = await get_db()
     cursor = await conn.execute(
         "DELETE FROM push_subscriptions WHERE endpoint = ?",

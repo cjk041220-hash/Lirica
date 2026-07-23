@@ -3,6 +3,7 @@ import httpx
 from langchain_core.tools import tool
 from config.settings import get_settings
 from memory import location_store
+from utils.errors import log_tool_error
 from utils.retry import with_retry
 
 # 共享 HTTP 客户端（由 server.py lifespan 注入）
@@ -13,6 +14,22 @@ def set_http_client(client: httpx.AsyncClient):
     """注入共享 HTTP 客户端（在 lifespan 中调用）。"""
     global _shared_client
     _shared_client = client
+
+
+def _to_int(v, default: int = 0) -> int:
+    """高德字段形态不稳定（str / int / 空 list / None 都见过），统一安全转 int。
+
+    实测 transit/integrated 的 walking_distance 在部分响应里是 [] 而非字符串，
+    直接 int() 会抛 TypeError 把整个工具搞崩（被吞成软错误，看似"没联通"）。
+    """
+    if isinstance(v, list):
+        v = v[0] if v else default
+    if v is None or v == "":
+        return default
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
 
 
 @with_retry(max_attempts=2, base_delay=0.5)
@@ -75,7 +92,8 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
             result += "\n\n"
         return result
     except Exception as e:
-        return f"呜，小汐去找的时候迷路了……（{str(e)[:80]}）"
+        log_tool_error("search_nearby", e)
+        return "呜，小汐去找的时候迷路了……过一会儿再试试好不好？"
 
 
 @tool
@@ -94,7 +112,8 @@ async def geocode_address(address: str) -> str:
         gc = data["geocodes"][0]
         return f"📍 {gc.get('formatted_address', address)}：{gc.get('location', '?')}"
     except Exception as e:
-        return f"小汐定位的时候漂走了……（{str(e)[:80]}）"
+        log_tool_error("geocode_address", e)
+        return "小汐定位的时候漂走了……过一会儿再试试好不好？"
 
 
 @tool
@@ -120,7 +139,8 @@ async def fuzzy_search_place(keywords: str, city: str = "香港") -> str:
             result += "\n\n"
         return result
     except Exception as e:
-        return f"小汐被水母绊了一下……（{str(e)[:80]}）"
+        log_tool_error("fuzzy_search_place", e)
+        return "小汐被水母绊了一下……过一会儿再试试好不好？"
 
 
 @tool
@@ -148,8 +168,8 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
             return "小汐没找到公交路线……试试打车？"
 
         t = transits[0]
-        dur = int(t.get("duration", 0))
-        walk = int(t.get("walking_distance", 0))
+        dur = _to_int(t.get("duration"))
+        walk = _to_int(t.get("walking_distance"))
         result = f"🚇 小汐帮你规划好啦！\n"
         result += f"💰 约 {t.get('cost','?')} 元  ⏱️ 约 {dur // 60} 分钟"
         if walk:
@@ -165,12 +185,13 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
                 result += f"  🚌 {bl.get('name','?')}：{dep} → {arr}\n"
             walk_s = seg.get("walking", {})
             if walk_s:
-                d = int(walk_s.get("distance", 0))
+                d = _to_int(walk_s.get("distance"))
                 if d > 100:
                     result += f"  🚶 步行 {d}m\n"
         return result
     except Exception as e:
-        return f"小汐被红绿灯搞晕了……（{str(e)[:80]}）"
+        log_tool_error("get_transit_route", e)
+        return "小汐被红绿灯搞晕了……过一会儿再试试好不好？"
 
 
 @tool
@@ -193,10 +214,15 @@ async def get_cycling_route(origin: str, destination: str, city: str = "香港")
         data = await _amap_request("/v4/direction/bicycling", {
             "origin": og_loc, "destination": dg_loc,
         })
-        paths = (data.get("data") or {}).get("paths", [{}])
+        paths = (data.get("data") or {}).get("paths") or []
+        if not paths:
+            return "小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？"
         p = paths[0]
-        d = int(p.get("distance", 0))
-        t = int(p.get("duration", 0))
+        d = _to_int(p.get("distance"))
+        t = _to_int(p.get("duration"))
+        if d <= 0:
+            return "小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？"
         return f"🚲 {d}m，约 {t // 60} 分钟"
     except Exception as e:
-        return f"小汐骑着骑着漂走了……（{str(e)[:80]}）"
+        log_tool_error("get_cycling_route", e)
+        return "小汐骑着骑着漂走了……过一会儿再试试好不好？"

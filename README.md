@@ -20,10 +20,13 @@ python -m venv .venv
 # 复制 config/.env.example → config/.env，填入 API Key
 .venv/Scripts/python main.py
 
-# 前端（Next.js，开发模式）
+# 前端（Vite + React 19，开发模式）
 cd web
 npm install
-npm run dev        # http://localhost:3000
+npm run dev        # http://localhost:3000，/api 自动代理到 :8000
+
+# 生产一体部署：构建前端，FastAPI 会把 web/dist 挂到 :8000 根路径
+npm run build      # 产出 web/dist，之后只启后端即可（前后端同端口）
 ```
 
 ### Docker 部署
@@ -34,6 +37,29 @@ docker compose up -d
 # 健康检查: http://localhost:8000/api/health
 ```
 
+> ⚠️ **安全部署须知**
+>
+> - docker-compose 默认只把端口绑定到 `127.0.0.1`（仅本机可访问）。
+> - **不要**在未配置 `XIAOXI_API_TOKEN` 的情况下把 `8000` 端口暴露到公网：
+>   空 token 时 API 无认证，任何人都能读取记忆、对话（消耗你的 API 账单）
+>   甚至清空数据库。
+> - 公网部署的正确姿势：前置 Nginx/Caddy 反向代理 + HTTPS + 认证层，
+>   同时设置 `XIAOXI_API_TOKEN`。
+> - 启动日志中出现 `XIAOXI_API_TOKEN 未设置` 警告时，请确认仅本机使用。
+>
+> **部署约束**
+>
+> - 后端为**单用户、单进程**设计：运行时配置、GPS 缓存、限流桶、心跳
+>   调度器都是进程内状态，**只能以单 worker 运行**（main.py / Dockerfile
+>   已按此配置）。多 worker 会导致限流失效与心跳重复。
+> - 数据库为单条 aiosqlite 长连接共享事务，适配低并发个人场景。
+> - 备份文件（`data/backups/`）含记忆/日记/生理期记录，目录权限自动
+>   收紧为 700/600（Linux 生效；Windows 开发机请依赖 NTFS 权限/全盘加密）；
+>   请勿将其置于可被他人读取的位置，也不要提交入 git。
+> - **密钥轮换**：若 `.env` 曾以过宽权限（如 644）存放或被他人读取过，
+>   应视为已泄露——请轮换 DeepSeek / 高德 / Tavily 密钥与 VAPID 私钥，
+>   并在 Linux 服务器上执行 `chmod 600 backend/config/.env`。
+
 ## API 接口
 
 | 端点 | 方法 | 说明 |
@@ -41,9 +67,13 @@ docker compose up -d
 | `/api/chat` | POST | 对话（非流式） |
 | `/api/chat/stream` | POST | 流式对话（SSE，token 级） |
 | `/api/config` | GET | 获取控制台配置 |
-| `/api/config` | POST | 更新配置（模型/温度/思考强度） |
+| `/api/config` | POST | 更新配置（模型/温度/思考强度；部分更新，返回合并后全量） |
 | `/api/health` | GET | 健康检查 |
 | `/api/memories` | GET | 获取记忆列表 |
+| `/api/push/vapid-key` | GET | VAPID 公钥（推送订阅前置） |
+| `/api/push/subscribe` | POST/DELETE | 注册 / 取消推送订阅（DELETE 接受 body 或 query） |
+| `/api/push/unread` | GET | 未读主动消息（心跳生成） |
+| `/api/push/read` | POST | 标记主动消息已读 `{message_ids}` |
 | `/api/memories/{id}` | DELETE | 删除一条记忆 |
 | `/api/memories/export` | GET | 导出所有记忆（JSON） |
 | `/api/memories/clear` | POST | 清空所有记忆（需 `?confirm=true`，自动备份） |
@@ -56,9 +86,16 @@ docker compose up -d
 ├── start.bat                       # Windows 一键启动
 ├── Dockerfile                      # Docker 构建（多阶段）
 ├── docker-compose.yml              # Docker Compose 编排
-├── PROJECT_SOURCE.md               # 完整技术文档
-├── PRODUCT_PLAN.md                 # 产品规划书
-├── PRODUCT_REPORT.md               # 产品审查报告
+├── docs/                           # 文档
+│   ├── PROJECT_SOURCE.md           # 完整技术文档
+│   ├── PRODUCT_REPORT.md           # 产品审查报告
+│   ├── ACCEPTANCE_REPORT_2026-07-23.md  # 前后端一体验收报告（含工具联通实测）
+│   ├── PROMPT_GUIDE.md             # 提示词指南
+│   └── XIAOXI_GUIDE.md             # 小汐使用指南
+│
+├── scripts/                        # 辅助脚本
+│   ├── gen_assets.py               # 生成 PWA 图标 + 立绘 PNG→WebP 压缩
+│   └── e2e/ui_test.cjs             # 浏览器级交互验证（headless Edge，17 交互点）
 │
 ├── backend/
 │   ├── main.py                     # 启动入口（uvicorn）
@@ -126,11 +163,17 @@ docker compose up -d
 │       ├── checkpoints.db          # 对话状态检查点（定期裁剪）
 │       └── backups/                # 自动备份（DB 快照 + 记忆 JSON）
 │
-└── web/                            # 前端（Next.js 16）
+└── web/                            # 前端（Vite 8 + React 19 + Tailwind v4，PWA）
     ├── src/
-    │   ├── app/                    # App Router 页面
-    │   ├── components/             # UI 组件
-    │   └── hooks/                  # 自定义 Hooks（useXiaoxiChat）
+    │   ├── components/             # RoomScene / CharacterSprite / ChatPanel / ConfigPanel / MemoriesPanel …
+    │   ├── hooks/                  # useChat（SSE 流式）/ useConfig / usePush
+    │   └── assets/icons/           # 内联 SVG 图标组件
+    ├── public/
+    │   ├── sprites/                # 9 张角色立绘（WebP，已压缩 21MB→1MB）
+    │   ├── sw.js                   # Service Worker（cache-first + 推送通知）
+    │   └── manifest.json           # PWA manifest
+    ├── dist/                       # 生产构建产物（由 FastAPI 挂载，npm run build 生成）
+    ├── vite.config.js              # 开发期 /api → :8000 代理
     └── package.json
 ```
 
@@ -146,10 +189,10 @@ docker compose up -d
 | 数据库 | SQLite（aiosqlite 异步，WAL 模式） |
 | 对话持久化 | SQLite（langgraph-checkpoint-sqlite） |
 | 心跳调度 | APScheduler（AsyncIOScheduler） |
-| 前端 | Next.js 16 + TypeScript + Tailwind CSS v4 |
-| 动画 | Framer Motion |
+| 前端 | Vite 8 + React 19 + Tailwind CSS v4（PWA，Web Push） |
+| 动画 | CSS / Tailwind 自定义动画（呼吸 / 淡入 / 星空 / 浮云） |
 | 容器化 | Docker 多阶段构建 |
-| 测试 | pytest + pytest-asyncio（66 测试，~5 秒） |
+| 测试 | pytest + pytest-asyncio（160 测试，~12 秒）+ 浏览器 E2E（17 交互点） |
 
 ## 核心能力
 
@@ -187,6 +230,10 @@ docker compose up -d
 | `TAVILY_API_KEY` | ❌ | Tavily Key（搜索功能需要） |
 | `XIAOXI_API_TOKEN` | ❌ | API 认证 Token（部署公网时设置） |
 | `CORS_ORIGINS` | ❌ | 允许的前端来源，逗号分隔 |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | ❌ | Web Push 密钥（不填则推送不可用，前端开关自动灰态） |
+| `TRUST_PROXY` | ❌ | 是否在可信反代后信任 X-Forwarded-For（限流 IP 归因） |
+
+> **SSE 流协议**（`/api/chat/stream`）：每行 `data: <json>\n\n`，JSON 为 `{"content":"增量"}` / `{"type":"tool_start"|"tool_end",...}` / `{"type":"state","state":"happy"}`，结尾 `data: [DONE]\n\n` 后关流。
 
 ## 测试
 
@@ -198,4 +245,4 @@ cd backend
 
 ## 版本
 
-**v0.4.2**
+**v0.4.4**

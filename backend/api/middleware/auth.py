@@ -1,8 +1,12 @@
 """认证 + 限流中间件。
 
 - 如果配置了 XIAOXI_API_TOKEN，则对受保护路径要求 Bearer Token
-- 对聊天和记忆端点做基于 IP 的速率限制
+- 对聊天、配置、记忆、推送端点做基于 IP 的速率限制
+- X-Forwarded-For 仅在显式开启 trust_proxy（部署在可信反向代理之后）时
+  才用于限流归因，否则攻击者可伪造 XFF 完全绕过限流
+- Token 比较使用 hmac.compare_digest（常量时间，防时序侧信道）
 """
+import hmac
 import time
 
 from fastapi.responses import JSONResponse
@@ -10,7 +14,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 # 受保护的 API 路径前缀（需要 Bearer Token 认证）
-_PROTECTED_PREFIXES = ("/api/chat", "/api/config", "/api/memories")
+_PROTECTED_PREFIXES = ("/api/chat", "/api/config", "/api/memories", "/api/push")
+
+# 公开端点白名单（即使配置了 token 也免认证）：
+# vapid-key 仅返回 VAPID 公钥，是前端发起订阅前的必需信息，不含敏感数据
+_PUBLIC_PATHS = ("/api/push/vapid-key",)
 
 # 简单的内存限流器（每 IP）
 _rate_buckets: dict[str, list[float]] = {}
@@ -19,6 +27,7 @@ _RATE_LIMITS = {
     "/api/chat": 10,       # 聊天：10 次/分钟
     "/api/config": 10,     # 配置：10 次/分钟
     "/api/memories": 30,   # 记忆管理：30 次/分钟
+    "/api/push": 30,       # 推送订阅/已读：30 次/分钟
 }
 
 
@@ -42,14 +51,20 @@ def _cleanup_stale_buckets():
 # ── 辅助函数 ──────────────────────────────────────────────────
 
 
-def _get_client_ip(scope: Scope) -> str:
-    """从 ASGI scope 提取客户端 IP。"""
-    # 优先取 X-Forwarded-For（如有反向代理）
-    headers = dict(scope.get("headers", []))
-    forwarded = headers.get(b"x-forwarded-for")
-    if forwarded:
-        return forwarded.decode().split(",")[0].strip()
-    # 回退到直连 IP
+def _get_client_ip(scope: Scope, trust_proxy: bool = False) -> str:
+    """从 ASGI scope 提取客户端 IP。
+
+    默认（trust_proxy=False）只使用直连 IP——无条件信任 X-Forwarded-For
+    会让攻击者每个请求伪造一个新"IP"，完全绕过限流。
+    仅当明确部署在可信反向代理之后（trust_proxy=True）时，才读取 XFF
+    的最右侧值（由可信代理追加的真实客户端 IP，攻击者注入的在更左侧）。
+    """
+    if trust_proxy:
+        headers = dict(scope.get("headers", []))
+        forwarded = headers.get(b"x-forwarded-for")
+        if forwarded:
+            return forwarded.decode().split(",")[-1].strip()
+    # 直连 IP
     client = scope.get("client")
     if client:
         return client[0]
@@ -62,6 +77,21 @@ def _get_path_prefix(path: str) -> str | None:
         if path.startswith(prefix):
             return prefix
     return None
+
+
+def _is_public_path(path: str) -> bool:
+    """是否为免认证的公开端点。"""
+    return path in _PUBLIC_PATHS
+
+
+def _token_matches(provided_auth_header: str, expected_token: str) -> bool:
+    """常量时间比较 Bearer Token，防时序侧信道。"""
+    if not provided_auth_header.startswith("Bearer "):
+        return False
+    provided = provided_auth_header[len("Bearer "):]
+    if not provided:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), expected_token.encode("utf-8"))
 
 
 def _check_rate(path: str, ip: str) -> bool:
@@ -106,9 +136,10 @@ def _check_rate(path: str, ip: str) -> bool:
 class AuthAndRateLimitMiddleware:
     """认证 + 限流中间件。"""
 
-    def __init__(self, app: ASGIApp, api_token: str):
+    def __init__(self, app: ASGIApp, api_token: str, trust_proxy: bool = False):
         self.app = app
         self.api_token = api_token
+        self.trust_proxy = trust_proxy
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] != "http":
@@ -117,7 +148,7 @@ class AuthAndRateLimitMiddleware:
 
         path: str = scope.get("path", "")
         method: str = scope.get("method", "")
-        ip = _get_client_ip(scope)
+        ip = _get_client_ip(scope, trust_proxy=self.trust_proxy)
         prefix = _get_path_prefix(path)
 
         # ── 速率限制 ──
@@ -134,11 +165,10 @@ class AuthAndRateLimitMiddleware:
                 return
 
         # ── 认证 ──
-        if prefix and self.api_token:
+        if prefix and self.api_token and not _is_public_path(path):
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"").decode()
-            expected = f"Bearer {self.api_token}"
-            if auth != expected:
+            if not _token_matches(auth, self.api_token):
                 # OPTIONS 预检不需要认证
                 if method != "OPTIONS":
                     response = JSONResponse(

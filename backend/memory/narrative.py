@@ -7,6 +7,11 @@ v2 重构：
 """
 from memory.manager import MemoryManager
 
+# 单条记忆注入长度上限（字符）：
+# - 控制注入 token 预算（max_items=5 时总量可控）
+# - 收敛 prompt injection 的攻击面（纵深防御第二层）
+_MAX_ITEM_LEN = 200
+
 
 class NarrativeBuilder:
     """将记忆列表构建为适合注入系统提示词的叙述文本。
@@ -36,10 +41,13 @@ class NarrativeBuilder:
             return ""
 
         # 按类别分组（memories 已由 recent() 按时间正序排列）
+        # 每条内容压平换行（防止伪造叙事结构）并截断超长内容
         grouped: dict[str, list[str]] = {}
         for m in memories:
             cat = m.get("category", "其他")
-            content = m.get("content", "")
+            content = " ".join(m.get("content", "").split())
+            if len(content) > _MAX_ITEM_LEN:
+                content = content[:_MAX_ITEM_LEN] + "……"
             if cat not in grouped:
                 grouped[cat] = []
             grouped[cat].append(content)

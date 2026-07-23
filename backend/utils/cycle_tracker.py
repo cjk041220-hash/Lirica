@@ -33,12 +33,14 @@ async def add_record(date_str: str, note: str = "") -> bool:
     """
     conn = await get_db()
     try:
-        await conn.execute(
+        cursor = await conn.execute(
             "INSERT OR IGNORE INTO cycle_records (start_date, note) VALUES (?, ?)",
             (date_str, note),
         )
         await conn.commit()
-        return True
+        # INSERT OR IGNORE 命中 UNIQUE 冲突时静默跳过且 rowcount=0，
+        # 用 rowcount 区分真实插入与重复日期（修复：此前恒返回 True）
+        return cursor.rowcount > 0
     except Exception as e:
         log.error("生理期记录插入失败: %s", e)
         return False

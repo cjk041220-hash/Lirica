@@ -163,38 +163,28 @@ async def check_and_proactive_message(app=None):
         # 主动消息（判断是否触发 → 生成 → 存储 → 推送）
         await _try_proactive_message(mood, daily_event, hour)
 
-    except Exception as e:
-        log.error("生命状态更新失败：%s", e)
+    except Exception:
+        log.exception("生命状态更新失败")
 
 
 async def _refresh_agent(app):
     """重建 system prompt（读取最新 life_state）并热替换 agent 实例。
 
+    委托给配置模块的统一重建入口 rebuild_agent_for_app：
+    - 始终按当前运行时配置（模型/思考强度）重建 LLM，
+      心跳绝不会回滚用户通过 POST /api/config 设置的参数；
+    - 与配置变更路径共享同一把 asyncio.Lock，消除并发重建竞态。
+
     CPython GIL 保证 app.state.agent 的引用赋值是原子的。
     进行中的请求持有旧 agent 引用继续完成，新请求拿到新 agent。
     """
     try:
-        from agent.soul import build_system_prompt
-        from agent.graph import build_agent, make_pre_model_hook
+        from api.routes.config import rebuild_agent_for_app
 
-        system_prompt = await build_system_prompt()
-
-        # 创建 pre_model_hook（记忆注入）
-        narrative_builder = getattr(app.state, "narrative_builder", None)
-        pre_model_hook = make_pre_model_hook(narrative_builder)
-
-        agent = build_agent(
-            app.state.model,
-            app.state.tools,
-            system_prompt,
-            app.state.checkpointer,
-            pre_model_hook,
-        )
-        app.state.system_prompt = system_prompt
-        app.state.agent = agent
+        await rebuild_agent_for_app(app)
         log.info("系统提示词已刷新（生命状态更新）")
-    except Exception as e:
-        log.error("系统提示词刷新失败：%s", e)
+    except Exception:
+        log.exception("系统提示词刷新失败")
 
 
 async def _periodic_maintenance():

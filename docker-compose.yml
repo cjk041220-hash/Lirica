@@ -4,7 +4,10 @@ services:
     container_name: xiaoxi
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # 默认只绑定回环地址，防止无认证暴露公网。
+      # 局域网/公网访问请前置 Nginx/Caddy 等反向代理并配置认证，
+      # 或确认已设置 XIAOXI_API_TOKEN 后再改为 "8000:8000"。
+      - "127.0.0.1:8000:8000"
     env_file:
       - backend/config/.env
     volumes:

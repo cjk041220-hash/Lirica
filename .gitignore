@@ -45,3 +45,6 @@ web/out/
 .DS_Store
 Thumbs.db
 main.py
+
+# 前端 E2E 截图（测试产物）
+scripts/e2e/shots/

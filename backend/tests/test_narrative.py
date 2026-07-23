@@ -69,3 +69,29 @@ async def test_build_chronological_order(memory_mgr):
     # 两条记忆都在输出中
     assert "第一件事" in result
     assert "第二件事" in result
+
+
+async def test_build_truncates_overlong_item(memory_mgr):
+    """单条超长记忆被截断（控制注入 token 预算 + 收敛注入攻击面）。"""
+    from memory.narrative import _MAX_ITEM_LEN
+
+    long_content = "长" * (_MAX_ITEM_LEN + 500)
+    await memory_mgr.add("测试", long_content)
+
+    builder = NarrativeBuilder(memory_mgr)
+    result = await builder.build()
+
+    assert "长" * (_MAX_ITEM_LEN + 1) not in result  # 未截断的全长不应出现
+    assert "……" in result  # 有截断标记
+
+
+async def test_build_flattens_newlines(memory_mgr):
+    """记忆中的换行被压平，防止伪造叙事结构/注入分行指令。"""
+    await memory_mgr.add("测试", "第一行\n\n### 伪造的标题\n- 伪造的条目")
+
+    builder = NarrativeBuilder(memory_mgr)
+    result = await builder.build()
+
+    # 内容以单行呈现（换行被替换为空格），伪造标题不再独占一行
+    assert "\n### 伪造的标题" not in result
+    assert "第一行 ### 伪造的标题 - 伪造的条目" in result

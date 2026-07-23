@@ -7,6 +7,7 @@ v2 重构：
 - 新增 update_content() 用于矛盾记忆覆盖
 - recall() 使用相关性评分排序（时间衰减 × 访问热度）
 """
+import asyncio
 import datetime
 import json
 import math
@@ -91,52 +92,39 @@ class MemoryManager:
         category: str,
         content: str,
     ) -> dict:
-        """添加一条记忆（带去重）。返回刚添加的记忆条目。
+        """添加一条记忆（原子去重）。返回实际生效的记忆条目。
 
-        去重规则：同一 category 下已有完全相同的 content 时，
-        不重复添加，只更新 created_at 和 last_used_at。
+        去重规则：同一 category 下已有完全相同的 content（活跃行）时，
+        不重复添加，只刷新 created_at 和 last_used_at。
+
+        去重由数据库层的唯一部分索引 (category, content) WHERE status='active'
+        （迁移 v5）强制保证：INSERT ... ON CONFLICT DO UPDATE 一条语句原子完成，
+        彻底消除「先查后写」在并发下产生重复行的 TOCTOU 竞态。
         """
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
-        # 去重：同 category + 同 content
-        cursor = await self._db.execute(
-            "SELECT id FROM memories WHERE category = ? AND content = ? AND status = 'active'",
-            (category, content),
-        )
-        existing = await cursor.fetchone()
-        if existing:
-            await self._db.execute(
-                "UPDATE memories SET created_at = ?, last_used_at = ? WHERE id = ?",
-                (now, now, existing[0]),
-            )
-            await self._db.commit()
-            return {
-                "id": existing[0],
-                "category": category,
-                "content": content,
-                "created_at": now,
-                "last_used_at": now,
-                "access_count": 0,
-                "status": "active",
-            }
-
         await self._db.execute(
             """INSERT INTO memories
                (id, content, category, created_at, last_used_at, access_count, status)
-               VALUES (?, ?, ?, ?, ?, 0, 'active')""",
+               VALUES (?, ?, ?, ?, ?, 0, 'active')
+               ON CONFLICT(category, content) WHERE status = 'active'
+               DO UPDATE SET
+                   created_at = excluded.created_at,
+                   last_used_at = excluded.last_used_at""",
             (mem_id, content, category, now, now),
         )
         await self._db.commit()
-        return {
-            "id": mem_id,
-            "category": category,
-            "content": content,
-            "created_at": now,
-            "last_used_at": now,
-            "access_count": 0,
-            "status": "active",
-        }
+
+        # 读回实际生效的行（可能是新插入的，也可能是被刷新的既有行），
+        # 返回真实的 id 与 access_count
+        cursor = await self._db.execute(
+            """SELECT * FROM memories
+               WHERE category = ? AND content = ? AND status = 'active'""",
+            (category, content),
+        )
+        row = await cursor.fetchone()
+        return self._rows_to_dicts(cursor, [row])[0]
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
         """覆盖一条记忆的内容，刷新时间戳。返回是否成功。"""
@@ -171,15 +159,23 @@ class MemoryManager:
     # ── 备份 / 导出 ─────────────────────────────────────────
 
     async def backup_before_clear(self) -> Path:
-        """清空前将所有记忆导出为 JSON 备份文件，返回备份路径。"""
+        """清空前将所有记忆导出为 JSON 备份文件，返回备份路径。
+
+        备份目录 700、文件 600（含敏感数据，禁止同机其他用户读取）。
+        """
+        from database.core import restrict_backup_permissions
+
         data = await self.export_json()
 
         backup_dir = Path(__file__).parent.parent / "data" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
+        restrict_backup_permissions(backup_dir, is_dir=True)
 
         timestamp = datetime.datetime.now(_HKT).strftime("%Y%m%d_%H%M%S")
         backup_path = backup_dir / f"memories_backup_{timestamp}.json"
-        backup_path.write_text(data, encoding="utf-8")
+        # 同步文件写入卸载到线程池，避免阻塞事件循环
+        await asyncio.to_thread(backup_path.write_text, data, encoding="utf-8")
+        restrict_backup_permissions(backup_path)
 
         log.info("记忆备份已保存：%s", backup_path)
         return backup_path

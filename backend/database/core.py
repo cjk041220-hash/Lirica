@@ -2,9 +2,19 @@
 
 维护一个全局的 aiosqlite 长连接，所有模块通过 get_db() 获取。
 启动时由 server.py lifespan 调用 init_db_connection() 建立连接并执行 PRAGMA。
+
+⚠️ 单连接约束（架构前提，勿轻易改动）：
+整个进程只有一条 aiosqlite 长连接，被所有协程共享。aiosqlite 将操作
+串行化到单一后台线程，因此不会损坏数据，但各协程共享同一事务上下文、
+彼此没有隔离。这套设计成立的前提是：
+- 单用户、低并发的个人陪伴场景；
+- uvicorn 单 worker 运行（多 worker 会各自持有连接与内存态，限流/
+  缓存/心跳全部失真）。
+若未来并发上升或需要多 worker，须引入连接池并将进程内状态外置。
 """
 import asyncio
 import datetime
+import os
 from datetime import timezone, timedelta
 from pathlib import Path
 
@@ -18,6 +28,22 @@ DB_PATH = Path(__file__).parent.parent / "data" / "userdata.db"
 
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
 _HKT = timezone(timedelta(hours=8))
+
+# ── 权限收紧 ────────────────────────────────────────────────
+
+
+def restrict_backup_permissions(path: Path, *, is_dir: bool = False) -> None:
+    """收紧备份文件/目录权限：目录 700、文件 600（仅属主可读写）。
+
+    备份含记忆、日记、生理期记录等高敏数据，不应允许同机其他用户读取。
+    Windows 下 chmod 语义有限（仅切换只读位），失败时静默忽略，
+    不影响备份主流程。
+    """
+    try:
+        os.chmod(path, 0o700 if is_dir else 0o600)
+    except Exception as e:
+        log.debug("收紧权限失败（%s）：%s", path, e)
+
 
 # ── 全局长连接 ──────────────────────────────────────────────
 
@@ -127,11 +153,19 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     """)
     await conn.commit()
 
-    # 索引（幂等，IF NOT EXISTS）
-    # 只需一个复合索引，最左列覆盖 category-only 查询
+    # 执行数据库迁移（幂等，检查并应用未执行的迁移）
+    # 必须在创建索引之前执行：索引引用的是迁移后的最终 schema
+    # （如 memories.status），若在旧版表上先建索引会因列不存在而
+    # 直接报错，导致旧数据库永远无法启动新版本（v0.4.3 修复）。
+    from database.migrations import ensure_schema
+    await ensure_schema(conn)
+
+    # 索引（幂等，IF NOT EXISTS）——此时 schema 已保证为最终形态
+    # memories(category, content) 为活跃行唯一部分索引（迁移 v5 建立），
+    # 与 manager.add 的 ON CONFLICT 推断条件保持一致；此处定义必须同步
     await conn.executescript("""
-        CREATE INDEX IF NOT EXISTS idx_memories_cat_content
-            ON memories(category, content);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
+            ON memories(category, content) WHERE status = 'active';
 
         CREATE INDEX IF NOT EXISTS idx_memories_status
             ON memories(status);
@@ -147,10 +181,6 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             ("开心", "刚刚醒来，映海还很安静", now),
         )
         await conn.commit()
-
-    # 执行数据库迁移（幂等，检查并应用未执行的迁移）
-    from database.migrations import ensure_schema
-    await ensure_schema(conn)
 
 
 # ── Checkpoint 裁剪 ───────────────────────────────────────────
@@ -241,6 +271,7 @@ async def backup_database(
         return None
 
     backup_dir.mkdir(parents=True, exist_ok=True)
+    restrict_backup_permissions(backup_dir, is_dir=True)
 
     timestamp = datetime.datetime.now(_HKT).strftime("%Y%m%d_%H%M%S")
     backup_path = backup_dir / f"userdata_backup_{timestamp}.db"
@@ -249,6 +280,7 @@ async def backup_database(
         async with aiosqlite.connect(str(source_path)) as src:
             async with aiosqlite.connect(str(backup_path)) as dst:
                 await src.backup(dst)
+        restrict_backup_permissions(backup_path)
     except Exception as e:
         log.error("数据库备份失败：%s", e)
         return None

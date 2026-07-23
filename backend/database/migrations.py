@@ -20,7 +20,9 @@ log = get_logger(__name__)
 #     time→created_at，新增 access_count/status，删除冗余索引
 # v3: 主动消息系统 — 新增 proactive_messages + push_subscriptions 表
 # v4: 生理期追踪 — 新增 cycle_records 表
-SCHEMA_VERSION = 4
+# v5: 记忆去重原子化 — 清理存量重复 + (category, content) 活跃行
+#     唯一部分索引，配合 manager.add 的 INSERT ... ON CONFLICT
+SCHEMA_VERSION = 5
 
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
@@ -186,6 +188,60 @@ async def _migrate_v4(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[4] = _migrate_v4
+
+
+# ── v5 迁移：记忆去重原子化 ──────────────────────────────────
+
+async def _migrate_v5(conn: aiosqlite.Connection) -> None:
+    """v5: 记忆去重下沉到数据库层。
+
+    此前去重靠 manager.add「先查后写」，且 idx_memories_cat_content 是
+    普通索引——心跳与聊天并发写入同一 (category, content) 时，两个协程
+    都能通过 SELECT 检查并各自 INSERT，产生重复行。
+
+    本迁移：
+    1. 清理存量重复：同一 (category, content) 的活跃行只保留最近使用的
+       一条（重复行内容完全相同，删除无信息损失）；
+    2. 将 idx_memories_cat_content 重建为唯一部分索引（仅约束 active 行）。
+       选择部分索引是因为已删除/被覆盖的记忆（status != 'active'）不应
+       阻止重新记住相同内容。
+    3. 此后 manager.add 用 INSERT ... ON CONFLICT(category, content)
+       WHERE status = 'active' DO UPDATE 原子去重，彻底消除 TOCTOU。
+    """
+    # 1. 清理存量重复活跃行（保留 last_used_at/created_at 最新的一条）
+    cursor = await conn.execute("""
+        DELETE FROM memories
+        WHERE status = 'active'
+          AND id NOT IN (
+              SELECT id FROM (
+                  SELECT id,
+                         ROW_NUMBER() OVER (
+                             PARTITION BY category, content
+                             ORDER BY COALESCE(last_used_at, created_at) DESC,
+                                      created_at DESC
+                         ) AS rn
+                  FROM memories
+                  WHERE status = 'active'
+              )
+              WHERE rn = 1
+          )
+    """)
+    removed = cursor.rowcount
+
+    # 2. 重建为唯一部分索引（与 manager.add 的 ON CONFLICT 推断条件一致）
+    await conn.execute("DROP INDEX IF EXISTS idx_memories_cat_content")
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
+            ON memories(category, content) WHERE status = 'active'
+    """)
+
+    await conn.commit()
+    if removed:
+        log.info("迁移 v5：清理了 %d 条重复记忆", removed)
+    log.info("迁移 v5 完成：记忆去重唯一索引已建立")
+
+
+_migrations[5] = _migrate_v5
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 小汐的房间 · 前端
 
-## Getting Started
+Vite 8 + React 19 + Tailwind CSS 4 的单屏移动端 PWA。立绘按角色状态切换（WebP），天空随时辰变化，聊天面板可拖拽，支持 Web Push 主动消息。
 
-First, run the development server:
+## 开发
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000，/api 自动代理到 http://localhost:8000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+开发时后端（FastAPI）需同时在 `127.0.0.1:8000` 运行。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 构建
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build    # 产出 dist/
+```
 
-## Learn More
+`dist/` 由后端 `backend/api/server.py` 挂载到根路径 `:8000`，生产环境只需访问后端即可拿到前后端一体的服务。
 
-To learn more about Next.js, take a look at the following resources:
+## 后端接口约定
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+所有请求经 `/api` 前缀，详见后端路由：
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/chat/stream` | SSE 流式对话，请求 `{message, session_id}` |
+| GET/POST | `/api/config` | 模型 / 思考强度（thinking_intensity）/ 温度 |
+| GET | `/api/memories` | 记忆列表 |
+| GET | `/api/push/vapid-key` | VAPID 公钥 |
+| GET | `/api/push/unread` | 未读主动消息 |
+| POST/DELETE | `/api/push/subscribe` | 注册 / 取消推送订阅 |
+| POST | `/api/push/read` | 标记已读 `{message_ids}` |
 
-## Deploy on Vercel
+SSE 流协议：每行 `data: <json>\n\n`，JSON 形如 `{"content":"增量文本"}` / `{"type":"tool_start",...}` / `{"type":"state","state":"happy"}`，结尾 `data: [DONE]\n\n` 后关流。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 目录
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `src/hooks/` — `useChat`（对话状态机 + SSE）、`useConfig`（设置）、`usePush`（Web Push）
+- `src/components/` — `RoomScene`（场景）、`CharacterSprite`（立绘）、`ChatPanel`/`ChatInput`、`ConfigPanel`、`MemoriesPanel`、`MessageBubble`
+- `public/sprites/` — 9 张角色立绘（WebP，已压缩）
+- `public/sw.js` — Service Worker：cache-first（跳过 `/api`）+ 推送通知
+- `scripts/gen_assets.py` — 生成 PWA 图标 / 立绘 PNG→WebP 的工具

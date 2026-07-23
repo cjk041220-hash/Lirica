@@ -38,6 +38,10 @@ async def tmp_db(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             start_date TEXT NOT NULL UNIQUE, note TEXT
         );
+        -- 与生产 schema 一致（迁移 v5）：记忆去重唯一部分索引，
+        -- manager.add 的 ON CONFLICT 推断依赖此约束存在
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
+            ON memories(category, content) WHERE status = 'active';
     """)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致）
     await conn.execute(

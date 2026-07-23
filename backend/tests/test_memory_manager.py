@@ -238,3 +238,36 @@ async def test_all_excludes_non_active(memory_mgr):
     result = await memory_mgr.all()
     assert len(result) == 1
     assert result[0]["content"] == "active_one"
+
+
+# ── #24 回归：去重原子化 ─────────────────────────────────────
+
+
+async def test_add_concurrent_same_content_dedups(memory_mgr):
+    """回归：并发写入同一 (category, content) 只产生 1 行（DB 层去重）。
+
+    旧版「先查后写」在心跳与聊天并发时可产生重复行。
+    """
+    import asyncio
+
+    await asyncio.gather(*(memory_mgr.add("并发类别", "相同内容") for _ in range(5)))
+
+    cursor = await memory_mgr._db.execute(
+        "SELECT COUNT(*) FROM memories "
+        "WHERE category = '并发类别' AND content = '相同内容' AND status = 'active'"
+    )
+    assert (await cursor.fetchone())[0] == 1
+
+
+async def test_add_duplicate_returns_existing_entry_with_real_access_count(memory_mgr):
+    """回归：重复添加返回既有行，access_count 为真实值（旧版硬编码 0）。"""
+    first = await memory_mgr.add("类别X", "内容A")
+
+    await memory_mgr._db.execute(
+        "UPDATE memories SET access_count = 3 WHERE id = ?", (first["id"],)
+    )
+    await memory_mgr._db.commit()
+
+    second = await memory_mgr.add("类别X", "内容A")
+    assert second["id"] == first["id"]
+    assert second["access_count"] == 3

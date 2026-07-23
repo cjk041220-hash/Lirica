@@ -5,6 +5,15 @@ v2 重构：
 - update_memory: 新增工具，用于覆盖矛盾旧记忆
 - recall: 使用相关性评分排序（由 manager 层实现）
 - 所有工具适配新 schema 字段名
+
+v2.1 修复：
+- remember: 改为「先存储，再展示同类别旧记忆供矛盾检测」。
+  旧版在同类别已有记忆时拒绝写入并提示"再次调用确认"，但再次调用仍会
+  命中同一分支，形成死循环——同类别第二条起的记忆永远存不进去。
+  新版始终写入（manager 层对完全相同的内容自动去重），并把旧记忆作为
+  附加上下文返回；矛盾处理交给 update_memory / delete_memory。
+- recall: mems[-10:] → mems[:10]。manager.recall 按相关性降序排列
+  （最相关在前），旧版截尾部导致展示的恰是最不相关的 10 条。
 """
 from langchain_core.tools import tool
 from memory.manager import MemoryManager
@@ -23,9 +32,10 @@ def set_memory_manager(mgr: MemoryManager):
 async def remember(category: str, content: str) -> str:
     """让小汐记住一件事。冷冷说了关于自己的重要信息时主动调用。
 
-    如果同类别下已有记忆，会展示给你看。如果发现矛盾（比如以前说爱吃火锅，现在说不爱了），
-    请调用 update_memory(id, new_content) 覆盖旧记忆。
-    如果不矛盾，再次调用 remember 确认存储即可。
+    新记忆会被直接保存。如果同类别下已有相关记忆，会一并展示给你：
+    若发现新旧矛盾（比如以前说爱吃火锅，现在说不爱了），
+    请调用 update_memory(memory_id, new_content) 覆盖旧的那条，
+    或用 delete_memory(memory_id) 删掉过时的记忆。
 
     Args:
         category: 记忆类别，如「冷冷喜欢的」「去过的地方」「重要的事」
@@ -35,28 +45,30 @@ async def remember(category: str, content: str) -> str:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
 
-        # 查询同类别现有记忆（用于矛盾检测）
-        existing = await _memory_manager.recall_by_category(category, limit=5)
+        # 先保存新记忆（manager 层对完全相同的 category+content 自动去重，
+        # 因此重复调用不会产生重复行，只会刷新时间戳）
+        saved = await _memory_manager.add(category, content)
 
-        if existing:
-            # 展示现有记忆，引导 LLM 决定新增还是覆盖
-            lines = [f"小汐在映海的「{category}」里已经记住了这些：\n"]
-            for m in existing:
-                lines.append(f"  📌 [{m['id']}] {m['content']}")
-            lines.append(f"\n新记忆：{content}")
-            lines.append("")
-            lines.append(
-                "如果新记忆和旧记忆矛盾（比如偏好变了），"
-                "请调用 update_memory(memory_id, new_content) 覆盖旧的那条。"
-            )
-            lines.append(
-                "如果不矛盾，请再次调用 remember(category, content) 确认存储。"
-            )
-            return "\n".join(lines)
+        # 再查同类别的其他记忆（按创建时间倒序，刚存的会在其中，按 id 排除），
+        # 作为矛盾检测的上下文返回给 LLM
+        others = [
+            m for m in await _memory_manager.recall_by_category(category, limit=6)
+            if m.get("id") != saved["id"]
+        ][:5]
 
-        # 无冲突，直接存储
-        await _memory_manager.add(category, content)
-        return f"✨ 小汐帮你收好啦！放在映海的「{category}」里。"
+        if not others:
+            return f"✨ 小汐帮你收好啦！放在映海的「{category}」里。（ID: {saved['id']}）"
+
+        lines = [f"✨ 小汐把新记忆收好啦！放在映海的「{category}」里。（ID: {saved['id']}）"]
+        lines.append("这个类别下之前还记着这些：")
+        for m in others:
+            lines.append(f"  📌 [{m['id']}] {m['content']}")
+        lines.append(
+            "如果新记忆和哪条旧记忆矛盾（比如偏好变了），"
+            "请调用 update_memory(memory_id, new_content) 覆盖旧的那条，"
+            "或用 delete_memory(memory_id) 删掉过时的。不矛盾就不用管。"
+        )
+        return "\n".join(lines)
 
     except Exception as e:
         return f"呜，小汐没接住这段记忆……（{str(e)[:100]}）"
@@ -105,8 +117,9 @@ async def recall(category: str = "") -> str:
                 return "小汐还没有记住什么事情呢……映海里空空的。"
             header = "🐋 小汐记得这些事：\n\n"
 
+        # manager.recall 按相关性降序返回（最相关在前），取前 10 条
         result = header
-        for m in mems[-10:]:
+        for m in mems[:10]:
             result += f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** ({m.get('created_at', '')})\n"
             result += f"   {m.get('content', '')}\n\n"
 

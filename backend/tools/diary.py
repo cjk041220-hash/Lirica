@@ -42,27 +42,28 @@ async def write_diary(content: str) -> str:
         today_iso = datetime.datetime.now(_HKT).date().isoformat()
         today_title = datetime.datetime.now(_HKT).strftime("%m月%d日")
 
-        # 同日去重：已有今日日记则更新内容
+        # 先查一次，仅用于决定回复措辞（「更新」vs「写好」）。
+        # 写入正确性由下面的原子 UPSERT 保证：即使两个协程同时写同一天，
+        # 也只会有一个赢家覆盖，绝不触发 IntegrityError（旧的"先查后插"
+        # 在并发下会有一边插入冲突、日记被静默丢失）
         cursor = await _db_conn.execute(
-            "SELECT date FROM diaries WHERE date = ?", (today_iso,)
+            "SELECT 1 FROM diaries WHERE date = ?", (today_iso,)
         )
-        existing = await cursor.fetchone()
+        existed = await cursor.fetchone() is not None
 
-        if existing:
-            await _db_conn.execute(
-                "UPDATE diaries SET title = ?, content = ? WHERE date = ?",
-                (today_title, content, today_iso),
-            )
-            msg = "📖 小汐更新了今天的日记！"
-        else:
-            await _db_conn.execute(
-                "INSERT INTO diaries (date, title, content) VALUES (?, ?, ?)",
-                (today_iso, today_title, content),
-            )
-            msg = "📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
-
+        # 同日去重：ON CONFLICT(date) 原子 UPSERT
+        await _db_conn.execute(
+            """INSERT INTO diaries (date, title, content) VALUES (?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                   title = excluded.title,
+                   content = excluded.content""",
+            (today_iso, today_title, content),
+        )
         await _db_conn.commit()
-        return msg
+
+        if existed:
+            return "📖 小汐更新了今天的日记！"
+        return "📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
     except Exception as e:
         return f"小汐写日记的时候弄翻了墨水瓶……（{str(e)[:100]}）"
 

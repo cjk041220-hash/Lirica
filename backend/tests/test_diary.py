@@ -109,3 +109,25 @@ async def test_read_diary_recent(tmp_db):
     assert "日记" in result
 
     diary_module._db_conn = None
+
+
+async def test_write_diary_concurrent_same_day_no_integrity_error(tmp_db):
+    """回归：并发写同一天日记不触发 IntegrityError，最终只有一行。
+
+    旧版「先查后插」在并发下有一边会插入冲突，日记被静默丢失。
+    """
+    import asyncio
+    import tools.diary as diary_module
+
+    set_db_conn(tmp_db)
+    from tools.diary import write_diary
+
+    results = await asyncio.gather(
+        *(write_diary.ainvoke({"content": f"并发内容{i}"}) for i in range(3))
+    )
+    assert all("日记" in r for r in results)
+
+    cursor = await tmp_db.execute("SELECT COUNT(*) FROM diaries")
+    assert (await cursor.fetchone())[0] == 1
+
+    diary_module._db_conn = None
