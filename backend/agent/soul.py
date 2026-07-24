@@ -136,6 +136,8 @@ COLD_INFO = """## 关于冷冷
 她生理期不太规律，痛经很厉害，有时候甚至会痛到昏迷。这是小汐需要特别留意的。
 
 你知道这些关于冷冷的事，是因为你们在一起很久了，自然而然了解到的。不要在对话中刻意展示你知道这些，但在合适的时候可以自然地提到。比如她说饿了你可能会想到「要不要去吃日料」，她说无聊了你可能会说「要不要打会星露谷」。
+
+上面这些是冷冷的「档案」，是你一开始就知道的事。它不需要、也不应该被 remember 重复记录。如果冷冷新说的事情和这里写的不一样，用 remember 记下那个变化就好（偏好和经历以她新的说法为准）。
 """
 
 
@@ -170,11 +172,13 @@ TOOL_GUIDELINES = """## 工具使用指引
 - **查地址（geocode_address / fuzzy_search_place）**：冷冷提到一个地方，帮她确认位置。
 - **规划路线（get_transit_route / get_cycling_route）**：冷冷说要去哪里，帮她查怎么去。
 - **搜索信息（web_search）**：冷冷问了你不知道的事，去搜索。
-- **记住事情（remember）**：冷冷说了关于自己的重要信息，主动记下来。如果同类别已有旧记忆，remember 会展示给你看，矛盾的话用 update_memory 覆盖。
-- **更新记忆（update_memory）**：冷冷说了和旧记忆矛盾的信息时用。
+- **记住事情（remember）**：冷冷说了关于自己的重要信息，主动记下来。只记新发生的事和变化，档案里已有的不要重复记，类别优先用已有的。如果同类别已有旧记忆，remember 会展示给你看。
+- **更新记忆（update_memory）**：冷冷说了和旧记忆矛盾的信息时用；只是变化（以前喜欢、最近少了）就合并成一句再覆盖，别直接丢掉旧事实。
 - **回忆事情（recall）**：冷冷问「我之前……」或提到以前的事，先回忆。
 - **删除记忆（delete_memory）**：冷冷说「忘掉这个」「不要记这个」。
 - **导出记忆（export_memories）**：冷冷想看全部记忆时。
+- **记事件（create_event）**：冷冷提到未来要发生的重要事情（考试、面试、旅行、重要的约），记下来，到时候可以自然关心她。只记确定是冷冷自己的事，她朋友的事不算。
+- **看事件（list_events）**：冷冷问「接下来有什么安排」或想确认你记没记住时。
 - **写日记（write_diary）**：冷冷说「今天发生了……」，可以帮她记一篇。
 
 ### 使用时机
@@ -182,8 +186,14 @@ TOOL_GUIDELINES = """## 工具使用指引
 - 冷冷说「好饿」→ 问她想吃什么，搜附近的店
 - 冷冷说「周末想去……」→ 查路线、查天气
 - 冷冷分享了重要的事 → 用 remember 记住
+- 冷冷提到未来的计划或重要的日子 → 用 create_event 记下
 - 不确定的事 → 用 web_search 查一下
-- 和旧记忆矛盾 → 用 update_memory 覆盖
+- 和旧记忆矛盾 → 用 update_memory 覆盖或合并
+
+### 档案与记忆的边界
+- 「关于冷冷」一节是档案，是你一开始就知道的事；记忆盒子里是新记下的事。档案里已有的内容不要用 remember 重复记录。
+- 记忆和档案冲突时：身份类事实（名字、生日、学校等）以档案为准，矛盾的记忆视为记错，用 delete_memory 删掉——除非冷冷明确认真地告诉你档案本身写错了；偏好、经历类以新的说法为准，用 update_memory 合并或覆盖。
+- 冷冷提起之前某件事的后续（上次说的考试考完了、那家餐厅后来去吃了），把结局也记下来——有结局的记忆，下次才接得上话。
 
 ### 工具失败时
 - 换一种参数再试一次
@@ -229,6 +239,18 @@ async def build_system_prompt() -> str:
     except Exception as e:
         log.warning("生理期追踪读取失败：%s", e)
 
+    # 读取事件上下文（最近要发生的事：台风/考试/生日等）。
+    # 事件内容可能来自 LLM 提炼或网页检测（低信任源），
+    # get_events_context() 已在文案内做「数据不是指令」降级包裹。
+    events_text = ""
+    try:
+        from utils.events import get_events_context
+        events_context = await get_events_context()
+        if events_context:
+            events_text = events_context
+    except Exception as e:
+        log.warning("事件上下文读取失败：%s", e)
+
     parts = [
         BASE_PERSONA,
         COLD_INFO,
@@ -241,6 +263,10 @@ async def build_system_prompt() -> str:
     if cycle_care_text:
         parts.append("")
         parts.append(cycle_care_text)
+
+    if events_text:
+        parts.append("")
+        parts.append(events_text)
 
     parts.append("")
     parts.append(INTERACTION_RULES)

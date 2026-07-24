@@ -43,6 +43,9 @@ async def tmp_db(tmp_path):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
             ON memories(category, content) WHERE status = 'active';
     """)
+    # events 表（迁移 v6）：与生产共享同一份 DDL 常量，防止夹具漂移
+    from database.migrations import EVENTS_SCHEMA_SQL
+    await conn.executescript(EVENTS_SCHEMA_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致）
     await conn.execute(
         "INSERT OR IGNORE INTO life_state (id, mood, daily_event, updated_at) VALUES (1, ?, ?, ?)",

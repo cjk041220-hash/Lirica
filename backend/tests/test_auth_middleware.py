@@ -184,3 +184,60 @@ async def test_push_rate_limited():
     ]
     assert statuses[:30] == [200] * 30
     assert 429 in statuses[30:]
+
+
+# ── 登记纪律（P0 回归：/api/diaries 漏登记裸奔）──────────────
+#
+# status 路由文件一次注册 /api/status 与 /api/diaries 两个端点，
+# 而 _PROTECTED_PREFIXES 曾只登记 /api/status —— 日记（含冷冷的私人
+# 内容）在公网部署下无认证、无限流。startswith 匹配让漏登记静默。
+# 以下测试遍历所有挂载路由，漏登记直接拦下。
+
+
+def _all_mounted_api_paths() -> set[str]:
+    """收集所有挂载到 /api 前缀下的路由路径（与 server.py 的路由器清单一致）。"""
+    from api.routes.chat import router as chat_router
+    from api.routes.config import router as config_router
+    from api.routes.push import router as push_router
+    from api.routes.status import router as status_router
+
+    paths = set()
+    for router in (chat_router, config_router, push_router, status_router):
+        for route in router.routes:
+            paths.add("/api" + route.path)
+    return paths
+
+
+def test_every_api_route_is_authenticated_or_whitelisted():
+    """每条 /api/* 路由必须命中 _PROTECTED_PREFIXES 或在 _PUBLIC_PATHS 白名单。"""
+    for path in _all_mounted_api_paths():
+        protected = any(path.startswith(p) for p in auth_mod._PROTECTED_PREFIXES)
+        public = path in auth_mod._PUBLIC_PATHS
+        assert protected or public, (
+            f"路由 {path} 既不在 _PROTECTED_PREFIXES 也不在 _PUBLIC_PATHS —— "
+            "配置 XIAOXI_API_TOKEN 后将无认证裸奔（/api/diaries 事故形态）。"
+            "新增路由必须在 api/middleware/auth.py 登记。"
+        )
+
+
+def test_every_protected_prefix_has_rate_limit():
+    """每个受保护前缀都必须有限流档位（漏配 = 可被无限刷）。"""
+    for prefix in auth_mod._PROTECTED_PREFIXES:
+        assert prefix in auth_mod._RATE_LIMITS, f"{prefix} 缺少限流档位"
+
+
+async def test_diaries_requires_token_when_configured():
+    """直接钉死：/api/diaries 配置 token 后必须认证（P0 行为级回归）。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="secret-token")
+
+    status, _ = await _invoke(mw, inner, "/api/diaries")
+    assert status == 401
+    assert inner.calls == 0
+
+    status, _ = await _invoke(
+        mw, inner, "/api/diaries",
+        headers=[(b"authorization", b"Bearer secret-token")],
+    )
+    assert status == 200
+    assert inner.calls == 1

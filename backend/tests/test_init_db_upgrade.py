@@ -106,8 +106,64 @@ async def test_init_db_fresh_database_still_works(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_status'"
         )
         assert await cursor.fetchone() is not None
+
+        # events 表（迁移 v6）在全新库路径也就位
+        cursor = await conn.execute("PRAGMA table_info(events)")
+        assert len(await cursor.fetchall()) > 0
     finally:
         await conn.close()
+
+
+async def test_migrate_v6_creates_events_table(tmp_path):
+    """v6 迁移：建立 events 表与 dedupe 部分唯一索引。"""
+    import sqlite3
+    from database.migrations import ensure_schema, SCHEMA_VERSION
+
+    db_path = tmp_path / "v5.db"
+    conn = await aiosqlite.connect(str(db_path))
+    await conn.executescript("""
+        CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5);
+    """)
+    await conn.commit()
+
+    await ensure_schema(conn)
+
+    # 1. events 表字段完整
+    cursor = await conn.execute("PRAGMA table_info(events)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    assert {
+        "id", "title", "event_type", "event_date", "end_date",
+        "severity", "source", "memo", "status", "created_at", "dedupe_key",
+    } <= columns
+
+    # 2. dedupe 部分唯一索引生效：活跃行同 dedupe_key 抛 IntegrityError
+    await conn.execute(
+        "INSERT INTO events (id, title, event_type, event_date, status, created_at, dedupe_key) "
+        "VALUES ('e1', '大雨', 'rainstorm', '2026-08-01', 'active', '2026-07-25 10:00', 'k1')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        await conn.execute(
+            "INSERT INTO events (id, title, event_type, event_date, status, created_at, dedupe_key) "
+            "VALUES ('e2', '又大雨', 'rainstorm', '2026-08-01', 'active', '2026-07-25 11:00', 'k1')"
+        )
+
+    # 3. 归档行不阻塞同 key 再生成（明年/下次事件）
+    await conn.execute("UPDATE events SET status = 'archived' WHERE id = 'e1'")
+    await conn.execute(
+        "INSERT INTO events (id, title, event_type, event_date, status, created_at, dedupe_key) "
+        "VALUES ('e3', '明年大雨', 'rainstorm', '2027-08-01', 'active', '2026-07-25 12:00', 'k1')"
+    )
+
+    # 4. 版本登记到最新，且迁移幂等
+    cursor = await conn.execute("SELECT MAX(version) FROM schema_version")
+    assert (await cursor.fetchone())[0] == SCHEMA_VERSION == 6
+
+    await ensure_schema(conn)  # 第二次执行不报错
+    await conn.close()
 
 
 async def test_migrate_v5_dedupes_and_builds_unique_index(tmp_path):
@@ -155,8 +211,10 @@ async def test_migrate_v5_dedupes_and_builds_unique_index(tmp_path):
             "VALUES ('x', 'other', 'cat', '2026-07-04 10:00', 'active')"
         )
 
-    # 4. 版本已登记到 v5
+    # 4. 版本已登记到最新（ensure_schema 会一路迁移到 SCHEMA_VERSION，
+    #    v5 之后新增的版本也会顺序应用）
+    from database.migrations import SCHEMA_VERSION
     cursor = await conn.execute("SELECT MAX(version) FROM schema_version")
-    assert (await cursor.fetchone())[0] == 5
+    assert (await cursor.fetchone())[0] == SCHEMA_VERSION
 
     await conn.close()

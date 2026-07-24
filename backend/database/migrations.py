@@ -22,7 +22,10 @@ log = get_logger(__name__)
 # v4: 生理期追踪 — 新增 cycle_records 表
 # v5: 记忆去重原子化 — 清理存量重复 + (category, content) 活跃行
 #     唯一部分索引，配合 manager.add 的 INSERT ... ON CONFLICT
-SCHEMA_VERSION = 5
+# v6: 事件系统 — 新增 events 表（小汐的「惦记」：台风/考试/生日等
+#     未来事件的登记、到期关心、过期自动归档），dedupe_key 活跃行
+#     唯一部分索引防止检测器重复生成
+SCHEMA_VERSION = 6
 
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
@@ -242,6 +245,48 @@ async def _migrate_v5(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[5] = _migrate_v5
+
+
+# ── v6 迁移：事件系统 ────────────────────────────────────────
+
+# events 表完整 DDL（建表 + 索引）。迁移 / 全新安装 / 测试夹具三处
+# 共享此常量，保证三处 schema 永不漂移。
+EVENTS_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS events (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        event_type  TEXT NOT NULL,
+        event_date  TEXT NOT NULL,
+        end_date    TEXT,
+        severity    TEXT NOT NULL DEFAULT 'normal',
+        source      TEXT NOT NULL DEFAULT 'llm',
+        memo        TEXT,
+        status      TEXT NOT NULL DEFAULT 'active',
+        created_at  TEXT NOT NULL,
+        dedupe_key  TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_events_status_date
+        ON events(status, event_date);
+
+    -- 活跃行 dedupe_key 部分唯一索引：防止检测器重复生成同一事件
+    -- （天气 7 日预报每天扫一遍、生日每天扫一遍、LLM 反复提取）；
+    -- 归档行不阻塞明年/下次重新生成。
+    -- 与 utils.events.create_event 的 ON CONFLICT 推断条件必须一致。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe
+        ON events(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'active';
+"""
+
+
+async def _migrate_v6(conn: aiosqlite.Connection) -> None:
+    """v6: 事件系统 — 新增 events 表（小汐的「惦记」：登记台风/考试/生日等
+    未来事件，到期自然关心，过期自动归档）。"""
+    await conn.executescript(EVENTS_SCHEMA_SQL)
+    await conn.commit()
+    log.info("迁移 v6 完成：events 表已建立")
+
+
+_migrations[6] = _migrate_v6
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

@@ -16,6 +16,7 @@ from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router, create_llm_from_runtime_config
 from api.routes.push import router as push_router
+from api.routes.status import router as status_router
 from api.middleware import AuthAndRateLimitMiddleware, RejectWebSocketMiddleware
 from database.core import init_db_connection, get_db, close_db_connection, init_db
 from config.settings import get_settings
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(push_router, prefix="/api")
+    app.include_router(status_router, prefix="/api")
 
     # 前端静态文件（Vite 生产构建 web/dist；开发模式下前端独立运行在 :3000，
     # 由 vite.config.js 将 /api 代理到 :8000，无需此挂载）

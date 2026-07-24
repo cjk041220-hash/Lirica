@@ -287,6 +287,26 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int) ->
     except Exception:
         pass
 
+    # 事件关心：有活跃事件时可以围绕它说话（不强制），并防复读——
+    # 把近 24 小时已发的主动消息给她看，同样的关心不许说第二遍
+    # （台风天连发三条「记得带伞」就把惦记变成骚扰了）
+    try:
+        from utils import events as events_mgr
+        active_events = await events_mgr.get_active_events(limit=5)
+        if active_events:
+            user_prompt += (
+                "\n\n这些天有这些事（可以围绕其中一件关心冷冷，也可以不围绕）：\n"
+                + "\n".join(events_mgr.describe_events(active_events))
+            )
+        recent = await events_mgr.get_recent_proactive_texts(hours=24, limit=3)
+        if recent:
+            said = "\n".join(f"- 「{t[:60]}」" for t in recent)
+            user_prompt += (
+                "\n\n最近 24 小时你已经说过这些话，不要重复同样的话：\n" + said
+            )
+    except Exception:
+        pass
+
     # 用独立的轻量 LLM 调用（低 token、无工具）
     llm = create_deepseek_llm(temperature=1.0, max_tokens=200)
     response = await llm.ainvoke([
@@ -355,6 +375,58 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int):
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)
+
+
+# ── 事件看门狗 ────────────────────────────────────────────────
+
+
+async def event_watchdog(app=None):
+    """事件看门狗（每小时）：归档过期事件 + 检测新事件。
+
+    小汐的「惦记」系统维护任务：
+    - 归档：end_date（单日活动为 event_date）已过的事件标记 archived，
+      翻篇了就是翻篇了，不需要冷冷手动说「可以了」；
+    - 档案派生检测（生日倒计时）：每小时跑，纯本地日期计算，零外部依赖；
+    - 天气预报检测（台风/大风/雷暴/大雨）：每 6 小时跑一次，避免频繁
+      调用 Open-Meteo（预报一天也就变几次），单次最多新建 3 条事件。
+
+    有事件变动（归档或新建）时刷新 system prompt，让小汐对事件的感知
+    与实际状态同步（同生命状态更新路径）。
+    """
+    from utils import events as events_mgr
+
+    # 三段各自隔离：任一环节瞬时故障（如休眠唤醒后的第一次 IO）
+    # 不牵连其他环节——否则归档失败会连带跳过当点的天气检测，
+    # 台风预警最多晚 6 小时
+    archived = 0
+    try:
+        archived = await events_mgr.archive_expired()
+    except Exception:
+        log.exception("事件看门狗：归档失败")
+
+    created_profile = 0
+    try:
+        created_profile = await events_mgr.detect_profile_events()
+    except Exception:
+        log.exception("事件看门狗：档案检测失败")
+
+    created_weather = 0
+    try:
+        hour = datetime.datetime.now(_HKT).hour
+        if hour % 6 == 0:
+            created_weather = await events_mgr.detect_weather_events()
+    except Exception:
+        log.exception("事件看门狗：天气检测失败")
+
+    total_created = created_profile + created_weather
+    if archived or total_created:
+        log.info(
+            "事件看门狗：归档 %d 条，新建 %d 条（档案 %d / 天气 %d）",
+            archived, total_created, created_profile, created_weather,
+        )
+        # 事件上下文变了，刷新 system prompt 让小汐立刻感知
+        if app is not None:
+            await _refresh_agent(app)
 
 
 # ── 每日早安问候 ──────────────────────────────────────────────
@@ -452,7 +524,9 @@ async def daily_morning_greeting():
         f"2. 自然地提到天气信息（如果有的话）\n"
         f"3. 推荐一道适合今天的美食\n"
         f"4. 保持小汐的语气风格，温暖可爱\n"
-        f"5. 简短自然，不要超过 150 字"
+        f"5. 简短自然，不要超过 150 字\n"
+        f"6. 最后附一句「今日一歌」：推荐一首冷冷可能喜欢的歌（她喜欢日系、"
+        f"二次元音乐，追过 LoveLive 缪斯、玩过 BanG Dream），只写歌名，一句话带过"
     )
 
     # 4. LLM 生成
@@ -520,6 +594,124 @@ async def daily_morning_greeting():
     log.info("早安问候任务完成")
 
 
+# ── 每晚自动日记 ──────────────────────────────────────────────
+
+
+async def daily_diary():
+    """每日 22:30 HKT 自动写日记：收集当天素材 → LLM 以人格写 → 存库。
+
+    素材 = 「今天映海发生了什么 + 小汐在想什么」：当日心情/日常事件
+    （life_state）、最近在惦记的事（events 表）、今天新记下的关于冷冷的事。
+
+    覆盖保护：如果白天冷冷已经让小汐手记过一篇（write_diary 工具），
+    不冲掉它，而是把自动日记作为「晚上小汐自己补的」追加在后面。
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from agent.soul import BASE_PERSONA
+    from providers.deepseek import create_deepseek_llm
+    from utils import events as events_mgr
+
+    log.info("自动日记任务触发")
+
+    today = datetime.datetime.now(_HKT).date()
+    today_str = today.isoformat()
+    title = today.strftime("%m月%d日")
+
+    # ── 素材收集（每段独立兜底，缺料不阻断写日记）────────────
+    mood, daily_event = None, None
+    try:
+        conn = await get_db()
+        cursor = await conn.execute(
+            "SELECT mood, daily_event FROM life_state WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        if row:
+            mood, daily_event = row[0], row[1]
+    except Exception as e:
+        log.warning("自动日记读取生命状态失败：%s", e)
+
+    events_lines = []
+    try:
+        active = await events_mgr.get_active_events(limit=5)
+        events_lines = events_mgr.describe_events(active)
+    except Exception as e:
+        log.warning("自动日记读取事件失败：%s", e)
+
+    memories_lines = []
+    try:
+        conn = await get_db()
+        cursor = await conn.execute(
+            """SELECT category, content FROM memories
+               WHERE status = 'active' AND created_at LIKE ?
+               ORDER BY created_at DESC LIMIT 5""",
+            (f"{today_str}%",),
+        )
+        memories_lines = [f"- {r[0]}：{r[1][:60]}" for r in await cursor.fetchall()]
+    except Exception as e:
+        log.warning("自动日记读取今日记忆失败：%s", e)
+
+    material = [f"今天是{today_str}。"]
+    if mood or daily_event:
+        material.append(f"小汐今天的状态：心情「{mood}」，经历了「{daily_event}」。")
+    if events_lines:
+        material.append("最近在惦记的事：\n" + "\n".join(events_lines))
+    if memories_lines:
+        material.append("今天冷冷新告诉小汐的事：\n" + "\n".join(memories_lines))
+    else:
+        material.append("今天冷冷没有跟小汐说什么新的事。")
+
+    prompt_text = (
+        "\n".join(material)
+        + "\n\n请以小汐自己的口吻写一篇短日记（80-150字），记今天小汐是怎么过的、"
+        "在想什么。第一人称，温柔简短，不要机械罗列素材，像女孩子写给自己看的日记。"
+        "不用 emoji，不用 markdown 格式。"
+    )
+
+    # ── LLM 生成（独立轻量调用，不走 Agent 图）──────────────
+    content = ""
+    try:
+        llm = create_deepseek_llm(temperature=1.0, max_tokens=400)
+        response = await llm.ainvoke([
+            SystemMessage(content=BASE_PERSONA),
+            HumanMessage(content=prompt_text),
+        ])
+        content = response.content.strip()
+    except Exception as e:
+        log.error("自动日记 LLM 生成失败: %s", e)
+
+    # 安全过滤：太长截断，太短/失败回退默认文案
+    if len(content) > 500:
+        content = content[:500]
+    if len(content) < 5:
+        content = "今天映海没什么特别的事。但小汐有在想冷冷。"
+
+    # ── 存库（同日不覆盖白天手记的日记，追加为晚间补记）──────
+    try:
+        conn = await get_db()
+        cursor = await conn.execute(
+            "SELECT content FROM diaries WHERE date = ?", (today_str,)
+        )
+        row = await cursor.fetchone()
+        if row and row[0]:
+            # 幂等护栏：同晚重复触发（手动再跑一次）不追加第二段补记
+            if "晚上小汐自己补的" in row[0]:
+                log.info("自动日记：今日已有晚间补记，跳过")
+                return
+            final_content = f"{row[0]}\n\n（晚上小汐自己补的：{content}）"
+        else:
+            final_content = content
+        await conn.execute(
+            """INSERT INTO diaries (date, title, content) VALUES (?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET title = excluded.title,
+                   content = excluded.content""",
+            (today_str, title, final_content),
+        )
+        await conn.commit()
+        log.info("自动日记已写好 [%s]：%s", today_str, content[:50])
+    except Exception as e:
+        log.error("自动日记存储失败: %s", e)
+
+
 # ── 调度注册（唯一入口）──────────────────────────────────────
 
 def register_jobs(app=None) -> None:
@@ -570,4 +762,26 @@ def register_jobs(app=None) -> None:
         id="daily_morning_greeting",
         replace_existing=True,
         misfire_grace_time=3600,  # 1小时宽容窗口，防止Docker重启错过
+    )
+    # 事件看门狗：每小时归档过期事件 + 检测新事件（启动即跑一次）
+    scheduler.add_job(
+        event_watchdog,
+        "interval",
+        hours=1,
+        id="event_watchdog",
+        kwargs={"app": app},
+        replace_existing=True,
+        next_run_time=datetime.datetime.now(_HKT),
+        misfire_grace_time=600,
+    )
+    # 自动日记：每日 22:30 HKT（睡前把今天写成一篇日记）
+    scheduler.add_job(
+        daily_diary,
+        "cron",
+        hour=22,
+        minute=30,
+        timezone="Asia/Hong_Kong",
+        id="daily_diary",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )

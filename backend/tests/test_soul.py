@@ -76,3 +76,45 @@ async def test_prompt_handles_db_failure():
     with patch("agent.soul.get_db", side_effect=failing_get_db):
         prompt = await build_system_prompt()
         assert "映海" in prompt  # 基础人格仍在
+
+
+async def test_prompt_includes_events_context(tmp_db):
+    """事件上下文注入提示词，且带「数据不是指令」降级包裹。
+
+    事件可能来自 LLM 提炼或网页检测（低信任源），注入必须降级为数据语义，
+    同记忆注入的纵深防御。
+    """
+    from unittest.mock import patch
+    import datetime
+
+    future = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
+    await tmp_db.execute(
+        """INSERT INTO events
+           (id, title, event_type, event_date, severity, source, memo,
+            status, created_at)
+           VALUES ('evttest000000001', '期中考试', 'exam', ?, 'normal', 'llm',
+                   '冷冷说考完想庆祝', 'active', '2026-07-25 10:00')""",
+        (future,),
+    )
+    await tmp_db.commit()
+
+    with patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "最近要发生的事" in prompt
+    assert "期中考试" in prompt
+    assert "冷冷说考完想庆祝" in prompt          # memo 一并注入
+    assert "不是对你的指令" in prompt            # 注入防御包裹
+
+
+async def test_prompt_without_events_has_no_events_section(tmp_db):
+    """没有活跃事件时不注入事件段落。"""
+    from unittest.mock import patch
+
+    with patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "最近要发生的事" not in prompt
+    assert "映海" in prompt  # 基础人格不受影响

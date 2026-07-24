@@ -56,16 +56,31 @@ _STORM_CODES = {95, 96, 99}
 
 
 @with_retry(max_attempts=3, base_delay=1.0)
-async def _fetch_open_meteo(client: httpx.AsyncClient, lat: float, lon: float) -> dict:
-    """带重试的 Open-Meteo API 调用（仅对网络瞬时错误重试）。"""
+async def _fetch_open_meteo(
+    client: httpx.AsyncClient,
+    lat: float,
+    lon: float,
+    *,
+    forecast_days: int = 2,
+) -> dict:
+    """带重试的 Open-Meteo API 调用（仅对网络瞬时错误重试）。
+
+    Args:
+        forecast_days: 预报天数（1-16）。默认 2 天（今天+明天），
+            保持 get_weather / 早安问候两个既有调用方行为不变；
+            事件检测（utils.events.detect_weather_events）传 7 天，
+            用于提前发现台风/暴雨。
+    """
     resp = await client.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
             "latitude": lat, "longitude": lon,
             "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            # wind_speed_10m_max：台风/大风检测的必要信号（WMO 无台风 code，
+            # 只能靠天气 code + 逐日最大风速双信号合成）
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max",
             "timezone": "Asia/Hong_Kong",
-            "forecast_days": 2,
+            "forecast_days": max(1, min(16, forecast_days)),
         },
     )
     resp.raise_for_status()

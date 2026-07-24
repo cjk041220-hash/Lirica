@@ -14,11 +14,19 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 # 受保护的 API 路径前缀（需要 Bearer Token 认证）
-_PROTECTED_PREFIXES = ("/api/chat", "/api/config", "/api/memories", "/api/push")
+# 新增路由必须在这里登记，否则裸奔无认证（公网部署时是安全漏洞）
+# 登记纪律回归测试：tests/test_auth_middleware.py 遍历所有挂载路由，
+# 漏登记会直接被测试拦下（/api/diaries 就曾这样漏过）
+_PROTECTED_PREFIXES = (
+    "/api/chat", "/api/config", "/api/memories", "/api/push",
+    "/api/status", "/api/diaries",
+)
 
 # 公开端点白名单（即使配置了 token 也免认证）：
-# vapid-key 仅返回 VAPID 公钥，是前端发起订阅前的必需信息，不含敏感数据
-_PUBLIC_PATHS = ("/api/push/vapid-key",)
+# - vapid-key 仅返回 VAPID 公钥，是前端发起订阅前的必需信息，不含敏感数据
+# - health 未认证时只返回 {"status": "ok"}（供存活监控），完整诊断
+#   信息由端点内部自行鉴权（hmac 常量时间比较），分级设计，显式豁免
+_PUBLIC_PATHS = ("/api/push/vapid-key", "/api/health")
 
 # 简单的内存限流器（每 IP）
 _rate_buckets: dict[str, list[float]] = {}
@@ -31,6 +39,10 @@ _RATE_LIMITS = {
     "/api/config": 30,
     "/api/memories": 30,   # 记忆管理：30 次/分钟
     "/api/push": 30,       # 推送订阅/已读：30 次/分钟
+    # 状态/日记只读：30 次/分钟。前端只在挂载 + 回前台 + 聊完天时拉取，
+    # life_state 后端每 2 小时才变一次，无需高频轮询
+    "/api/status": 30,
+    "/api/diaries": 30,    # 日记列表：同状态端点档位
 }
 
 

@@ -157,7 +157,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     # 必须在创建索引之前执行：索引引用的是迁移后的最终 schema
     # （如 memories.status），若在旧版表上先建索引会因列不存在而
     # 直接报错，导致旧数据库永远无法启动新版本（v0.4.3 修复）。
-    from database.migrations import ensure_schema
+    from database.migrations import ensure_schema, EVENTS_SCHEMA_SQL
     await ensure_schema(conn)
 
     # 索引（幂等，IF NOT EXISTS）——此时 schema 已保证为最终形态
@@ -170,6 +170,9 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_memories_status
             ON memories(status);
     """)
+    # events 表（迁移 v6）：老库由迁移建立，新库由下面这段建立，
+    # 共享 migrations.EVENTS_SCHEMA_SQL 常量，两处永不漂移
+    await conn.executescript(EVENTS_SCHEMA_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针
