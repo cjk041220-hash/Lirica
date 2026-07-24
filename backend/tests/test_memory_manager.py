@@ -122,6 +122,22 @@ async def test_recall_updates_last_used_at_and_access_count(memory_mgr):
     assert all_mems[0]["access_count"] >= 1
 
 
+async def test_recall_passive_does_not_update_counters(memory_mgr):
+    """recall(passive=True) 纯只读，不更新 access_count / last_used_at。
+
+    供叙事注入等系统被动读取场景使用，防止「越被注入越热门」的正反馈闭环。
+    """
+    await memory_mgr.add("test", "hello")
+    before = (await memory_mgr.all())[0]
+
+    result = await memory_mgr.recall("test", passive=True)
+    assert len(result) == 1
+
+    after = (await memory_mgr.all())[0]
+    assert after["access_count"] == before["access_count"] == 0
+    assert after["last_used_at"] == before["last_used_at"]
+
+
 async def test_recall_default_limit(memory_mgr):
     """recall() 默认最多返回 20 条，防止撑爆 LLM 上下文。"""
     for i in range(50):

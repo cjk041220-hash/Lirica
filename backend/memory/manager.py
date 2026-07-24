@@ -195,11 +195,20 @@ class MemoryManager:
 
     # ── 查询 ────────────────────────────────────────────────
 
-    async def recall(self, category: str = "", limit: int = 20) -> list[dict]:
+    async def recall(
+        self, category: str = "", limit: int = 20, passive: bool = False
+    ) -> list[dict]:
         """回忆记忆。可按 category 筛选，不传则返回全部。
 
         按相关性评分排序（时间衰减 × 访问热度 × 最近使用）。
-        同时更新被召回记忆的 last_used_at 和 access_count。
+
+        默认（passive=False）更新被召回记忆的 last_used_at 和 access_count，
+        记录真实的「被想起」信号。
+
+        passive=True 时为纯只读，不触碰任何计数器——供 NarrativeBuilder 等
+        系统被动读取的场景使用。否则每次 LLM 调用前的叙事注入都会给
+        top-K 记忆刷新一轮热度和 last_used_at，形成「越被注入越热门、
+        越热门越被注入」的正反馈闭环，把同样的记忆永久钉在榜首。
         """
         if category:
             cursor = await self._db.execute(
@@ -223,8 +232,8 @@ class MemoryManager:
         matched.sort(key=lambda m: _relevance_score(m, now), reverse=True)
         matched = matched[:limit]
 
-        # 更新 last_used_at 和 access_count
-        if matched:
+        # 更新 last_used_at 和 access_count（passive 模式为被动读取，跳过）
+        if matched and not passive:
             ids = [m["id"] for m in matched]
             placeholders = ",".join("?" for _ in ids)
             await self._db.execute(

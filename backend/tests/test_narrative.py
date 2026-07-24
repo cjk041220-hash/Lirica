@@ -133,3 +133,30 @@ async def test_build_hybrid_surfaces_old_hot_memory(memory_mgr, tmp_db):
 
     assert "最重要的老记忆" in result, "高相关性旧记忆应经 recall 配额浮现"
     assert result.count("\n- ") == 4, "总注入条数不应超过 max_items"
+
+
+async def test_build_does_not_inflate_access_counts(memory_mgr):
+    """回归：build() 不得污染热度信号（正反馈闭环缺陷）。
+
+    旧版叙事注入走主动 recall()，每次 LLM 调用都给 top 记忆刷新
+    last_used_at / access_count——越被注入越热门、越热门越被注入，
+    同样的记忆永久霸榜，新记忆挤不进相关性配额。注入必须是只读的。
+    """
+    await memory_mgr.add("喜好", "喜欢吃芒果")
+    await memory_mgr.add("喜好", "喜欢喝奶茶")
+    await memory_mgr.add("去过的地方", "维多利亚港")
+
+    before = {
+        m["id"]: (m["access_count"], m["last_used_at"])
+        for m in await memory_mgr.all()
+    }
+
+    builder = NarrativeBuilder(memory_mgr)
+    for _ in range(5):  # 模拟多次 LLM 调用前的注入
+        await builder.build()
+
+    after = {
+        m["id"]: (m["access_count"], m["last_used_at"])
+        for m in await memory_mgr.all()
+    }
+    assert before == after, "被动注入不应修改 access_count / last_used_at"

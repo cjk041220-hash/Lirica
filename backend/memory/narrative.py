@@ -42,8 +42,11 @@ class NarrativeBuilder:
         if total == 0:
             return ""
 
+        # passive=True：叙事注入是系统被动读取，不能计入访问热度。
+        # 否则会形成正反馈闭环——top 记忆每次注入都被刷新 last_used_at /
+        # access_count，永远霸占相关性配额，新记忆挤不进来。
         relevance_k = min(3, max_items)
-        relevant = await self._manager.recall(limit=relevance_k)
+        relevant = await self._manager.recall(limit=relevance_k, passive=True)
         recent = await self._manager.recent(max_items)
 
         picked: list[dict] = []

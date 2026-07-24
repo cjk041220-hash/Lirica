@@ -32,13 +32,23 @@ def set_memory_manager(mgr: MemoryManager):
 async def remember(category: str, content: str) -> str:
     """让小汐记住一件事。冷冷说了关于自己的重要信息时主动调用。
 
+    只记新发生的事和变化：档案（系统提示词里「关于冷冷」一节）已经
+    写过的信息不要重复记，不要把档案内容抄进记忆。
+
     新记忆会被直接保存。如果同类别下已有相关记忆，会一并展示给你：
-    若发现新旧矛盾（比如以前说爱吃火锅，现在说不爱了），
-    请调用 update_memory(memory_id, new_content) 覆盖旧的那条，
-    或用 delete_memory(memory_id) 删掉过时的记忆。
+    - 完全矛盾（比如以前说爱吃火锅，现在说不爱了）
+      → 调用 update_memory(memory_id, 新内容) 覆盖旧的那条
+    - 只是变化（比如以前爱喝奶茶，最近在控糖喝得少了）
+      → 调用 update_memory(memory_id, "以前……最近……") 合并成一句话
+    - 不矛盾 → 不用管
+    也可以用 delete_memory(memory_id) 删掉过时的记忆。
 
     Args:
-        category: 记忆类别，如「冷冷喜欢的」「去过的地方」「重要的事」
+        category: 记忆类别。优先从下面几个里选，复用已有类别，
+            不要为同类内容起新名字：
+            「冷冷喜欢的」（偏好品味）/「冷冷的信息」（身份、生活、健康的变化）/
+            「去过的地方」（地点经历）/「重要的事」（大事件、约定、待办）/
+            「其他」（都不合适时兜底）
         content: 要记住的具体内容
     """
     try:
@@ -49,6 +59,15 @@ async def remember(category: str, content: str) -> str:
         # 因此重复调用不会产生重复行，只会刷新时间戳）
         saved = await _memory_manager.add(category, content)
 
+        lines = [f"✨ 小汐把新记忆收好啦！放在映海的「{category}」里。（ID: {saved['id']}）"]
+
+        # 动态展示已有类别及条数，引导 LLM 复用现有类别，
+        # 防止类别名漂移（「美食偏好」「冷冷喜欢吃什么」各立山头，去重失效）
+        cats = await _memory_manager.list_categories()
+        if cats:
+            existing = "、".join(f"「{c}」（{n}条）" for c, n in cats.items())
+            lines.append(f"映海里现有的类别：{existing}。以后尽量放进已有类别。")
+
         # 再查同类别的其他记忆（按创建时间倒序，刚存的会在其中，按 id 排除），
         # 作为矛盾检测的上下文返回给 LLM
         others = [
@@ -56,18 +75,15 @@ async def remember(category: str, content: str) -> str:
             if m.get("id") != saved["id"]
         ][:5]
 
-        if not others:
-            return f"✨ 小汐帮你收好啦！放在映海的「{category}」里。（ID: {saved['id']}）"
-
-        lines = [f"✨ 小汐把新记忆收好啦！放在映海的「{category}」里。（ID: {saved['id']}）"]
-        lines.append("这个类别下之前还记着这些：")
-        for m in others:
-            lines.append(f"  📌 [{m['id']}] {m['content']}")
-        lines.append(
-            "如果新记忆和哪条旧记忆矛盾（比如偏好变了），"
-            "请调用 update_memory(memory_id, new_content) 覆盖旧的那条，"
-            "或用 delete_memory(memory_id) 删掉过时的。不矛盾就不用管。"
-        )
+        if others:
+            lines.append("这个类别下之前还记着这些：")
+            for m in others:
+                lines.append(f"  📌 [{m['id']}] {m['content']}")
+            lines.append(
+                "新旧有出入时：完全矛盾就用 update_memory(memory_id, 新内容) 覆盖旧的；"
+                "只是变化（以前喜欢、最近少了）就合并成一句「以前……最近……」再 update_memory；"
+                "不矛盾就不用管。彻底过时的用 delete_memory 删掉。"
+            )
         return "\n".join(lines)
 
     except Exception as e:
@@ -76,9 +92,11 @@ async def remember(category: str, content: str) -> str:
 
 @tool
 async def update_memory(memory_id: str, new_content: str) -> str:
-    """覆盖一条旧记忆的内容。当冷冷说了和之前矛盾的信息时使用。
+    """覆盖一条旧记忆的内容。两种情况用它：
 
-    比如之前记住「爱吃火锅」，现在冷冷说不爱吃了，就用这个工具更新。
+    1. 矛盾：之前记住「爱吃火锅」，现在冷冷说不爱吃了，用新内容覆盖。
+    2. 变化合并：之前记住「爱喝奶茶不加糖」，最近在控糖，就合并成
+       「以前爱喝奶茶不加糖，最近在控糖喝得少了」再覆盖——别直接丢掉旧事实。
 
     Args:
         memory_id: 要更新的记忆 ID（从 remember 或 recall 返回的 ID）
