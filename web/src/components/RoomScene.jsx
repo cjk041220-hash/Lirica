@@ -32,6 +32,22 @@ export default function RoomScene({ characterState = 'idle' }) {
       {/* Z-20: 小汐 */}
       <CharacterSprite state={characterState} />
 
+      {/* Z-30: 睡着时的 Zzz —— 相对房间（可视区域）定位而不是立绘盒。
+          立绘 h-[92vh] 在竖屏上比 430px 容器宽，盒内定位会被裁出屏幕。 */}
+      {characterState === 'sleepy' && (
+        <div className="absolute top-[18%] right-[14%] z-30 pointer-events-none" aria-hidden>
+          <span className="absolute text-healing-aqua/60 text-sm font-medium animate-zzz">z</span>
+          <span
+            className="absolute text-healing-aqua/45 text-base font-medium animate-zzz"
+            style={{ animationDelay: '0.9s', left: '12px', top: '-14px' }}
+          >z</span>
+          <span
+            className="absolute text-healing-aqua/35 text-lg font-medium animate-zzz"
+            style={{ animationDelay: '1.8s', left: '26px', top: '-30px' }}
+          >Z</span>
+        </div>
+      )}
+
       {/* 整体暗角 */}
       <div className="absolute inset-0 z-[15] pointer-events-none"
         style={{ boxShadow: 'inset 0 0 60px rgba(92,84,77,0.04)' }} />

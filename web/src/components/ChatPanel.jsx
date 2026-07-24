@@ -8,15 +8,21 @@ const statusTexts = {
   listening: '小汐在认真听',
   thinking: '小汐在想办法',
   happy: '小汐心情很好',
-  sleepy: '小汐有点困了',
+  sleepy: '小汐趴着睡着了',
+  reading: '小汐在看书',
+  wave: '小汐在映海里探险',
+  sad: '小汐有点难过',
 }
 
 const DEFAULT_HEIGHT = 38
 const MIN_VH = 10
 const MAX_VH = 85
 
-export default function ChatPanel({ chat }) {
-  const { messages, isStreaming, characterState, sendMessage, stopStreaming } = chat
+export default function ChatPanel({ chat, status, displayState }) {
+  const { messages, isStreaming, sendMessage, stopStreaming } = chat
+  // displayState 是 App 归并后的立绘状态（含 sleepy 休眠态）；
+  // 未传时回退到 chat 自己的状态
+  const characterState = displayState || chat.characterState
   const listRef = useRef(null)
   const panelRef = useRef(null)
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT)
@@ -105,12 +111,14 @@ export default function ChatPanel({ chat }) {
         <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-healing-aqua/50' : 'bg-ink-tea/15'}`} />
       </div>
 
-      {/* 状态栏 */}
+      {/* 状态栏：空闲/睡着时显示小汐今日碎碎念（心情 + 今天经历的事） */}
       {!collapsed && (
         <div className="flex items-center gap-2 px-4 pb-2 shrink-0">
-          <div className="w-2 h-2 rounded-full bg-healing-aqua animate-pulse-dot" />
-          <span className="text-[11px] text-ink-tea/50 tracking-wide">
-            {statusTexts[characterState] || '小汐在发呆'}
+          <div className={`w-2 h-2 rounded-full ${characterState === 'sleepy' ? 'bg-ink-tea/25' : 'bg-healing-aqua animate-pulse-dot'}`} />
+          <span className="text-[11px] text-ink-tea/50 tracking-wide truncate">
+            {(characterState === 'idle' || characterState === 'sleepy') && status?.daily_event
+              ? `${status.mood ? `${status.mood} · ` : ''}${status.daily_event}`
+              : (statusTexts[characterState] || '小汐在发呆')}
           </span>
         </div>
       )}

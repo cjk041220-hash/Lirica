@@ -42,8 +42,9 @@ export default function CharacterSprite({ state = 'idle' }) {
         style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 60%)' }}
       />
 
-      {/* 立绘 + 呼吸 */}
-      <div className="animate-breathe relative">
+      {/* 立绘 + 呼吸（睡觉时呼吸放慢；Zzz 由 RoomScene 相对房间定位，
+          因为立绘盒比可视容器宽，盒内百分比定位在竖屏上会被裁掉） */}
+      <div className={displayState === 'sleepy' ? 'animate-breathe-slow relative' : 'animate-breathe relative'}>
         <img
           src={src}
           alt="小汐"

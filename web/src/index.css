@@ -13,11 +13,13 @@
   --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  --animate-breathe-slow: breathe 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-fade-in-up: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-pulse-dot: pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-twinkle: twinkle 3.5s ease-in-out infinite;
   --animate-float-soft: floatSoft 6s ease-in-out infinite;
   --animate-shimmer: shimmer 2.5s ease-in-out infinite;
+  --animate-zzz: zzzFloat 2.8s ease-in-out infinite;
 }
 
 @keyframes breathe {
@@ -44,6 +46,12 @@
 @keyframes shimmer {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.8; }
+}
+/* 睡觉的 Zzz：上浮 + 淡出循环 */
+@keyframes zzzFloat {
+  0% { opacity: 0; transform: translateY(0) scale(0.8); }
+  25% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(-22px) scale(1.15); }
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

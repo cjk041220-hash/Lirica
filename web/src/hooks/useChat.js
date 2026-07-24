@@ -43,6 +43,7 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [characterState, setCharacterState] = useState('idle')
   const abortRef = useRef(null)
+  const happyTimerRef = useRef(null)  // 「刚聊完→开心」的回落定时器
   const sessionId = useRef(getSessionId())
 
   // 刷新后从 checkpoint 恢复对话历史（修复 P1-1 的"刷新即失忆"）
@@ -63,11 +64,15 @@ export function useChat() {
   // 挂载时拉一次历史
   useEffect(() => { loadHistory() }, [loadHistory])
 
+  // 卸载时清掉「开心回落」定时器（防微杜渐：App 根组件永不卸载，但 hook 应保持自洽）
+  useEffect(() => () => clearTimeout(happyTimerRef.current), [])
+
   const sendMessage = useCallback(async (text) => {
     // 添加用户消息
     const userMsg = { id: nextId(), role: 'user', content: text }
     setMessages(prev => [...prev, userMsg])
     setIsStreaming(true)
+    clearTimeout(happyTimerRef.current)
     setCharacterState('listening')
 
     const assistantId = nextId()
@@ -79,6 +84,10 @@ export function useChat() {
 
     // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null
     const coords = await getGpsCoords()
+
+    // 只有流正常读完才算「聊成功」—— 401 / 网络错误 / 中断都不算，
+    // 失败时立绘不演开心（气泡报错 + 立绘卖萌是情绪错位）
+    let succeeded = false
 
     try {
       setCharacterState('thinking')
@@ -188,6 +197,7 @@ export function useChat() {
           }
         }
       }
+      succeeded = true  // 流正常读完（收到 [DONE] 或服务端关流）
     } catch (err) {
       if (err.name !== 'AbortError') {
         setMessages(prev =>
@@ -203,7 +213,12 @@ export function useChat() {
         prev.map(m => m.id === assistantId ? { ...m, streaming: false } : m)
       )
       setIsStreaming(false)
-      setCharacterState('idle')
+      // 聊成功 → 小汐开心一阵再归于平静；失败/中断直接回 idle
+      clearTimeout(happyTimerRef.current)
+      setCharacterState(succeeded ? 'happy' : 'idle')
+      if (succeeded) {
+        happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
+      }
       abortRef.current = null
     }
   }, [])
@@ -224,6 +239,13 @@ export function useChat() {
         content: item.content || item.text || '',
       })),
     ])
+    // 小汐主动说话了 → 立绘高兴一阵。abortRef 非空 = 聊天流程进行中，
+    // 此时不打断 listening/thinking/talking 的流程态
+    if (!abortRef.current) {
+      clearTimeout(happyTimerRef.current)
+      setCharacterState('happy')
+      happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
+    }
   }, [])
 
   return { messages, isStreaming, characterState, sendMessage, stopStreaming, receiveProactive, loadHistory }
