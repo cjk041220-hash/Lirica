@@ -1,0 +1,4 @@
+# shell 脚本在 Linux 容器内执行，必须 LF：CRLF 会弄坏 shebang（/bin/sh^M）导致容器起不来。
+# 强制 eol=lf，使 Windows 检出也是 LF（构建上下文随之为 LF）；Dockerfile 内另有一次 CR 剥离兜底。
+*.sh text eol=lf
+backend/docker-entrypoint.sh text eol=lf

@@ -1,0 +1,17 @@
+# 小汐 反向代理示例（Caddy：自动 HTTPS + HSTS，免手动管证书）。
+# 用法：把 xiaoxi.example.com 换成你的域名（需先解析到本服务器），
+#       然后 caddy run --config Caddyfile，或装成 systemd 服务。
+# 前置 Caddy 后，docker-compose 的端口保持 127.0.0.1:8000（仅本机回环）即可。
+
+xiaoxi.example.com {
+	reverse_proxy 127.0.0.1:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+	}
+
+	# 注意：默认不在此开全局 gzip/zstd。压缩中间件可能缓冲 text/event-stream，
+	# 把 /api/chat/stream 的流式回复攒成一坨再发，破坏打字机效果。
+	# 若确需压缩，请用 matcher 显式排除 event-stream 后再开。
+}

@@ -8,6 +8,20 @@ services:
       # 局域网/公网访问请前置 Nginx/Caddy 等反向代理并配置认证，
       # 或确认已设置 XIAOXI_API_TOKEN 后再改为 "8000:8000"。
       - "127.0.0.1:8000:8000"
+    # ── 容器加固 ────────────────────────────────────────────
+    # 丢弃全部 Linux capabilities + 禁止提权：Python web 应用无需任何 capability，
+    # 即使被攻破也无法 mount / 改 uid / 加载内核模块等，显著收敛容器逃逸面。
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # 资源上限请按 `docker stats` 实测 RSS 后填（过低会 OOMKill 致服务中断，
+    # 故默认注释；单用户负载下 512M–1G 通常足够）。Compose v2 在 up 时即 honored。
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 768M
+    #       cpus: "1.0"
     env_file:
       - backend/config/.env
     volumes:

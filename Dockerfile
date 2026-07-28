@@ -30,6 +30,11 @@ COPY --from=builder /install /usr/local
 # 复制后端源码
 COPY backend/ .
 
+# 入口脚本：启动前确保有 API Token（避免 0.0.0.0 + 无 token 的崩溃循环）。
+# 另：Windows 构建上下文可能带 CRLF，会弄坏 Linux 下的 shebang/解释，故强制转 LF。
+RUN chmod +x /app/backend/docker-entrypoint.sh \
+ && python -c "import pathlib; p=pathlib.Path('/app/backend/docker-entrypoint.sh'); p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n').replace(b'\r', b'\n'))"
+
 # 复制前端构建产物（server.py 会挂载 ../web/dist 到 :8000 根路径）
 COPY --from=web /web/dist /app/web/dist
 
@@ -50,4 +55,5 @@ EXPOSE 8000
 # ⚠️ 必须 --workers 1：APScheduler 是模块级单例，多 Worker 会导致心跳任务重复执行。
 # 5.0 起后端启动时会主动校验，workers>1 直接拒绝启动。
 # 如果需要水平扩展，应将调度器拆到独立进程或使用分布式锁。
+ENTRYPOINT ["/app/backend/docker-entrypoint.sh"]
 CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
