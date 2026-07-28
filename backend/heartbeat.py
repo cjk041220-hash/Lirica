@@ -38,7 +38,7 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-from utils.timezone import HKT as _HKT
+from utils.timezone import HKT as _HKT, DEFAULT_LAT, DEFAULT_LON
 _TIME_FMT = "%Y-%m-%d %H:%M"
 
 scheduler = AsyncIOScheduler()
@@ -420,10 +420,6 @@ async def event_watchdog(app=None):
 
 # ── 每日早安问候 ──────────────────────────────────────────────
 
-# 默认香港坐标（定位缓存不可用时的回退）
-_DEFAULT_LAT = 22.3193
-_DEFAULT_LON = 114.1694
-
 # 默认早安文案（LLM 生成内容过短时的回退）
 _DEFAULT_GOOD_MORNING = "冷冷早安呀～新的一天开始啦，小汐陪你一起！"
 
@@ -454,7 +450,7 @@ async def daily_morning_greeting():
     if coords:
         lat, lon = coords
     else:
-        lat, lon = _DEFAULT_LAT, _DEFAULT_LON
+        lat, lon = DEFAULT_LAT, DEFAULT_LON
         location_known = False
         log.info("无缓存坐标，使用默认香港坐标")
 

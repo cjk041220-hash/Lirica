@@ -24,13 +24,13 @@ from datetime import timezone, timedelta
 
 import httpx
 
-from database.core import get_db
+from database.core import get_db, rows_to_dicts
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），与全项目时区纪律一致
-from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
+from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT, DEFAULT_LAT, DEFAULT_LON
 _DATE_FMT = "%Y-%m-%d"
 
 # ── 档案派生事件常量（来自 soul.py COLD_INFO，冷冷生日 2004-06-03）──
@@ -49,10 +49,6 @@ _THUNDERSTORM_CODES = {95, 96, 99}    # 雷暴（96/99 伴冰雹，更重）
 _WEATHER_LOOKAHEAD_DAYS = 7           # 预报扫描窗口
 _WEATHER_MAX_NEW_PER_RUN = 3          # 单次检测最多新建事件数（防预报噪音）
 
-# 默认香港坐标（定位缓存不可用时的回退，与 heartbeat 早安任务一致）
-_DEFAULT_LAT = 22.3193
-_DEFAULT_LON = 114.1694
-
 _SOURCE_NOTES = {
     "llm": "冷冷自己提到的",
     "weather": "天气预报检测到的",
@@ -68,11 +64,6 @@ def _today() -> datetime.date:
 
 def _parse_date(s: str) -> datetime.date:
     return datetime.datetime.strptime(s, _DATE_FMT).date()
-
-
-def _rows_to_dicts(cursor, rows: list) -> list[dict]:
-    cols = [desc[0] for desc in (cursor.description or [])]
-    return [dict(zip(cols, row)) for row in rows]
 
 
 # ── 写入 ──────────────────────────────────────────────────────
@@ -121,7 +112,7 @@ async def create_event(
         (dedupe_key,),
     )
     row = await cursor.fetchone()
-    event = _rows_to_dicts(cursor, [row])[0]
+    event = rows_to_dicts(cursor, [row])[0]
     return event, event["id"] == event_id
 
 
@@ -141,7 +132,7 @@ async def get_active_events(limit: int = 20) -> list[dict]:
         (today, limit),
     )
     rows = await cursor.fetchall()
-    return _rows_to_dicts(cursor, rows)
+    return rows_to_dicts(cursor, rows)
 
 
 async def archive_expired() -> int:
@@ -322,7 +313,7 @@ async def detect_weather_events() -> int:
         coords = await location_store.get_any()
     except Exception as e:
         log.warning("事件天气检测获取坐标失败：%s", e)
-    lat, lon = coords if coords else (_DEFAULT_LAT, _DEFAULT_LON)
+    lat, lon = coords if coords else (DEFAULT_LAT, DEFAULT_LON)
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

@@ -22,6 +22,7 @@ log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
 from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
+from database.core import rows_to_dicts
 
 
 def _escape_like(s: str) -> str:
@@ -81,14 +82,6 @@ class MemoryManager:
     def __init__(self, db: aiosqlite.Connection):
         self._db = db
 
-    # ── 内部工具 ────────────────────────────────────────────
-
-    @staticmethod
-    def _rows_to_dicts(cursor, rows: list) -> list[dict]:
-        """用 cursor.description 手动构造 dict 列表，完全避免 row_factory 共享状态问题。"""
-        cols = [desc[0] for desc in (cursor.description or [])]
-        return [dict(zip(cols, row)) for row in rows]
-
     # ── 写入 ────────────────────────────────────────────────
 
     async def add(
@@ -136,7 +129,7 @@ class MemoryManager:
             (category, content),
         )
         row = await cursor.fetchone()
-        return self._rows_to_dicts(cursor, [row])[0]
+        return rows_to_dicts(cursor, [row])[0]
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
         """覆盖一条记忆的内容，刷新时间戳。返回是否成功。"""
@@ -198,7 +191,7 @@ class MemoryManager:
             "SELECT * FROM memories WHERE status = 'active' ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
-        mems = self._rows_to_dicts(cursor, rows)
+        mems = rows_to_dicts(cursor, rows)
         return json.dumps(
             {"memories": mems, "exported_at": datetime.datetime.now(_HKT).isoformat()},
             ensure_ascii=False,
@@ -239,7 +232,7 @@ class MemoryManager:
                 "SELECT * FROM memories WHERE status = 'active'"
             )
         rows = await cursor.fetchall()
-        matched = self._rows_to_dicts(cursor, rows)
+        matched = rows_to_dicts(cursor, rows)
 
         # 按相关性评分排序
         now = datetime.datetime.now(_HKT)
@@ -272,7 +265,7 @@ class MemoryManager:
             (f"%{_escape_like(category)}%", limit),
         )
         rows = await cursor.fetchall()
-        return self._rows_to_dicts(cursor, rows)
+        return rows_to_dicts(cursor, rows)
 
     async def recent(self, limit: int = 30) -> list[dict]:
         """返回最近 N 条活跃记忆，按时间正序排列（最早的在前）。
@@ -288,7 +281,7 @@ class MemoryManager:
             (limit,),
         )
         rows = await cursor.fetchall()
-        return self._rows_to_dicts(cursor, rows)
+        return rows_to_dicts(cursor, rows)
 
     async def old_memories(self, min_age_days: int = 90, limit: int = 5,
                            exclude_ids: list[str] | None = None) -> list[dict]:
@@ -323,7 +316,7 @@ class MemoryManager:
                 (cutoff, limit),
             )
         rows = await cursor.fetchall()
-        return self._rows_to_dicts(cursor, rows)
+        return rows_to_dicts(cursor, rows)
 
     async def list_categories(self) -> dict[str, int]:
         """列出所有类别及活跃记忆数量。"""
@@ -347,4 +340,4 @@ class MemoryManager:
             "SELECT * FROM memories WHERE status = 'active' ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
-        return self._rows_to_dicts(cursor, rows)
+        return rows_to_dicts(cursor, rows)

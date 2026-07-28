@@ -9,12 +9,27 @@
    （APScheduler 心跳、内存限流桶、运行时配置都是进程内状态，
    多 worker 会导致心跳重复、限流失效、配置不同步）
 """
+import hmac
 import os
 import sys
 
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def bearer_token_matches(auth_header: str, expected_token: str) -> bool:
+    """常量时间比较 Bearer Token，防时序侧信道（全项目单一实现）。
+
+    api/middleware/auth 与 /api/health 共用，避免内联复刻漂移。
+    不含「未配置 token=开发模式」规则——该规则由各调用方自行决定。
+    """
+    if not auth_header.startswith("Bearer "):
+        return False
+    provided = auth_header[len("Bearer "):]
+    if not provided:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), expected_token.encode("utf-8"))
 
 # 视为回环（仅本机可访问）的绑定地址
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}

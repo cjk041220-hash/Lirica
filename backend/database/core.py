@@ -28,6 +28,16 @@ DB_PATH = Path(__file__).parent.parent / "data" / "userdata.db"
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
 from utils.timezone import HKT as _HKT
 
+
+def rows_to_dicts(cursor, rows: list) -> list[dict]:
+    """把 aiosqlite 游标的行列表转成 dict 列表（全项目单一实现）。
+
+    memory/manager、tools/diary、utils/events 共用，取代过去三处逐字复制。
+    刻意不用 row_factory，规避共享长连接下 row_factory 的共享状态问题。
+    """
+    cols = [desc[0] for desc in (cursor.description or [])]
+    return [dict(zip(cols, row)) for row in rows]
+
 # ── 权限收紧 ────────────────────────────────────────────────
 
 

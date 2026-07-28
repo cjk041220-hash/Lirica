@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from utils.errors import log_tool_error
 # 冷冷在香港（UTC+8）
 from utils.timezone import HKT as _HKT
+from database.core import rows_to_dicts
 
 # ── 全局连接注入（由 server.py lifespan 调用 set_db_conn 设置） ──
 
@@ -17,14 +18,6 @@ def set_db_conn(conn: aiosqlite.Connection) -> None:
     """注入全局数据库连接（在 lifespan 中调用）。"""
     global _db_conn
     _db_conn = conn
-
-
-# ── 内部工具 ──────────────────────────────────────────────────
-
-def _rows_to_dicts(cursor, rows: list) -> list[dict]:
-    """用 cursor.description 手动构造 dict 列表，避免 row_factory 共享状态问题。"""
-    cols = [desc[0] for desc in (cursor.description or [])]
-    return [dict(zip(cols, row)) for row in rows]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -93,7 +86,7 @@ async def read_diary(date_str: str = "") -> str:
             row = await cursor.fetchone()
             if not row:
                 return f"小汐翻开{date_str}……这一页是空白的呢。"
-            d = _rows_to_dicts(cursor, [row])[0]
+            d = rows_to_dicts(cursor, [row])[0]
             return f"📖 **{d.get('title', '')}**\n\n{d.get('content', '')}"
         else:
             cursor = await _db_conn.execute(
@@ -104,7 +97,7 @@ async def read_diary(date_str: str = "") -> str:
                 return "小汐还没有写过日记呢……"
 
             result = "📖 小汐最近写的日记：\n\n"
-            for d in _rows_to_dicts(cursor, rows):
+            for d in rows_to_dicts(cursor, rows):
                 result += f"**{d.get('title', '')}**\n"
                 result += f"{d.get('content', '')[:200]}……\n\n"
             return result

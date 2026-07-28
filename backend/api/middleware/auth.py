@@ -6,11 +6,11 @@
   才用于限流归因，否则攻击者可伪造 XFF 完全绕过限流
 - Token 比较使用 hmac.compare_digest（常量时间，防时序侧信道）
 """
-import hmac
 import time
 
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+from utils.security import bearer_token_matches as _token_matches
 
 
 # 受保护的 API 路径前缀（需要 Bearer Token 认证）
@@ -105,16 +105,6 @@ def _get_path_prefix(path: str) -> str | None:
 def _is_public_path(path: str) -> bool:
     """是否为免认证的公开端点。"""
     return path in _PUBLIC_PATHS
-
-
-def _token_matches(provided_auth_header: str, expected_token: str) -> bool:
-    """常量时间比较 Bearer Token，防时序侧信道。"""
-    if not provided_auth_header.startswith("Bearer "):
-        return False
-    provided = provided_auth_header[len("Bearer "):]
-    if not provided:
-        return False
-    return hmac.compare_digest(provided.encode("utf-8"), expected_token.encode("utf-8"))
 
 
 def _check_rate(path: str, ip: str) -> bool:

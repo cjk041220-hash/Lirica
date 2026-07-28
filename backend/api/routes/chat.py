@@ -303,21 +303,16 @@ async def health(request: Request):
     checkpointer = getattr(request.app.state, "checkpointer", None)
 
     # 检查是否已认证（持有有效 Bearer Token）。
-    # 与认证中间件保持一致：常量时间比较，防时序侧信道。
-    import hmac
+    # 复用 utils/security.bearer_token_matches（常量时间比较，防时序侧信道），
+    # 与认证中间件同一实现，避免内联复刻导致的漂移。
     from config.settings import get_settings
+    from utils.security import bearer_token_matches
     token = get_settings().xiaoxi_api_token
-    is_authenticated = False
-    if token:
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer ") and auth_header[len("Bearer "):]:
-            is_authenticated = hmac.compare_digest(
-                auth_header[len("Bearer "):].encode("utf-8"),
-                token.encode("utf-8"),
-            )
-    else:
-        # 未配置 token 时视为开发模式，允许完整访问
-        is_authenticated = True
+    # 未配置 token 时视为开发模式，允许完整访问
+    is_authenticated = (
+        bearer_token_matches(request.headers.get("authorization", ""), token)
+        if token else True
+    )
 
     # 未认证：只返回基本状态
     if not is_authenticated:
