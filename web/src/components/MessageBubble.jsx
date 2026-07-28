@@ -1,5 +1,4 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { lazy, Suspense } from 'react'
 
 // 小汐回复的 Markdown 渲染组件（修复 P2-5）：
 // react-markdown 默认不渲染原始 HTML（无 dangerouslySetInnerHTML），
@@ -32,6 +31,9 @@ const mdComponents = {
   th: ({ children }) => <th className="border border-ink-tea/10 px-2 py-1 bg-ink-tea/3 text-left font-medium">{children}</th>,
   td: ({ children }) => <td className="border border-ink-tea/10 px-2 py-1">{children}</td>,
 }
+
+// 懒加载：react-markdown 生态按需拉取（见 Markdown.jsx）
+const Markdown = lazy(() => import('./Markdown'))
 
 export default function MessageBubble({ message }) {
   const { role, content, type } = message
@@ -76,9 +78,9 @@ export default function MessageBubble({ message }) {
           {isProactive ? (
             <p className="whitespace-pre-wrap">{content}</p>
           ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-              {content || ''}
-            </ReactMarkdown>
+            <Suspense fallback={null}>
+              <Markdown components={mdComponents}>{content || ''}</Markdown>
+            </Suspense>
           )}
           {message.streaming && (
             <span className="inline-block w-[3px] h-[14px] bg-healing-aqua/70 ml-1 rounded-full animate-shimmer align-middle" />
