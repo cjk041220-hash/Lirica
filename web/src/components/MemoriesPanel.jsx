@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconWhale from '../assets/icons/IconWhale'
 import { apiFetch } from '../api/client'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 const TABS = [
   { key: 'memories', label: '记忆' },
@@ -13,6 +14,7 @@ export default function MemoriesPanel({ onClose }) {
   const [memories, setMemories] = useState([])
   const [diaries, setDiaries] = useState([])
   const [loading, setLoading] = useState(true)
+  const dialogRef = useFocusTrap()
 
   // 切换 tab 时按需拉取（apiFetch 带 token，裸 fetch 在配置了
   // XIAOXI_API_TOKEN 的部署下会 401 静默成空列表）
@@ -49,6 +51,7 @@ export default function MemoriesPanel({ onClose }) {
       <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+        ref={dialogRef} tabIndex={-1}
         role="dialog" aria-modal="true" aria-label="小汐的记忆"
         style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
 

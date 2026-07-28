@@ -136,8 +136,17 @@ export default function CharacterSprite({ state = 'idle', pokeable = true }) {
           alt="小汐"
           data-testid="sprite-img"
           role="button"
-          aria-label="戳一下小汐"
+          aria-label={pokeable ? '戳一下小汐' : '小汐'}
+          tabIndex={pokeable ? 0 : -1}
           onClick={handlePoke}
+          onKeyDown={(e) => {
+            // 键盘可达性：Enter / 空格触发戳一戳（与鼠标 onClick 等价）
+            if (!pokeable) return
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              handlePoke()
+            }
+          }}
           onError={(e) => {
             // 裂图防线：任何立绘加载失败 → 回退 idle；idle 本身也裂
             // 就不再重试（避免死循环），靠 alt 兜底

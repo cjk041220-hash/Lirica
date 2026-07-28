@@ -3,6 +3,7 @@ import IconClose from '../assets/icons/IconClose'
 import IconHistory from '../assets/icons/IconHistory'
 import IconWhale from '../assets/icons/IconWhale'
 import { apiFetch } from '../api/client'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // 「今天/今年」按 HKT 判定——后端时间戳是 HKT 文本（utils/timezone），
 // 项目原则是天空/深夜/时间显示全部走 HKT 钟，不跟设备本地时区
@@ -27,6 +28,7 @@ export default function SessionsPanel({ chat, onClose }) {
   const [loading, setLoading] = useState(true)
   // 删除两次点击确认：首点进入「确认？」态，2 秒后自动复位
   const [confirmId, setConfirmId] = useState(null)
+  const dialogRef = useFocusTrap()
 
   useEffect(() => {
     let cancelled = false
@@ -75,6 +77,7 @@ export default function SessionsPanel({ chat, onClose }) {
       <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+        ref={dialogRef} tabIndex={-1}
         role="dialog" aria-modal="true" aria-label="以往的对话"
         style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
 

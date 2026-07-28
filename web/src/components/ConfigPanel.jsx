@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import { getToken, setToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { isGpsEnabled, setGpsEnabled } from '../api/location'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // 后端 available_models 拉取失败时的兜底
 const fallbackModels = [
@@ -21,6 +22,7 @@ const styleLevels = [
 
 export default function ConfigPanel({ config, push, onClose }) {
   const { settings, updateSetting } = config
+  const dialogRef = useFocusTrap()
 
   // 访问令牌（修复 P1-2）：后端启用 XIAOXI_API_TOKEN 后必填
   const [tokenInput, setTokenInput] = useState(getToken())
@@ -67,6 +69,7 @@ export default function ConfigPanel({ config, push, onClose }) {
       <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
+        ref={dialogRef} tabIndex={-1}
         role="dialog" aria-modal="true" aria-label="设置"
         style={{ background: 'rgba(252,250,248,0.94)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
 
