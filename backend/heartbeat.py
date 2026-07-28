@@ -295,6 +295,57 @@ async def _mark_stored(msg_id: str, label: str = "主动消息") -> None:
         log.warning("%s状态兜底失败 [%s]: %s", label, msg_id[:8], e)
 
 
+async def _store_and_push_proactive(content: str, *, label: str = "主动消息") -> None:
+    """主动消息 / 早安共用的「存 pending → 推送 → 失败降级 stored」流水线。
+
+    统一两处曾经的重复实现，并固定更安全的语义：**存库失败则不推送**。
+    否则设备会收到一条 DB 里根本没有的通知，未读轮询也拉不到，形成
+    「响了却查无此消息」的静默不一致（原早安路径的缺陷）。
+    推送失败（含 web_push 不可用）降级为 stored，供页面打开时轮询拉取。
+    """
+    now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
+    msg_id = uuid.uuid4().hex[:16]
+
+    # 1) 存 pending —— 失败即止步，不推送（见 docstring 的安全语义）
+    try:
+        conn = await get_db()
+        await conn.execute(
+            """INSERT INTO proactive_messages (id, content, created_at, status)
+               VALUES (?, ?, ?, 'pending')""",
+            (msg_id, content, now),
+        )
+        await conn.commit()
+    except Exception as e:
+        log.error("%s存储失败: %s", label, e)
+        return
+    log.info("%s已生成 [%s]: %s", label, msg_id[:8], content[:50])
+
+    # 2) 推送 —— 失败降级 stored（复用上面的连接；单连接架构下与重取等价）
+    try:
+        from utils.web_push import send_push
+        sent = await send_push(title="小汐", body=content, url="/")
+        if sent > 0:
+            await conn.execute(
+                "UPDATE proactive_messages SET delivered_at = ?, status = 'delivered' WHERE id = ?",
+                (now, msg_id),
+            )
+            await conn.commit()
+            log.info("%s已推送至 %d 个设备", label, sent)
+        else:
+            # 无订阅设备，仅存储供轮询拉取（从未推送过，不叫 delivered）
+            await conn.execute(
+                "UPDATE proactive_messages SET status = 'stored' WHERE id = ?",
+                (msg_id,),
+            )
+            await conn.commit()
+    except ImportError:
+        log.warning("web_push 模块不可用，%s仅存储在数据库中", label)
+        await _mark_stored(msg_id, label=label)
+    except Exception as e:
+        log.warning("%s推送失败: %s", label, e)
+        await _mark_stored(msg_id, label=label)
+
+
 async def _try_proactive_message(mood: str, daily_event: str, hour: int,
                                  now_dt: datetime.datetime | None = None):
     """尝试生成并推送一条主动消息。"""
@@ -306,46 +357,8 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int,
         content = await _generate_proactive_message(mood, daily_event, hour,
                                                     now_dt=now_dt)
 
-        # 存入数据库
-        now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
-        msg_id = uuid.uuid4().hex[:16]
-        conn = await get_db()
-        await conn.execute(
-            """INSERT INTO proactive_messages (id, content, created_at, status)
-               VALUES (?, ?, ?, 'pending')""",
-            (msg_id, content, now),
-        )
-        await conn.commit()
-        log.info("主动消息已生成 [%s]: %s", msg_id[:8], content[:50])
-
-        # 推送通知
-        try:
-            from utils.web_push import send_push
-            sent = await send_push(
-                title="小汐",
-                body=content,
-                url="/",
-            )
-            if sent > 0:
-                await conn.execute(
-                    "UPDATE proactive_messages SET delivered_at = ?, status = 'delivered' WHERE id = ?",
-                    (now, msg_id),
-                )
-                await conn.commit()
-                log.info("主动消息已推送至 %d 个设备", sent)
-            else:
-                # 无订阅设备，仅存储供轮询拉取（从未推送过，不叫 delivered）
-                await conn.execute(
-                    "UPDATE proactive_messages SET status = 'stored' WHERE id = ?",
-                    (msg_id,),
-                )
-                await conn.commit()
-        except ImportError:
-            log.warning("web_push 模块不可用，消息仅存储在数据库中")
-            await _mark_stored(msg_id)
-        except Exception as e:
-            log.warning("推送发送失败: %s", e)
-            await _mark_stored(msg_id)
+        # 存 pending → 推送 → 失败降级 stored（与早安共用；存库失败则不推送）
+        await _store_and_push_proactive(content, label="主动消息")
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)
@@ -545,51 +558,8 @@ async def daily_morning_greeting():
     if len(content) < 5:
         content = _DEFAULT_GOOD_MORNING
 
-    # 6. 存入数据库
-    now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
-    msg_id = uuid.uuid4().hex[:16]
-    try:
-        conn = await get_db()
-        await conn.execute(
-            """INSERT INTO proactive_messages (id, content, created_at, status)
-               VALUES (?, ?, ?, 'pending')""",
-            (msg_id, content, now),
-        )
-        await conn.commit()
-        log.info("早安消息已生成 [%s]: %s", msg_id[:8], content[:50])
-    except Exception as e:
-        log.error("早安消息存储失败: %s", e)
-
-    # 7. 推送通知
-    try:
-        from utils.web_push import send_push
-        sent = await send_push(
-            title="小汐",
-            body=content,
-            url="/",
-        )
-        if sent > 0:
-            conn = await get_db()
-            await conn.execute(
-                "UPDATE proactive_messages SET delivered_at = ?, status = 'delivered' WHERE id = ?",
-                (now, msg_id),
-            )
-            await conn.commit()
-            log.info("早安消息已推送至 %d 个设备", sent)
-        else:
-            # 无订阅设备，仅存储供轮询拉取（从未推送过，不叫 delivered）
-            conn = await get_db()
-            await conn.execute(
-                "UPDATE proactive_messages SET status = 'stored' WHERE id = ?",
-                (msg_id,),
-            )
-            await conn.commit()
-    except ImportError:
-        log.warning("web_push 模块不可用，早安消息仅存储在数据库中")
-        await _mark_stored(msg_id, label="早安消息")
-    except Exception as e:
-        log.warning("早安消息推送失败: %s", e)
-        await _mark_stored(msg_id, label="早安消息")
+    # 存 pending → 推送 → 失败降级 stored（与主动消息共用；存库失败则不推送）
+    await _store_and_push_proactive(content, label="早安消息")
 
     log.info("早安问候任务完成")
 
