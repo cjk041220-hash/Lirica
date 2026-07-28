@@ -15,7 +15,6 @@
 import asyncio
 import datetime
 import os
-from datetime import timezone, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -27,7 +26,7 @@ log = get_logger(__name__)
 DB_PATH = Path(__file__).parent.parent / "data" / "userdata.db"
 
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 # ── 权限收紧 ────────────────────────────────────────────────
 
@@ -120,13 +119,6 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             content         TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS life_state (
-            id              INTEGER PRIMARY KEY DEFAULT 1,
-            mood            TEXT,
-            daily_event     TEXT,
-            updated_at      TEXT
-        );
-
         CREATE TABLE IF NOT EXISTS proactive_messages (
             id              TEXT PRIMARY KEY,
             content         TEXT NOT NULL,
@@ -157,7 +149,15 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     # 必须在创建索引之前执行：索引引用的是迁移后的最终 schema
     # （如 memories.status），若在旧版表上先建索引会因列不存在而
     # 直接报错，导致旧数据库永远无法启动新版本（v0.4.3 修复）。
-    from database.migrations import ensure_schema, EVENTS_SCHEMA_SQL
+    from database.migrations import (
+        ensure_schema,
+        CHAT_ARCHIVE_SCHEMA_SQL,
+        EVENTS_SCHEMA_SQL,
+        LIFE_STATE_SCHEMA_SQL,
+    )
+    # life_state 表（v7：含 first_met_on）：老库由迁移补列，新库由共享
+    # DDL 常量建立，与 migrations / conftest 三处永不漂移
+    await conn.executescript(LIFE_STATE_SCHEMA_SQL)
     await ensure_schema(conn)
 
     # 索引（幂等，IF NOT EXISTS）——此时 schema 已保证为最终形态
@@ -173,6 +173,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     # events 表（迁移 v6）：老库由迁移建立，新库由下面这段建立，
     # 共享 migrations.EVENTS_SCHEMA_SQL 常量，两处永不漂移
     await conn.executescript(EVENTS_SCHEMA_SQL)
+    # chat_sessions / chat_messages（迁移 v8）：同共享 DDL 常量模式
+    await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针
@@ -184,6 +186,12 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             ("开心", "刚刚醒来，映海还很安静", now),
         )
         await conn.commit()
+
+    # 相识日种子兜底：全新安装时 v7 迁移跑在初始行 INSERT 之前，
+    # 那里的种子 UPDATE 命中空表，这里对已有行补一次（同样幂等）
+    from database.migrations import _seed_first_met
+    await _seed_first_met(conn)
+    await conn.commit()
 
 
 # ── Checkpoint 裁剪 ───────────────────────────────────────────
@@ -214,14 +222,19 @@ async def prune_checkpoints(
         await conn.execute("PRAGMA busy_timeout=5000")
 
         # ── 清理长期不活跃的整个 thread ─────────────────────
-        # checkpoint_id 为时间有序的 uuid7，去掉连字符后前 12 位
-        # 十六进制 = unix 毫秒时间戳，定宽十六进制可按字典序比较。
-        # （与上文 ORDER BY checkpoint_id DESC 的时间序假设一致）
+        # checkpoint_id 为 langgraph 生成的时间有序 uuid6（见
+        # langgraph/checkpoint/base/id.py:uuid6）：时间戳 = unix_ns//100
+        # + 格里高利 epoch 偏移 0x01B21DD213814000，UUID 高 48 位
+        # （去连字符后前 12 位十六进制）= (timestamp >> 12) & 0xFFFFFFFFFFFF，
+        # 定宽十六进制可按字典序比较。阈值必须在同一时间域计算——
+        # 旧实现按 unix 毫秒直接格式化，对真实 uuid6 恒小于任何阈值，
+        # 导致僵尸清理从未删除过任何行（测试还伪造 uuid7 数据给了假绿灯）。
         if drop_inactive_days > 0:
             import time as _time
 
             cutoff_ms = int((_time.time() - drop_inactive_days * 86400) * 1000)
-            threshold = f"{cutoff_ms:012x}"
+            ts = cutoff_ms * 10_000 + 0x01B21DD213814000  # 毫秒 → uuid6 时间域
+            threshold = f"{(ts >> 12) & 0xFFFFFFFFFFFF:012x}"
             cursor = await conn.execute("""
                 DELETE FROM checkpoints
                 WHERE thread_id IN (
@@ -326,17 +339,21 @@ async def backup_database(
         log.error("数据库备份失败：%s", e)
         return None
 
-    # 隐私选项（P3-3）：从备份中剔除生理期记录。
+    # 隐私选项（P3-3）：从备份中剔除高敏数据。
     # 默认关闭（完整备份优先）；开启 BACKUP_SCRUB_SENSITIVE 后，
-    # 备份不再含 cycle_records——适合会把备份同步到网盘/他人的场景。
+    # 备份不再含 cycle_records 与对话档案（chat_sessions /
+    # chat_messages）——对话档案是最大体量的亲密数据，适合会把
+    # 备份同步到网盘/他人的场景。
     try:
         from config.settings import get_settings
 
         if get_settings().backup_scrub_sensitive:
             async with aiosqlite.connect(str(backup_path)) as scrub_conn:
                 await scrub_conn.execute("DELETE FROM cycle_records")
+                await scrub_conn.execute("DELETE FROM chat_messages")
+                await scrub_conn.execute("DELETE FROM chat_sessions")
                 await scrub_conn.commit()
-            log.info("备份已脱敏：cycle_records 已剔除")
+            log.info("备份已脱敏：cycle_records + 对话档案已剔除")
     except Exception as e:
         log.warning("备份脱敏失败（备份本身仍保留）：%s", e)
 

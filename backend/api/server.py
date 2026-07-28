@@ -16,8 +16,13 @@ from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router, create_llm_from_runtime_config
 from api.routes.push import router as push_router
+from api.routes.sessions import router as sessions_router
 from api.routes.status import router as status_router
-from api.middleware import AuthAndRateLimitMiddleware, RejectWebSocketMiddleware
+from api.middleware import (
+    AuthAndRateLimitMiddleware,
+    RejectWebSocketMiddleware,
+    SecurityHeadersMiddleware,
+)
 from database.core import init_db_connection, get_db, close_db_connection, init_db
 from config.settings import get_settings
 from utils.logger import setup_logging, get_logger
@@ -71,6 +76,21 @@ async def lifespan(app: FastAPI):
             "生成密钥：npx web-push generate-vapid-keys，"
             "填入 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY。"
         )
+
+    # 公网部署自检（纯日志，不改行为）——把关键开关在启动时显式打印一遍，
+    # 上线当天一眼看出 token / CORS / 代理信任是否配错
+    bind_host = detect_bind_host()
+    tok = settings.xiaoxi_api_token
+    masked = (tok[:4] + "…" + tok[-4:]) if len(tok) > 8 else ("已设置" if tok else "未设置")
+    log.info(
+        "── 公网部署自检 ── bind=%s | token=%s | allow_insecure=%s | trust_proxy=%s | cors=%s",
+        bind_host, masked, settings.xiaoxi_allow_insecure,
+        settings.trust_proxy, settings.cors_origins,
+    )
+    if any(o.strip() == "*" for o in settings.cors_origins.split(",")):
+        log.warning("CORS_ORIGINS 含通配符 * —— 公网部署请改为精确域名！")
+    if settings.trust_proxy:
+        log.info("TRUST_PROXY=True：仅当反向代理正确覆写 X-Forwarded-For 时，限流 IP 才真实")
 
     # 1. 业务数据库（userdata.db）— 建立全局长连接 + PRAGMA + 建表建索引
     await init_db_connection()
@@ -140,7 +160,10 @@ async def lifespan(app: FastAPI):
     #    异步任务必须以协程函数直接注册（lambda 包裹会导致协程被丢弃、
     #    主动消息链路整体静默，见 register_jobs 文档字符串与回归测试）
     heartbeat.register_jobs(app)
-    heartbeat.scheduler.start()
+    # 防重入：模块级 scheduler 跨 app 实例存活（测试姿势下同进程
+    # 可能多次跑 lifespan），二次 start() 会抛 SchedulerAlreadyRunningError
+    if not heartbeat.scheduler.running:
+        heartbeat.scheduler.start()
     log.info("心跳已启动（每 2 小时 + 每日 8:00 早安）")
 
     log.info("小汐醒啦！ -> http://127.0.0.1:8000")
@@ -153,6 +176,9 @@ async def lifespan(app: FastAPI):
     app.state.agent = None
     # 关闭共享 HTTP 客户端
     await shared_http_client.aclose()
+    # 关闭 Tavily 搜索客户端单例（内部 httpx 连接池）
+    from tools.search import close_tavily_client
+    await close_tavily_client()
     # 关闭 LangGraph checkpoint 连接
     if db_conn is not None:
         try:
@@ -168,51 +194,62 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
 
+    # 设了 token = 有部署意图 = 生产 → 关闭 docs，避免 API schema
+    # （含 /api/memories/clear 等危险端点的参数说明）公网裸奔；
+    # 开发模式（无 token、仅本机）保留 /docs 作调试面。
+    # 与 assert_safe_startup 的 fail-closed「token=生产意图」语义对称。
+    docs_on = not settings.xiaoxi_api_token
     app = FastAPI(
         title="小汐 API",
         description="一只住在网页里的小鲸鱼",
         version=__version__,
         lifespan=lifespan,
+        docs_url="/docs" if docs_on else None,
+        redoc_url="/redoc" if docs_on else None,
+        openapi_url="/openapi.json" if docs_on else None,
     )
 
-    # CORS — 从 settings 读取允许的前端来源
+    # CORS 来源 — 从 settings 读取
     origins = [
         o.strip()
         for o in settings.cors_origins.split(",")
         if o.strip()
     ]
+
+    # 中间件注册顺序说明：Starlette add_middleware 是头插法，
+    # 最后注册的在最外层。执行顺序须为 CORS（最外层）→ 认证限流 →
+    # WebSocket 拒绝 → 路由，这样认证/限流短路返回的 401/429
+    # 也会带上 CORS 头，跨域前端才能读到错误体并走 401 引导流程。
+    # 因此 CORS 放在最后注册。
+    app.add_middleware(RejectWebSocketMiddleware)
+    app.add_middleware(
+        AuthAndRateLimitMiddleware,
+        api_token=settings.xiaoxi_api_token,
+        trust_proxy=settings.trust_proxy,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
-
-    # WebSocket 拒绝中间件
-    app.add_middleware(RejectWebSocketMiddleware)
-
-    # 认证 + 限流中间件（在 CORS 之后、路由之前）
-    app.add_middleware(
-        AuthAndRateLimitMiddleware,
-        api_token=settings.xiaoxi_api_token,
-        trust_proxy=settings.trust_proxy,
-    )
+    # 安全响应头放最外层（最后注册 = 头插法最外）：使 401/429/预检/静态
+    # 资源都带头。纯 ASGI 实现，不缓冲响应体，SSE 流式不受影响
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # REST 路由
     app.include_router(chat_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(push_router, prefix="/api")
+    app.include_router(sessions_router, prefix="/api")
     app.include_router(status_router, prefix="/api")
 
     # 前端静态文件（Vite 生产构建 web/dist；开发模式下前端独立运行在 :3000，
     # 由 vite.config.js 将 /api 代理到 :8000，无需此挂载）
-    # 兼容旧版 Next.js 导出目录 web/out 作为回退
     web_root = Path(__file__).parent.parent.parent / "web"
-    for dist_name in ("dist", "out"):
-        frontend_dir = web_root / dist_name
-        if frontend_dir.is_dir():
-            app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
-            break
+    frontend_dir = web_root / "dist"
+    if frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app
 

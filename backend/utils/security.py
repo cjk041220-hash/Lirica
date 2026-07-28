@@ -20,35 +20,52 @@ log = get_logger(__name__)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
 
+def _argv_value(argv: list[str], flag: str) -> str | None:
+    """取命令行参数值，同时支持 ``--flag V`` 与 ``--flag=V`` 两种写法。
+
+    uvicorn/click 两种写法都接受，只认空格写法会让 ``--host=0.0.0.0``
+    绕过启动安全校验（曾审计发现的 fail-open 路径）。
+    """
+    prefix = f"{flag}="
+    for i, token in enumerate(argv):
+        if token == flag:
+            return argv[i + 1] if i + 1 < len(argv) else None
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return None
+
+
 def detect_bind_host(argv: list[str] | None = None) -> str:
     """推断本次启动的绑定地址。
 
-    优先级：命令行 ``--host`` 参数 > 环境变量 ``XIAOXI_BIND_HOST`` > 默认回环。
-    uvicorn CLI（含 Dockerfile CMD）显式传 --host，因此 argv 解析能覆盖
-    绝大多数暴露场景；uvicorn 未指定 host 时默认就是 127.0.0.1。
+    优先级：命令行 ``--host``（``--host V`` / ``--host=V`` 两种写法）
+    > ``UVICORN_HOST`` 环境变量（uvicorn 实际生效的 env）
+    > ``XIAOXI_BIND_HOST``（项目自有覆盖）> 默认回环。
+    检测必须对齐 uvicorn 真实会绑定的地址，否则就是"检测到回环、
+    实际绑 0.0.0.0"的 fail-open；uvicorn 未指定 host 时默认就是 127.0.0.1。
     """
     argv = argv if argv is not None else sys.argv
-    if "--host" in argv:
-        i = argv.index("--host")
-        if i + 1 < len(argv):
-            return argv[i + 1]
-    return os.environ.get("XIAOXI_BIND_HOST", "127.0.0.1")
+    host = _argv_value(argv, "--host")
+    if host:
+        return host
+    return os.environ.get("UVICORN_HOST", os.environ.get("XIAOXI_BIND_HOST", "127.0.0.1"))
 
 
 def detect_workers(argv: list[str] | None = None) -> int:
-    """推断 worker 数：命令行 ``--workers`` > WEB_CONCURRENCY 环境变量 > 1。"""
+    """推断 worker 数：命令行 ``--workers``（两种写法）> UVICORN_WORKERS > WEB_CONCURRENCY > 1。"""
     argv = argv if argv is not None else sys.argv
-    if "--workers" in argv:
-        i = argv.index("--workers")
-        if i + 1 < len(argv):
-            try:
-                return int(argv[i + 1])
-            except ValueError:
-                pass
-    try:
-        return int(os.environ.get("WEB_CONCURRENCY", "1"))
-    except ValueError:
-        return 1
+    raw = _argv_value(argv, "--workers")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    for env_key in ("UVICORN_WORKERS", "WEB_CONCURRENCY"):
+        try:
+            return int(os.environ[env_key])
+        except (KeyError, ValueError):
+            continue
+    return 1
 
 
 def assert_safe_startup(

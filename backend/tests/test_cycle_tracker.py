@@ -14,7 +14,7 @@ from utils.cycle_tracker import (
     seed_initial_records,
 )
 
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 
 # ── 记录管理 ──────────────────────────────────────────────────
@@ -153,3 +153,19 @@ async def test_care_context_on_predicted_day(tmp_db):
 
     assert context is not None
     assert "今天可能就是" in context
+
+
+async def test_add_record_rejects_malformed_date(tmp_db):
+    """非法日期格式在入口被拒（防止一条坏数据拖垮 get_cycle_stats 全表 strptime）。"""
+    db_core._db = tmp_db
+    assert await add_record("2026-13-40") is False   # 月日越界
+    assert await add_record("明天") is False          # 非日期
+    assert await add_record("") is False              # 空串
+    assert await add_record("20260422") is False      # 宽松格式不收
+    assert await get_records() == []                  # 全部未入库
+
+    # 坏数据没能入库 → get_cycle_stats 不会被一条脏值禁用
+    await add_record("2026-04-22")
+    await add_record("2026-05-20")
+    stats = await get_cycle_stats()
+    assert stats is not None

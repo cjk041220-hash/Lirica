@@ -16,7 +16,6 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
-    HumanMessage,
     RemoveMessage,
     SystemMessage,
     ToolMessage,
@@ -24,6 +23,7 @@ from langchain_core.messages import (
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.tools import BaseTool
 
+from utils.errors import log_tool_error
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -59,14 +59,17 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
 
         to_remove = []
         if len(conversation) > max_conversation_msgs:
-            # 找到安全的裁剪边界（HumanMessage 开头），避免切断工具调用链
+            # 找到安全的裁剪边界（HumanMessage 开头），避免切断工具调用链。
+            # 找不到 human 边界时放弃本轮裁剪（宁多留，勿切链）：
+            # 旧实现在无边界时仍按 excess 硬切，可能删掉带 tool_calls 的
+            # AIMessage、留下孤儿 ToolMessage 在队首 → OpenAI 兼容 API 400
             excess = len(conversation) - max_conversation_msgs
-            trim_end = excess
+            trim_end = None
             for i in range(excess, len(conversation)):
                 if getattr(conversation[i], "type", "") == "human":
                     trim_end = i
                     break
-            if trim_end > 0:
+            if trim_end:
                 to_remove = conversation[:trim_end]
                 conversation = conversation[trim_end:]
 
@@ -143,8 +146,12 @@ class _ToolErrorGuardMiddleware(AgentMiddleware):
     @staticmethod
     def _error_message(request, exc: Exception):
         call = request.tool_call
+        # 固定文案，绝不嵌入异常文本：httpx 异常的 str 会携带完整 URL
+        # （含 key=...），一旦嵌入 ToolMessage 会同时泄漏到 LLM 上下文、
+        # checkpoint 持久化和 SSE tool_end 事件三个面。现场细节走脱敏日志。
+        log_tool_error(call.get("name", "?"), exc)
         return ToolMessage(
-            content=f"工具执行出错：{type(exc).__name__}: {exc}",
+            content="工具执行出错了，小汐再试一次好不好？（工具内部错误）",
             tool_call_id=call["id"],
             name=call.get("name"),
             status="error",

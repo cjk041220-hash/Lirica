@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+// 戳一戳文案池单一真相源（E2E 共用 src/poke-lines.json，改一处即可，免双份同步）
+import POKE_LINES from '../poke-lines.json'
 
 const spriteMap = {
   idle: '/sprites/idle.webp',
@@ -7,14 +9,32 @@ const spriteMap = {
   happy: '/sprites/happy.webp',
   sleepy: '/sprites/sleeping.webp',
   thinking: '/sprites/thinking.webp',
+  halfawake: '/sprites/halfawake.webp',
+  exploring: '/sprites/exploring.webp',  // 心情「活泼/好奇」映射（App.jsx moodToSprite）
+  sad: '/sprites/sad.webp',
+  // wave / reading：SSE state 协议预留（useChat.js 的 {"type":"state"} 分发已就位，
+  // 后端下发即可用），素材为 exploring.webp / reading.webp
   wave: '/sprites/exploring.webp',
   reading: '/sprites/reading.webp',
-  sad: '/sprites/sad.webp',
 }
 
-export default function CharacterSprite({ state = 'idle' }) {
+// POKE_LINES 见顶部 import：对象形态 { sleepy, halfawake, default }，handlePoke 按 effective 取池、缺省回落 default
+
+const POKE_COOLDOWN_MS = 6000    // 冷却：防连戳刷屏
+const BUBBLE_MS = 2800           // 气泡停留
+const SLEEPY_OVERRIDE_MS = 4000  // 沉睡被戳 → halfawake 的临时覆盖时长
+
+export default function CharacterSprite({ state = 'idle', pokeable = true }) {
   const [displayState, setDisplayState] = useState(state)
   const [transitioning, setTransitioning] = useState(false)
+  const [bubble, setBubble] = useState(null)           // { id, text }
+  const [pokeOverride, setPokeOverride] = useState(null) // 深夜戳醒的临时立绘
+  const [wiggle, setWiggle] = useState(false)          // 冷却中的轻晃反馈
+  const [broken, setBroken] = useState(false)          // 立绘加载失败 → 回退 idle
+  const cooldownRef = useRef(0)
+  const bubbleTimerRef = useRef(null)
+  const overrideTimerRef = useRef(null)
+  const wiggleTimerRef = useRef(null)
 
   useEffect(() => {
     if (state !== displayState) {
@@ -27,34 +47,112 @@ export default function CharacterSprite({ state = 'idle' }) {
     }
   }, [state, displayState])
 
-  const src = spriteMap[displayState] || spriteMap.idle
+  // 立绘文件恢复（或状态切换）后重试加载
+  useEffect(() => { setBroken(false) }, [displayState])
+
+  // 卸载清理全部定时器（App 根组件永不卸载，但组件要保持自洽）
+  useEffect(() => () => {
+    clearTimeout(bubbleTimerRef.current)
+    clearTimeout(overrideTimerRef.current)
+    clearTimeout(wiggleTimerRef.current)
+  }, [])
+
+  // 戳一戳：纯本地交互。pokeOverride 只是局部视觉层，
+  // 绝不反向写 App 状态——4 秒后自动回落回 App 决定的状态
+  const handlePoke = useCallback(() => {
+    if (!pokeable) return
+    const now = Date.now()
+    if (now - cooldownRef.current < POKE_COOLDOWN_MS) {
+      // 冷却中：不弹新气泡，只给一个轻晃反馈（不是完全无响应）
+      setWiggle(true)
+      clearTimeout(wiggleTimerRef.current)
+      wiggleTimerRef.current = setTimeout(() => setWiggle(false), 300)
+      return
+    }
+    cooldownRef.current = now
+
+    const effective = pokeOverride || displayState
+    const pool = POKE_LINES[effective] || POKE_LINES.default
+    const text = pool[Math.floor(Math.random() * pool.length)]
+    setBubble({ id: now, text })
+    clearTimeout(bubbleTimerRef.current)
+    bubbleTimerRef.current = setTimeout(() => setBubble(null), BUBBLE_MS)
+
+    // 深夜沉睡被戳 → 睡眼惺忪一会儿再睡回去
+    if (effective === 'sleepy') {
+      setPokeOverride('halfawake')
+      clearTimeout(overrideTimerRef.current)
+      overrideTimerRef.current = setTimeout(() => setPokeOverride(null), SLEEPY_OVERRIDE_MS)
+    }
+  }, [pokeable, pokeOverride, displayState])
+
+  const effectiveState = pokeOverride || displayState
+  const src = broken ? spriteMap.idle : (spriteMap[effectiveState] || spriteMap.idle)
+  // 睡姿是横躺画幅：要按宽度平铺在地板上，不能像站姿那样按 92vh 竖撑
+  //（否则横躺图被竖撑→飘在半空，正是之前的浮空方块观感来源之一）
+  const lying = effectiveState === 'sleepy'
 
   return (
-    <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-[8%]">
-      {/* 脚下光晕 */}
+    <div className={`absolute z-20 left-1/2 -translate-x-1/2 ${lying ? 'bottom-[36%] w-[72%]' : 'bottom-[8%]'}`}>
+      {/* 身下光晕：站姿是脚下一汪，睡姿是蜷身下一片更宽的浅光 */}
       <div
-        className="absolute left-1/2 bottom-0 -translate-x-1/2 w-[92%] h-[14%] rounded-[50%] opacity-25 pointer-events-none"
+        className={`absolute left-1/2 -translate-x-1/2 rounded-[50%] pointer-events-none ${lying ? 'bottom-[2%] w-[96%] h-[20%] opacity-20' : 'bottom-0 w-[92%] h-[14%] opacity-25'}`}
         style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.5) 0%, transparent 70%)' }}
       />
-      {/* 身后柔光 */}
-      <div
-        className="absolute left-1/2 top-[35%] -translate-x-1/2 -translate-y-1/2 w-[130%] h-[75%] rounded-full opacity-15 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 60%)' }}
-      />
+      {/* 身后柔光（站姿）/ 蜷身暖晕（睡姿） */}
+      {lying ? (
+        <div
+          className="absolute left-1/2 top-[34%] -translate-x-1/2 -translate-y-1/2 w-[112%] h-[58%] rounded-full opacity-12 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 62%)' }}
+        />
+      ) : (
+        <div
+          className="absolute left-1/2 top-[35%] -translate-x-1/2 -translate-y-1/2 w-[130%] h-[75%] rounded-full opacity-15 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 60%)' }}
+        />
+      )}
 
-      {/* 立绘 + 呼吸（睡觉时呼吸放慢；Zzz 由 RoomScene 相对房间定位，
-          因为立绘盒比可视容器宽，盒内百分比定位在竖屏上会被裁掉） */}
-      <div className={displayState === 'sleepy' ? 'animate-breathe-slow relative' : 'animate-breathe relative'}>
+      {/* 戳一戳气泡（pointer-events-none：不挡任何操作） */}
+      {bubble && (
+        <div
+          key={bubble.id}
+          data-testid="poke-bubble"
+          className="absolute top-[12%] left-1/2 z-30 pointer-events-none glass-panel px-3.5 py-1.5 text-sm text-ink-tea/80 whitespace-nowrap animate-bubble-pop"
+        >
+          {bubble.text}
+        </div>
+      )}
+
+      {/* 立绘 + 呼吸（睡觉时呼吸放慢）。睡姿的 Zzz 已烘进立绘原图、
+          位置随呼吸一起动，故不再由 RoomScene 额外叠加（避免重复+错位） */}
+      <div className={
+        `${wiggle ? 'animate-wiggle ' : ''}` +
+        (effectiveState === 'sleepy' ? 'animate-breathe-slow relative'
+        : effectiveState === 'halfawake' ? 'animate-breathe-slower relative'
+        : 'animate-breathe relative')
+      }>
         <img
           src={src}
           alt="小汐"
-          className={`h-[92vh] w-auto object-contain select-none transition-opacity duration-300 ease-out ${
+          data-testid="sprite-img"
+          role="button"
+          aria-label="戳一下小汐"
+          onClick={handlePoke}
+          onError={(e) => {
+            // 裂图防线：任何立绘加载失败 → 回退 idle；idle 本身也裂
+            // 就不再重试（避免死循环），靠 alt 兜底
+            if (e.currentTarget.src.indexOf('idle.webp') === -1) setBroken(true)
+          }}
+          className={`${lying ? 'w-full h-auto max-h-[60vh]' : 'h-[92vh] w-auto'} object-contain select-none cursor-pointer transition-opacity duration-300 ease-out ${
             transitioning ? 'opacity-0 scale-[0.99]' : 'opacity-100 scale-100'
           }`}
           style={{
             filter: 'drop-shadow(0 8px 20px rgba(92,84,77,0.12)) drop-shadow(0 2px 6px rgba(136,181,181,0.15))',
-            maskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
+            // 站姿脚部渐隐融入地板；睡姿整身在底部，不能再做底部渐隐
+            ...(lying ? {} : {
+              maskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
+            }),
             transition: 'opacity 0.3s ease, transform 0.3s ease',
           }}
           draggable={false}

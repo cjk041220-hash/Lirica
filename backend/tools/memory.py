@@ -17,6 +17,7 @@ v2.1 修复：
 """
 from langchain_core.tools import tool
 from memory.manager import MemoryManager
+from utils.errors import log_tool_error
 
 # 由 server.py 在 lifespan 中注入
 _memory_manager: MemoryManager | None = None
@@ -86,8 +87,13 @@ async def remember(category: str, content: str) -> str:
             )
         return "\n".join(lines)
 
+    except ValueError as e:
+        # manager.add 的参数校验（category/content 为空）——原文是我们
+        # 自己写的校验文案，可安全展示给 LLM 供其修正参数
+        return f"呜，这段记忆没能收好：{e}。category 和 content 都要有内容哦。"
     except Exception as e:
-        return f"呜，小汐没接住这段记忆……（{str(e)[:100]}）"
+        log_tool_error("remember", e)
+        return "呜，小汐没接住这段记忆……过一会儿再记一次好不好？"
 
 
 @tool
@@ -109,7 +115,8 @@ async def update_memory(memory_id: str, new_content: str) -> str:
             return f"✨ 小汐已经把旧记忆更新成新的啦！"
         return "小汐翻了翻，没有找到这段记忆呢……ID 是不是写错了？"
     except Exception as e:
-        return f"呜，小汐更新记忆的时候手滑了……（{str(e)[:100]}）"
+        log_tool_error("update_memory", e)
+        return "呜，小汐更新记忆的时候手滑了……过一会儿再试试好不好？"
 
 
 @tool
@@ -143,7 +150,8 @@ async def recall(category: str = "") -> str:
 
         return result
     except Exception as e:
-        return f"小汐去映海里找记忆的时候走散了……（{str(e)[:100]}）"
+        log_tool_error("recall", e)
+        return "小汐去映海里找记忆的时候走散了……过一会儿再找找好不好？"
 
 
 @tool
@@ -164,7 +172,8 @@ async def list_memories() -> str:
 
         return result
     except Exception as e:
-        return f"小汐数记忆的时候犯迷糊了……（{str(e)[:100]}）"
+        log_tool_error("list_memories", e)
+        return "小汐数记忆的时候犯迷糊了……过一会儿再数数看好不好？"
 
 
 @tool
@@ -181,7 +190,8 @@ async def delete_memory(memory_id: str) -> str:
             return "✨ 小汐已经把这段记忆放回海里了~"
         return "小汐翻了翻，没有找到这段记忆呢……"
     except Exception as e:
-        return f"小汐放记忆的时候手滑了……（{str(e)[:100]}）"
+        log_tool_error("delete_memory", e)
+        return "小汐放记忆的时候手滑了……过一会儿再试试好不好？"
 
 
 @tool
@@ -203,4 +213,5 @@ async def export_memories() -> str:
         lines.append("\n💡 冷冷可以通过控制台删除不想要的记忆哦~")
         return "\n".join(lines)
     except Exception as e:
-        return f"小汐整理记忆的时候犯迷糊了……（{str(e)[:100]}）"
+        log_tool_error("export_memories", e)
+        return "小汐整理记忆的时候犯迷糊了……过一会儿再整理好不好？"

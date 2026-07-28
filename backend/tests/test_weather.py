@@ -44,3 +44,28 @@ async def test_wmo_storm_codes_all_mapped():
     """所有雷暴代码都在 WMO 映射表中。"""
     for code in _STORM_CODES:
         assert code in _WMO, f"雷暴代码 {code} 未在 _WMO 中定义"
+
+
+async def test_zero_degrees_gets_cold_hint(monkeypatch):
+    """回归：恰好 0.0°C 时旧 falsy 判断跳过防寒提示（0.0 是合法温度）。"""
+    import tools.weather as weather_module
+    from tools.weather import get_weather
+
+    async def fake_fetch(client, lat, lon):
+        return {
+            "current": {
+                "weather_code": 0,
+                "temperature_2m": 0.0,
+                "apparent_temperature": -2.0,
+                "relative_humidity_2m": 60,
+                "wind_speed_10m": 10,
+            },
+            "daily": {},
+        }
+
+    monkeypatch.setattr(weather_module, "_fetch_open_meteo", fake_fetch)
+
+    result = await get_weather.ainvoke({
+        "city": "北京", "latitude": 39.9, "longitude": 116.4,
+    })
+    assert "多穿一件" in result  # t < 15 分支必须命中，哪怕恰好 0.0°C

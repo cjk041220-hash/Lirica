@@ -43,23 +43,49 @@ def test_detect_bind_host_from_argv():
 
 def test_detect_bind_host_default_loopback(monkeypatch):
     monkeypatch.delenv("XIAOXI_BIND_HOST", raising=False)
+    monkeypatch.delenv("UVICORN_HOST", raising=False)
     assert detect_bind_host(["uvicorn", "api.server:app"]) == "127.0.0.1"
 
 
 def test_detect_bind_host_from_env(monkeypatch):
+    monkeypatch.delenv("UVICORN_HOST", raising=False)
     monkeypatch.setenv("XIAOXI_BIND_HOST", "192.168.1.10")
     assert detect_bind_host(["uvicorn"]) == "192.168.1.10"
+
+
+def test_detect_bind_host_from_argv_equals_form():
+    """--host=V 等号写法（uvicorn/click 支持）必须同样被识别，否则绕过校验。"""
+    argv = ["uvicorn", "api.server:app", "--host=0.0.0.0", "--port", "8000"]
+    assert detect_bind_host(argv) == "0.0.0.0"
+
+
+def test_detect_bind_host_from_uvicorn_env(monkeypatch):
+    """UVICORN_HOST 是 uvicorn 实际生效的 env，检测必须对齐真实绑定行为。"""
+    monkeypatch.setenv("UVICORN_HOST", "0.0.0.0")
+    assert detect_bind_host(["uvicorn"]) == "0.0.0.0"
+
+
+def test_detect_bind_host_argv_beats_env(monkeypatch):
+    monkeypatch.setenv("UVICORN_HOST", "127.0.0.1")
+    assert detect_bind_host(["uvicorn", "--host=0.0.0.0"]) == "0.0.0.0"
+    assert detect_bind_host(["uvicorn", "--host", "0.0.0.0"]) == "0.0.0.0"
 
 
 def test_detect_workers_from_argv():
     assert detect_workers(["uvicorn", "--workers", "2"]) == 2
 
 
+def test_detect_workers_from_argv_equals_form():
+    assert detect_workers(["uvicorn", "--workers=4"]) == 4
+
+
 def test_detect_workers_from_env(monkeypatch):
+    monkeypatch.delenv("UVICORN_WORKERS", raising=False)
     monkeypatch.setenv("WEB_CONCURRENCY", "3")
     assert detect_workers(["uvicorn"]) == 3
 
 
 def test_detect_workers_default_one(monkeypatch):
     monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    monkeypatch.delenv("UVICORN_WORKERS", raising=False)
     assert detect_workers(["uvicorn"]) == 1

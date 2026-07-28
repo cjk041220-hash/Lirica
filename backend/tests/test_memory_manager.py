@@ -287,3 +287,145 @@ async def test_add_duplicate_returns_existing_entry_with_real_access_count(memor
     second = await memory_mgr.add("类别X", "内容A")
     assert second["id"] == first["id"]
     assert second["access_count"] == 3
+
+
+# ── LIKE 转义与参数校验 ───────────────────────────────────────
+
+
+async def test_recall_escapes_like_wildcards(memory_mgr):
+    """category 含下划线时按字面匹配，不再被 `_` 当单字符通配。"""
+    await memory_mgr.add("user_info", "冷冷的生日")
+    await memory_mgr.add("userXinfo", "不该被匹配的记忆")
+
+    matched = await memory_mgr.recall("user_info", passive=True)
+    categories = {m["category"] for m in matched}
+    assert "user_info" in categories
+    assert "userXinfo" not in categories  # 未转义时 `_` 会匹配任意字符
+
+
+async def test_recall_by_category_escapes_percent(memory_mgr):
+    """category 含 % 时同样只按字面匹配。"""
+    await memory_mgr.add("50%折扣", "活动信息")
+    await memory_mgr.add("其他", "无关记忆")
+
+    matched = await memory_mgr.recall_by_category("50%折扣")
+    assert all(m["category"] == "50%折扣" for m in matched)
+    assert len(matched) == 1
+
+
+async def test_add_rejects_empty_category_or_content(memory_mgr):
+    """空 category / content 在入口被拒（防止 LIKE '%%' 匹配全类别串味）。"""
+    import pytest
+
+    with pytest.raises(ValueError):
+        await memory_mgr.add("", "有内容但没类别")
+    with pytest.raises(ValueError):
+        await memory_mgr.add("   ", "空白类别")
+    with pytest.raises(ValueError):
+        await memory_mgr.add("类别", "  ")
+
+    assert await memory_mgr.count() == 0
+
+
+async def test_recall_surfaces_old_frequently_used_memory(memory_mgr, tmp_db):
+    """相关性召回不能被 created_at 预筛死：旧的高频记忆要能浮现。
+
+    回归：此前候选池是 `ORDER BY created_at DESC LIMIT limit*2`，
+    access 热度因子对「最新 6 条」之外的记忆完全失效——核心偏好
+    （创建早、天天被想起）会被流水账永久挤出 top-K，narrative 宣称的
+    「相关路 + 最新路」hybrid 注入名存实亡（相关路退化成最新路）。
+    """
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    # 旧记忆：10 天前创建，被想起过 800 次，刚刚才用过。
+    # 评分 ≈ exp(-1) + ln(801)*0.15 + 0.3 ≈ 1.67，要高于新记忆
+    # 的 recency 1.0 + last_used 0.3 = 1.3（add() 会同时写 last_used_at）
+    await memory_mgr.add("核心偏好", "冷冷喜欢喝椰子水")
+    ten_days_ago = (
+        datetime.datetime.now(HKT) - datetime.timedelta(days=10)
+    ).strftime(_TIME_FMT)
+    now = datetime.datetime.now(HKT).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_used_at = ?, access_count = 800 "
+        "WHERE content = ?",
+        (ten_days_ago, now, "冷冷喜欢喝椰子水"),
+    )
+    await tmp_db.commit()
+
+    # 8 条新的流水账（created_at=now、热度 0）——旧实现的候选池
+    # （limit*2 = 6 条）全是它们，旧记忆永远进不了评分环节
+    for i in range(8):
+        await memory_mgr.add("日常", f"流水账 {i}")
+
+    matched = await memory_mgr.recall(limit=3, passive=True)
+    assert any(m["content"] == "冷冷喜欢喝椰子水" for m in matched), (
+        "旧的高频记忆未能进入相关性召回 top-3——候选池又被 created_at 预筛了"
+    )
+
+
+# ── old_memories（小本本：久远记忆采样，批次 D）────────────────
+
+
+async def _age_memory(tmp_db, content: str, days_ago: int):
+    """把指定记忆的 created_at 拨到 N 天前（绕过 add 的 now 时间戳）。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    ts = (datetime.datetime.now(HKT) - datetime.timedelta(days=days_ago)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ? WHERE content = ?", (ts, content)
+    )
+    await tmp_db.commit()
+
+
+async def test_old_memories_age_filter(memory_mgr, tmp_db):
+    """只返回年龄达标的活跃记忆。"""
+    await memory_mgr.add("日常", "旧事甲")
+    await memory_mgr.add("日常", "旧事乙")
+    await memory_mgr.add("日常", "新事")
+    await _age_memory(tmp_db, "旧事甲", 120)
+    await _age_memory(tmp_db, "旧事乙", 95)
+
+    result = await memory_mgr.old_memories(min_age_days=90, limit=5)
+    assert {m["content"] for m in result} == {"旧事甲", "旧事乙"}
+
+
+async def test_old_memories_exclude_and_limit(memory_mgr, tmp_db):
+    """exclude_ids 排除已提过的；limit 生效。"""
+    for name in ("甲", "乙", "丙", "丁"):
+        await memory_mgr.add("日常", f"旧事{name}")
+        await _age_memory(tmp_db, f"旧事{name}", 120)
+
+    result = await memory_mgr.old_memories(
+        min_age_days=90, limit=5, exclude_ids=[
+            m["id"] for m in await memory_mgr.all()
+            if m["content"] in ("旧事甲", "旧事乙")
+        ],
+    )
+    assert {m["content"] for m in result} == {"旧事丙", "旧事丁"}
+
+    one = await memory_mgr.old_memories(min_age_days=90, limit=1)
+    assert len(one) == 1
+
+
+async def test_old_memories_read_only(memory_mgr, tmp_db):
+    """纯被动：调用前后 access_count / last_used_at 逐条不变。
+
+    若刷了热度，被 echo 的记忆会在相关性评分里突然霸榜
+    （manager 注释记录的正反馈闭环），这条护栏必须钉死。
+    """
+    await memory_mgr.add("日常", "旧事")
+    await _age_memory(tmp_db, "旧事", 120)
+
+    async def snapshot():
+        cursor = await tmp_db.execute(
+            "SELECT id, access_count, last_used_at FROM memories ORDER BY id"
+        )
+        return await cursor.fetchall()
+
+    before = await snapshot()
+    await memory_mgr.old_memories(min_age_days=90, limit=5)
+    await memory_mgr.old_memories(min_age_days=90, limit=5)
+    after = await snapshot()
+    assert before == after

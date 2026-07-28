@@ -20,10 +20,6 @@ async def tmp_db(tmp_path):
         CREATE TABLE IF NOT EXISTS diaries (
             date TEXT PRIMARY KEY, title TEXT, content TEXT
         );
-        CREATE TABLE IF NOT EXISTS life_state (
-            id INTEGER PRIMARY KEY DEFAULT 1,
-            mood TEXT, daily_event TEXT, updated_at TEXT
-        );
         CREATE TABLE IF NOT EXISTS proactive_messages (
             id TEXT PRIMARY KEY, content TEXT NOT NULL,
             created_at TEXT NOT NULL, delivered_at TEXT,
@@ -43,13 +39,24 @@ async def tmp_db(tmp_path):
         CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
             ON memories(category, content) WHERE status = 'active';
     """)
-    # events 表（迁移 v6）：与生产共享同一份 DDL 常量，防止夹具漂移
-    from database.migrations import EVENTS_SCHEMA_SQL
+    # life_state（v7：含 first_met_on）、events 表（迁移 v6）、
+    # chat_sessions / chat_messages（迁移 v8）：
+    # 与生产共享同一份 DDL 常量，防止夹具漂移
+    from database.migrations import (
+        CHAT_ARCHIVE_SCHEMA_SQL,
+        EVENTS_SCHEMA_SQL,
+        LIFE_STATE_SCHEMA_SQL,
+    )
+    await conn.executescript(LIFE_STATE_SCHEMA_SQL)
     await conn.executescript(EVENTS_SCHEMA_SQL)
+    await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致）
+    from datetime import datetime
+    from utils.timezone import HKT as _HKT
+    _now = datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
     await conn.execute(
         "INSERT OR IGNORE INTO life_state (id, mood, daily_event, updated_at) VALUES (1, ?, ?, ?)",
-        ("开心", "刚刚醒来，映海还很安静", "2026-07-21 10:00"),
+        ("开心", "刚刚醒来，映海还很安静", _now),
     )
     await conn.commit()
     yield conn

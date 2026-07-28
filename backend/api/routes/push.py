@@ -8,9 +8,10 @@
 - GET /api/push/vapid-key — 获取 VAPID 公钥（前端订阅时需要）
 """
 import json
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from config.settings import get_settings
 from database.core import get_db
@@ -31,10 +32,37 @@ class PushSubscriptionRequest(BaseModel):
 
 
 class MarkReadRequest(BaseModel):
-    message_ids: list[str]
+    # 上限防 DoS：不限长会动态拼出超大 IN 列表，可撞 SQLite 绑定变量
+    # 上限抛 OperationalError → 500
+    message_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 # ── 端点 ──────────────────────────────────────────────────────
+
+# 受信任的浏览器推送服务域名（Chrome/Edge=FCM、Firefox=Mozilla、
+# Safari=Apple、Windows=WNS）。endpoint 必须是 https 且 host 命中此表——
+# 否则持 token 者可注册任意 URL，让 webpush 把带 VAPID 签名的主动消息
+# POST 到该地址（受限 SSRF + 内容外泄原语，安全审查 P2）
+_PUSH_HOST_SUFFIXES = (
+    "push.services.mozilla.com",
+    "mozaws.net",
+    "fcm.googleapis.com",
+    "notify.windows.com",
+    "wns.windows.com",
+    "push.apple.com",
+    "web.push.apple.com",
+)
+
+
+def _is_allowed_push_endpoint(endpoint: str) -> bool:
+    try:
+        u = urlparse(endpoint)
+    except Exception:
+        return False
+    if u.scheme != "https" or not u.hostname:
+        return False
+    host = u.hostname.lower()
+    return any(host == s or host.endswith("." + s) for s in _PUSH_HOST_SUFFIXES)
 
 
 @router.get("/push/vapid-key")
@@ -53,7 +81,13 @@ async def subscribe(req: PushSubscriptionRequest, request: Request):
     auth = req.keys.get("auth", "")
 
     if not p256dh or not auth:
-        return {"status": "error", "message": "缺少 keys.p256dh 或 keys.auth"}
+        # 业务错误用 4xx 而非 200+error：此前 200 让前端 usePush
+        # 的 `!res.ok → 清理订阅 + 返回 false` 分支永远不生效，
+        # 订阅失败被误判为成功（setSubscribed(true)）
+        raise HTTPException(400, "缺少 keys.p256dh 或 keys.auth")
+
+    if not _is_allowed_push_endpoint(req.endpoint):
+        raise HTTPException(400, "endpoint 不是受信任的推送服务地址")
 
     user_agent = request.headers.get("user-agent", "")[:200]
     sub_id = await save_subscription(req.endpoint, p256dh, auth, user_agent)
@@ -100,7 +134,7 @@ async def get_unread():
     conn = await get_db()
     cursor = await conn.execute(
         """SELECT id, content, created_at FROM proactive_messages
-           WHERE status = 'delivered' AND read_at IS NULL
+           WHERE status IN ('delivered', 'stored') AND read_at IS NULL
            ORDER BY created_at DESC LIMIT 10"""
     )
     rows = await cursor.fetchall()
@@ -119,8 +153,7 @@ async def mark_read(req: MarkReadRequest):
         return {"status": "ok", "updated": 0}
 
     import datetime
-    from datetime import timezone, timedelta
-    _HKT = timezone(timedelta(hours=8))
+    from utils.timezone import HKT as _HKT
     now = datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
 
     conn = await get_db()

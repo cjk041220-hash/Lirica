@@ -18,7 +18,12 @@ const mdComponents = {
   code: ({ children }) => <code className="bg-ink-tea/5 rounded px-1 py-0.5 text-[13px]">{children}</code>,
   pre: ({ children }) => <pre className="bg-ink-tea/5 rounded-lg p-2.5 mb-1.5 overflow-x-auto text-[13px] last:mb-0">{children}</pre>,
   hr: () => <hr className="border-ink-tea/10 my-2" />,
-  a: ({ children }) => <span className="underline decoration-healing-aqua/40">{children}</span>,
+  a: ({ href, title, children }) => (
+    <a href={href} title={title} target="_blank" rel="noopener noreferrer"
+       className="underline decoration-healing-aqua/40 hover:decoration-healing-aqua/80 text-healing-aqua">
+      {children}
+    </a>
+  ),
   table: ({ children }) => (
     <div className="overflow-x-auto mb-1.5 last:mb-0">
       <table className="border-collapse text-[13px]">{children}</table>

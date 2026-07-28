@@ -9,6 +9,7 @@ const statusTexts = {
   thinking: '小汐在想办法',
   happy: '小汐心情很好',
   sleepy: '小汐趴着睡着了',
+  halfawake: '小汐刚醒，还有点迷糊……',
   reading: '小汐在看书',
   wave: '小汐在映海里探险',
   sad: '小汐有点难过',
@@ -46,6 +47,14 @@ export default function ChatPanel({ chat, status, displayState }) {
       el.scrollTop = el.scrollHeight
     }
   }, [messages])
+
+  // 切换会话 → 滚动状态复位：新对话从底部开始看，不继承上一段
+  // 对话的「正在往上翻」（否则载入的历史会停在另一段对话的中部）
+  useEffect(() => {
+    stickBottomRef.current = true
+    const el = listRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [chat.sessionId])
 
   const onPointerDown = useCallback((e) => {
     e.preventDefault()
@@ -116,16 +125,16 @@ export default function ChatPanel({ chat, status, displayState }) {
         <div className="flex items-center gap-2 px-4 pb-2 shrink-0">
           <div className={`w-2 h-2 rounded-full ${characterState === 'sleepy' ? 'bg-ink-tea/25' : 'bg-healing-aqua animate-pulse-dot'}`} />
           <span className="text-[11px] text-ink-tea/50 tracking-wide truncate">
-            {(characterState === 'idle' || characterState === 'sleepy') && status?.daily_event
+            {(characterState === 'idle' || characterState === 'sleepy' || characterState === 'halfawake') && status?.daily_event
               ? `${status.mood ? `${status.mood} · ` : ''}${status.daily_event}`
               : (statusTexts[characterState] || '小汐在发呆')}
           </span>
         </div>
       )}
 
-      {/* 消息列表 */}
+      {/* 消息列表（role=log + aria-live：流式新消息对屏幕阅读器可见） */}
       {!collapsed && (
-        <div ref={listRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-2 chat-scroll min-h-0">
+        <div ref={listRef} onScroll={handleScroll} role="log" aria-live="polite" className="flex-1 overflow-y-auto px-4 py-2 chat-scroll min-h-0">
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <p className="text-sm text-ink-tea/40">你回来啦。小汐在看窗外的云。</p>

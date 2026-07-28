@@ -83,6 +83,15 @@ async def test_unsubscribe_unknown_endpoint_not_found(client):
     assert r.json()["status"] == "not_found"
 
 
+async def test_subscribe_missing_keys_returns_400(client):
+    """缺 keys.p256dh/auth → HTTP 400（不再是 200+error，前端 !res.ok 分支能生效）。"""
+    r = await client.post(
+        "/api/push/subscribe",
+        json={"endpoint": "https://push.example.com/x", "keys": {}},
+    )
+    assert r.status_code == 400
+
+
 async def test_unread_and_vapid_key_endpoints(client, monkeypatch):
     """unread 返回结构稳定；vapid-key 在未配置时 enabled=false。"""
     from config.settings import get_settings
@@ -98,3 +107,31 @@ async def test_unread_and_vapid_key_endpoints(client, monkeypatch):
     r = await client.get("/api/push/vapid-key")
     assert r.status_code == 200
     assert r.json()["enabled"] is False
+
+
+async def test_subscribe_rejects_untrusted_endpoint(client, tmp_db):
+    """非受信任推送服务的 endpoint → 400，且不入库（防 SSRF/内容外泄）。"""
+    body = {"endpoint": "https://example.com/evil", "keys": {"p256dh": "x", "auth": "y"}}
+    r = await client.post("/api/push/subscribe", json=body)
+    assert r.status_code == 400
+    assert await _count_sub(tmp_db) == 0
+
+
+async def test_subscribe_rejects_non_https_and_ssrf(client, tmp_db):
+    """http 协议 / 内网元数据地址（SSRF）→ 400。"""
+    for ep in ("http://fcm.googleapis.com/wp/x", "https://169.254.169.254/latest"):
+        r = await client.post("/api/push/subscribe", json={
+            "endpoint": ep, "keys": {"p256dh": "x", "auth": "y"},
+        })
+        assert r.status_code == 400, ep
+    assert await _count_sub(tmp_db) == 0
+
+
+async def test_subscribe_accepts_trusted_endpoint(client, tmp_db):
+    """受信任浏览器推送域名（FCM/Mozilla/Apple/WNS）→ 200 入库。"""
+    r = await client.post("/api/push/subscribe", json={
+        "endpoint": "https://fcm.googleapis.com/wp/abc123",
+        "keys": {"p256dh": "x", "auth": "y"},
+    })
+    assert r.status_code == 200
+    assert await _count_sub(tmp_db) == 1

@@ -18,8 +18,11 @@
   归档行不阻塞明年/下次重新生成。
 """
 import datetime
+import random
 import uuid
 from datetime import timezone, timedelta
+
+import httpx
 
 from database.core import get_db
 from utils.logger import get_logger
@@ -27,8 +30,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），与全项目时区纪律一致
-_HKT = timezone(timedelta(hours=8))
-_TIME_FMT = "%Y-%m-%d %H:%M"
+from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
 _DATE_FMT = "%Y-%m-%d"
 
 # ── 档案派生事件常量（来自 soul.py COLD_INFO，冷冷生日 2004-06-03）──
@@ -55,12 +57,9 @@ _SOURCE_NOTES = {
     "llm": "冷冷自己提到的",
     "weather": "天气预报检测到的",
     "profile": "冷冷档案里的日子",
+    "memory": "很久以前记下的",
     "user": "手动登记的",
 }
-
-
-def _now() -> str:
-    return datetime.datetime.now(_HKT).strftime(_TIME_FMT)
 
 
 def _today() -> datetime.date:
@@ -132,12 +131,14 @@ async def create_event(
 async def get_active_events(limit: int = 20) -> list[dict]:
     """返回所有活跃事件，按发生日期正序（最近的在前）。"""
     conn = await get_db()
+    today = _today().isoformat()
     cursor = await conn.execute(
         """SELECT * FROM events
            WHERE status = 'active'
+             AND COALESCE(end_date, event_date) >= ?
            ORDER BY event_date ASC, created_at ASC
            LIMIT ?""",
-        (limit,),
+        (today, limit),
     )
     rows = await cursor.fetchall()
     return _rows_to_dicts(cursor, rows)
@@ -251,6 +252,57 @@ async def detect_profile_events() -> int:
     return 1 if created else 0
 
 
+# ── 检测器：相识纪念日（life_state.first_met_on 派生）──────────
+
+_ANNIVERSARY_LOOKAHEAD_DAYS = 3  # 周年提前 3 天惦记（生日是 7 天，周年更私人、更轻）
+
+
+async def detect_anniversary_events() -> int:
+    """从 life_state.first_met_on 派生相识周年事件。
+
+    周年前 _ANNIVERSARY_LOOKAHEAD_DAYS 天创建事件；dedupe_key 带完整
+    日期，同年不重复、明年自然续期（与生日同构）。first_met_on 未设置
+    / 非法 / 晚于今天 → 0，静默。
+    """
+    conn = await get_db()
+    cursor = await conn.execute("SELECT first_met_on FROM life_state WHERE id = 1")
+    row = await cursor.fetchone()
+    if not row or not row[0]:
+        return 0
+    try:
+        first_met = datetime.date.fromisoformat(row[0])
+    except ValueError:
+        log.warning("纪念日检测：first_met_on 非法：%s", row[0])
+        return 0
+
+    today = _today()
+    if first_met >= today:
+        return 0  # 相识日在未来，是填错了，不声张
+
+    for year in (today.year, today.year + 1):
+        try:
+            candidate = datetime.date(year, first_met.month, first_met.day)
+        except ValueError:  # 2/29 → 2/28
+            candidate = datetime.date(year, first_met.month, 28)
+        if candidate < today:
+            continue
+        if (candidate - today).days > _ANNIVERSARY_LOOKAHEAD_DAYS:
+            break  # 第一个未过去的周年还早，更后面的不用看了
+        n_years = candidate.year - first_met.year
+        _, created = await create_event(
+            f"相识 {n_years} 周年的日子",
+            "anniversary",
+            candidate.isoformat(),
+            severity="high",
+            source="profile",
+            memo=f"你们在 {first_met.isoformat()} 第一次见面。那天认真说句话就好，"
+                 "不要连着倒数，也别逼冷冷一起感动。",
+            dedupe_key=f"profile:anniversary:{candidate.isoformat()}",
+        )
+        return 1 if created else 0
+    return 0
+
+
 # ── 检测器：天气预报 ──────────────────────────────────────────
 
 
@@ -262,7 +314,6 @@ async def detect_weather_events() -> int:
     _WEATHER_MAX_NEW_PER_RUN 条，防止预报噪音造成事件轰炸。
     返回新建条数。
     """
-    import httpx
     from memory import location_store
     from tools.weather import _fetch_open_meteo
 
@@ -368,3 +419,78 @@ async def get_recent_proactive_texts(hours: int = 24, limit: int = 3) -> list[st
     )
     rows = await cursor.fetchall()
     return [r[0] for r in rows]
+
+
+# ── 检测器：记忆回声（小本本——主动想起久远的事）────────────────
+
+_MEMORY_ECHO_MIN_AGE_DAYS = 90   # 多久以前的记忆才值得「忽然想起」
+_MEMORY_ECHO_COOLDOWN_DAYS = 7   # 全局限频：7 天内最多新建 1 条
+
+
+async def detect_memory_echoes() -> int:
+    """从久远记忆里随机捞一条，生成「今天忽然想起」事件。
+
+    「被记得」是 AI 陪伴的核心体验：不是等冷冷问「你还记得吗」，
+    而是小汐自己在某个平常的日子忽然提起一件旧事。
+
+    纪律：
+    - 每条记忆一生只 echo 一次（dedupe memory-echo:{id}，查全状态
+      排除——归档行同样算「已经说过」）；
+    - 全局 7 天最多 1 条（看 created_at，不看 status），把「惊喜」
+      的频率锁死——提多了就不是惊喜，是监控了；
+    - event_date=今天 → get_events_context 当天注入提示词、主动消息
+      可围绕它说，次日 archive_expired 自动归档翻篇。
+    """
+    conn = await get_db()
+
+    # 1. 全局限频
+    cutoff = (
+        datetime.datetime.now(_HKT) - timedelta(days=_MEMORY_ECHO_COOLDOWN_DAYS)
+    ).strftime(_TIME_FMT)
+    cursor = await conn.execute(
+        "SELECT COUNT(*) FROM events "
+        "WHERE dedupe_key LIKE 'memory-echo:%' AND created_at >= ?",
+        (cutoff,),
+    )
+    if (await cursor.fetchone())[0] >= 1:
+        return 0
+
+    # 2. 已提过的记忆 id（全状态排除，一生一次）
+    cursor = await conn.execute(
+        "SELECT dedupe_key FROM events WHERE dedupe_key LIKE 'memory-echo:%'"
+    )
+    echoed_ids = [
+        r[0][len("memory-echo:"):] for r in await cursor.fetchall() if r[0]
+    ]
+
+    # 3. 采样候选。events.py 是纯函数层、拿不到 app.state，就地用共享
+    #    连接构造 MemoryManager（单连接架构下与 app.state.memory_manager
+    #    是同一条连接，无状态分叉）。old_memories 纯被动、不刷热度——
+    #    若刷了，被 echo 的记忆会在相关性评分里突然「复活」霸榜
+    from memory.manager import MemoryManager
+
+    mgr = MemoryManager(conn)
+    candidates = await mgr.old_memories(
+        min_age_days=_MEMORY_ECHO_MIN_AGE_DAYS,
+        limit=5,
+        exclude_ids=echoed_ids,
+    )
+    if not candidates:
+        return 0
+
+    mem = random.choice(candidates)
+    snippet = (mem.get("content") or "")[:40]
+    _, created = await create_event(
+        "忽然想起冷冷很久以前说过的事",
+        "memory_echo",
+        _today().isoformat(),
+        severity="normal",
+        source="memory",
+        memo=f"很久以前冷冷告诉过你：「{snippet}」（类别：{mem.get('category', '其他')}）。"
+             "是翻小本本忽然看到的，想起来就自然提一句：「说起来，你之前跟我讲过……」。"
+             "别像读档案，更别说是系统提醒你的。",
+        dedupe_key=f"memory-echo:{mem['id']}",
+    )
+    if created:
+        log.info("记忆回声：想起 [%s] %s", mem.get("category"), snippet)
+    return 1 if created else 0

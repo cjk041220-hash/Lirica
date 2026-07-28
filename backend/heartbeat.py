@@ -19,7 +19,6 @@
 import datetime
 import random
 import uuid
-from datetime import timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -28,8 +27,7 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# 冷冷在香港（UTC+8）
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 _TIME_FMT = "%Y-%m-%d %H:%M"
 
 scheduler = AsyncIOScheduler()
@@ -121,6 +119,91 @@ def get_current_period(hour: int):
         return TIME_PERIODS[EVENING]
 
 
+def weekend_label(now_dt: datetime.datetime) -> str | None:
+    """HKT 星期六/日 → 「周六」/「周日」；工作日返回 None（不注入噪音）。
+
+    节假日历没有可靠数据源，明确不做；周末是纯 weekday() 计算。
+    """
+    return {5: "周六", 6: "周日"}.get(now_dt.weekday())
+
+
+# ── 心情涟漪：时段池内加权抽样 ────────────────────────────────
+# 记忆不是只存不用的——近期发生的事可以影响小汐的「心情气候」。
+# 信号 → 池内 mood 乘数，未列出的 mood 恒为 1.0。只在池内倾斜、
+# 绝不跨池（深夜池没有「活泼」，权重再怎么调也选不出来——时段池
+# 是第一道防线的铁律不变）。不新增 mood 词 → 前端 moodToSprite
+# 映射与立绘素材零影响。
+_CARE_EVENT_TYPES = {"exam", "interview", "typhoon", "gale", "thunderstorm", "rainstorm"}
+_JOY_EVENT_TYPES = {"birthday", "anniversary", "trip", "concert", "memory_echo"}
+
+MOOD_AFFINITY = {
+    "care":    {"担心": 2.5, "满足": 0.8, "兴奋": 0.5, "活泼": 0.7},
+    "joy":     {"期待": 2.0, "开心": 1.8, "满足": 1.5, "担心": 0.5},
+    "talked":  {"满足": 1.5, "期待": 1.3},   # 近 24h 冷冷来说过话
+    "weekend": {"期待": 1.4, "满足": 1.3, "懒洋洋": 1.6},
+    "inertia": 1.3,                          # 当前心情惯性：防每 2h 跳一个心情
+}
+
+
+def _mood_weights(period_moods: list[str], *, care: bool, joy: bool,
+                  talked_recently: bool, is_weekend: bool,
+                  current_mood: str | None) -> list[float]:
+    """纯函数：按时段池顺序返回权重向量。
+
+    所有权重 >= 0.2：倾斜不是锁死——担心×2.5 也不是必中，
+    给随机性留余地，心情才不会变成信号的提线木偶。
+    """
+    weights = []
+    for m in period_moods:
+        w = 1.0
+        if care:
+            w *= MOOD_AFFINITY["care"].get(m, 1.0)
+        if joy:
+            w *= MOOD_AFFINITY["joy"].get(m, 1.0)
+        if talked_recently:
+            w *= MOOD_AFFINITY["talked"].get(m, 1.0)
+        if is_weekend:
+            w *= MOOD_AFFINITY["weekend"].get(m, 1.0)
+        if current_mood and m == current_mood:
+            w *= MOOD_AFFINITY["inertia"]
+        weights.append(max(w, 0.2))
+    return weights
+
+
+async def _choose_mood(period: dict, *, app=None,
+                       now_dt: datetime.datetime,
+                       current_mood: str | None = None) -> str:
+    """加权选 mood。任何信号获取失败 → 优雅退回均匀 random.choice。
+
+    信号源（全部被动读取，绝不触碰热度计数器）：
+    - 近 24h 冷冷说过话 → 满足/期待 上浮
+    - 活跃事件：台风/考试类 → 担心 上浮；生日/周年类 → 期待/开心 上浮
+    - 周末 → 期待/满足/懒洋洋 上浮
+    - 惯性：当前 mood ×1.3
+    """
+    try:
+        care = joy = talked = False
+        mgr = getattr(app.state, "memory_manager", None) if app is not None else None
+        if mgr is not None:
+            recent = await mgr.recent(10)  # recent() 天生被动，不污染计数器
+            cutoff = (now_dt - datetime.timedelta(hours=24)).strftime(_TIME_FMT)
+            talked = any((m.get("created_at") or "") >= cutoff for m in recent)
+        from utils import events as events_mgr
+        active = await events_mgr.get_active_events(limit=5)
+        types = {e.get("event_type") for e in active}
+        care = bool(types & _CARE_EVENT_TYPES)
+        joy = bool(types & _JOY_EVENT_TYPES)
+        weights = _mood_weights(
+            period["moods"], care=care, joy=joy, talked_recently=talked,
+            is_weekend=weekend_label(now_dt) is not None,
+            current_mood=current_mood,
+        )
+        return random.choices(period["moods"], weights=weights, k=1)[0]
+    except Exception:
+        log.exception("心情涟漪计算失败，退回均匀随机")
+        return random.choice(period["moods"])
+
+
 # ── 心跳任务 ──────────────────────────────────────────────────
 
 async def check_and_proactive_message(app=None):
@@ -130,18 +213,27 @@ async def check_and_proactive_message(app=None):
         app: FastAPI 应用实例。传入时会在更新后自动刷新 system prompt，
              确保小汐的心情与实际状态同步。
     """
-    now = datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
-    hour = datetime.datetime.now(_HKT).hour
+    # 只取一次当前时间：两次 now() 之间可能跨整点，
+    # 导致落库时间戳（06:59）与心情时段池（7 点档）错位
+    now_dt = datetime.datetime.now(_HKT)
+    now = now_dt.strftime("%Y-%m-%d %H:%M")
+    hour = now_dt.hour
 
     period = get_current_period(hour)
-    mood = random.choice(period["moods"])
     daily_event = random.choice(period["events"])
 
     try:
         conn = await get_db()
-        # UPSERT：更新 id=1，不存在则插入
-        cursor = await conn.execute("SELECT id FROM life_state WHERE id = 1")
+        # UPSERT：更新 id=1，不存在则插入。
+        # 顺手取回当前 mood 作心情涟漪的惯性信号，不多查一次库
+        cursor = await conn.execute("SELECT id, mood FROM life_state WHERE id = 1")
         existing = await cursor.fetchone()
+        current_mood = existing[1] if existing else None
+
+        # 心情涟漪：时段池内加权抽样（关心/开心信号 + 周末 + 惯性），
+        # 任何环节失败都优雅退回均匀随机
+        mood = await _choose_mood(period, app=app, now_dt=now_dt,
+                                  current_mood=current_mood)
 
         if existing:
             await conn.execute(
@@ -164,8 +256,10 @@ async def check_and_proactive_message(app=None):
         # 定期维护（裁剪 checkpoint + 备份数据库）
         await _periodic_maintenance()
 
-        # 主动消息（判断是否触发 → 生成 → 存储 → 推送）
-        await _try_proactive_message(mood, daily_event, hour)
+        # 主动消息（判断是否触发 → 生成 → 存储 → 推送）。
+        # now_dt 沿链下传，不在下游再取一次 now（跨整点错位是本文件
+        # 已经踩过的坑，L131-132 注释为证）
+        await _try_proactive_message(mood, daily_event, hour, now_dt=now_dt)
 
     except Exception:
         log.exception("生命状态更新失败")
@@ -244,13 +338,15 @@ async def _should_send_proactive() -> bool:
             if hours_since < _MIN_INTERVAL_HOURS:
                 return False
     except Exception:
-        pass  # 查询失败不阻止触发
+        log.warning("主动消息间隔查询失败，本次跳过")
+        return False
 
     # 随机概率
     return random.random() < _PROACTIVE_PROBABILITY
 
 
-async def _generate_proactive_message(mood: str, daily_event: str, hour: int) -> str:
+async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
+                                      now_dt: datetime.datetime | None = None) -> str:
     """用小汐的人格生成一条主动消息。
 
     使用独立的 LLM 调用（不走 Agent 图），直接生成一句话。
@@ -268,8 +364,13 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int) ->
     else:
         period = "晚上"
 
+    # 周末感知：周六/日注入一行素材（「冷冷不用上课」），工作日无噪音
+    wk = weekend_label(now_dt or datetime.datetime.now(_HKT))
+    weekend_line = f"今天是{wk}，冷冷不用上课。\n" if wk else ""
+
     user_prompt = (
         f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
+        f"{weekend_line}"
         f"用一两句话主动跟冷冷说话。可以是想念、分享心情、关心、撒娇。\n"
         f"要自然、简短、符合你的性格。不要问客服式的套话。"
     )
@@ -308,7 +409,10 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int) ->
         pass
 
     # 用独立的轻量 LLM 调用（低 token、无工具）
-    llm = create_deepseek_llm(temperature=1.0, max_tokens=200)
+    # model 跟随用户在控制台的选择（运行时配置），temperature/max_tokens
+    # 保持本任务的轻量值——主动消息不需要 8192 tokens 的发挥空间
+    from api.routes.config import get_current_model
+    llm = create_deepseek_llm(model=get_current_model(), temperature=1.0, max_tokens=200)
     response = await llm.ainvoke([
         SystemMessage(content=BASE_PERSONA),
         HumanMessage(content=user_prompt),
@@ -325,14 +429,34 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int) ->
     return text
 
 
-async def _try_proactive_message(mood: str, daily_event: str, hour: int):
+async def _mark_stored(msg_id: str, label: str = "主动消息") -> None:
+    """推送失败的兜底：把 pending 降级为 stored。
+
+    不做这一步，消息会永远停在 pending——/api/push/unread 只捞
+    delivered/stored，这条消息对冷冷彻底不可见（静默丢消息）。
+    """
+    try:
+        conn = await get_db()
+        await conn.execute(
+            "UPDATE proactive_messages SET status = 'stored' WHERE id = ? AND status = 'pending'",
+            (msg_id,),
+        )
+        await conn.commit()
+        log.info("%s推送失败，已降级为 stored [%s]", label, msg_id[:8])
+    except Exception as e:  # 兜底路径不允许再向外抛
+        log.warning("%s状态兜底失败 [%s]: %s", label, msg_id[:8], e)
+
+
+async def _try_proactive_message(mood: str, daily_event: str, hour: int,
+                                 now_dt: datetime.datetime | None = None):
     """尝试生成并推送一条主动消息。"""
     try:
         if not await _should_send_proactive():
             return
 
         # 生成消息
-        content = await _generate_proactive_message(mood, daily_event, hour)
+        content = await _generate_proactive_message(mood, daily_event, hour,
+                                                    now_dt=now_dt)
 
         # 存入数据库
         now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
@@ -362,16 +486,18 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int):
                 await conn.commit()
                 log.info("主动消息已推送至 %d 个设备", sent)
             else:
-                # 无订阅设备，标记为待拉取
+                # 无订阅设备，仅存储供轮询拉取（从未推送过，不叫 delivered）
                 await conn.execute(
-                    "UPDATE proactive_messages SET status = 'delivered' WHERE id = ?",
+                    "UPDATE proactive_messages SET status = 'stored' WHERE id = ?",
                     (msg_id,),
                 )
                 await conn.commit()
         except ImportError:
             log.warning("web_push 模块不可用，消息仅存储在数据库中")
+            await _mark_stored(msg_id)
         except Exception as e:
             log.warning("推送发送失败: %s", e)
+            await _mark_stored(msg_id)
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)
@@ -418,11 +544,26 @@ async def event_watchdog(app=None):
     except Exception:
         log.exception("事件看门狗：天气检测失败")
 
-    total_created = created_profile + created_weather
+    # 相识周年检测（first_met_on 未设置时恒为 0，零开销）
+    created_anniv = 0
+    try:
+        created_anniv = await events_mgr.detect_anniversary_events()
+    except Exception:
+        log.exception("事件看门狗：纪念日检测失败")
+
+    # 记忆回声检测（小本本：久远记忆限频 7 天 1 条，检测本身毫秒级）
+    created_echo = 0
+    try:
+        created_echo = await events_mgr.detect_memory_echoes()
+    except Exception:
+        log.exception("事件看门狗：记忆回声检测失败")
+
+    total_created = created_profile + created_weather + created_anniv + created_echo
     if archived or total_created:
         log.info(
-            "事件看门狗：归档 %d 条，新建 %d 条（档案 %d / 天气 %d）",
+            "事件看门狗：归档 %d 条，新建 %d 条（档案 %d / 天气 %d / 纪念日 %d / 回声 %d）",
             archived, total_created, created_profile, created_weather,
+            created_anniv, created_echo,
         )
         # 事件上下文变了，刷新 system prompt 让小汐立刻感知
         if app is not None:
@@ -469,16 +610,22 @@ async def daily_morning_greeting():
         location_known = False
         log.info("无缓存坐标，使用默认香港坐标")
 
-    # 2. 获取天气
+    # 2. 获取天气 —— 网络 try 只包网络请求；拼接移出 try 之外。
+    #    旧写法里今日预报取值异常（如 precipitation_probability_max
+    #    为 [None] 时 int(None) 抛 TypeError）会把已成功构建的当前
+    #    天气整段丢弃，日志还谎报「天气 API 调用失败」误导排障。
     weather_text = ""
+    data = {}
     try:
         async with _httpx.AsyncClient(timeout=10) as client:
             data = await _fetch_open_meteo(client, lat, lon)
+        log.info("天气数据获取成功")
+    except Exception as e:
+        log.warning("天气 API 调用失败，将省略天气部分: %s", e)
 
-        current = data.get("current", {})
-        daily = data.get("daily", {})
+    current = data.get("current") or {}
+    if current:
         code = current.get("weather_code", 0)
-
         weather_text = (
             f"当前天气：{_WMO.get(code, '未知')}，"
             f"气温 {current.get('temperature_2m', '?')}°C"
@@ -487,26 +634,31 @@ async def daily_morning_greeting():
             f"风速 {current.get('wind_speed_10m', '?')} km/h。"
         )
 
-        # 今日预报
+        # 今日预报：字段畸形（[None] / 空列表）只降级本段，
+        # 不抹掉已构建好的当前天气
+        daily = data.get("daily") or {}
         if daily:
-            tm = daily.get("temperature_2m_max", ["?"])
-            tn = daily.get("temperature_2m_min", ["?"])
-            wc = daily.get("weather_code", [0])
-            rp = daily.get("precipitation_probability_max", [0])
-            weather_text += (
-                f" 今天 {_WMO.get(wc[0], '未知')}，"
-                f"{tn[0]}°C ~ {tm[0]}°C"
-            )
-            if rp and int(rp[0]) > 50:
-                weather_text += f"，降水概率 {rp[0]}%"
+            try:
+                tm = daily.get("temperature_2m_max") or ["?"]
+                tn = daily.get("temperature_2m_min") or ["?"]
+                wc = daily.get("weather_code") or [0]
+                rp = daily.get("precipitation_probability_max") or [0]
+                weather_text += (
+                    f" 今天 {_WMO.get(wc[0], '未知')}，"
+                    f"{tn[0]}°C ~ {tm[0]}°C"
+                )
+                if rp and rp[0] is not None and int(rp[0]) > 50:
+                    weather_text += f"，降水概率 {rp[0]}%"
+            except (TypeError, ValueError, IndexError) as e:
+                log.warning("今日预报字段异常，省略预报段: %s", e)
 
-        log.info("天气数据获取成功")
-    except Exception as e:
-        log.warning("天气 API 调用失败，将省略天气部分: %s", e)
-        weather_text = ""
-
-    # 3. 构建 prompt
-    today = datetime.datetime.now(_HKT).strftime("%Y年%m月%d日")
+    # 3. 构建 prompt（时间只取一次，避免跨整点漂移）
+    now_dt = datetime.datetime.now(_HKT)
+    today = now_dt.strftime("%Y年%m月%d日")
+    wk = weekend_label(now_dt)
+    weekend_part = (
+        f"今天是{wk}，冷冷不用上课，可能还在睡，语气可以再懒一点。\n" if wk else ""
+    )
 
     if weather_text:
         if location_known:
@@ -518,6 +670,7 @@ async def daily_morning_greeting():
 
     prompt_text = (
         f"今天是{today}，早上 8 点。\n"
+        f"{weekend_part}"
         f"{weather_part}\n\n"
         f"请给冷冷发一条早安问候消息。要求：\n"
         f"1. 包含早安问候\n"
@@ -529,10 +682,11 @@ async def daily_morning_greeting():
         f"二次元音乐，追过 LoveLive 缪斯、玩过 BanG Dream），只写歌名，一句话带过"
     )
 
-    # 4. LLM 生成
+    # 4. LLM 生成（model 跟随用户运行时配置，token 保持轻量）
     content = ""
     try:
-        llm = create_deepseek_llm(temperature=1.0, max_tokens=200)
+        from api.routes.config import get_current_model
+        llm = create_deepseek_llm(model=get_current_model(), temperature=1.0, max_tokens=200)
         response = await llm.ainvoke([
             SystemMessage(content=BASE_PERSONA),
             HumanMessage(content=prompt_text),
@@ -579,17 +733,19 @@ async def daily_morning_greeting():
             await conn.commit()
             log.info("早安消息已推送至 %d 个设备", sent)
         else:
-            # 无订阅设备，标记为待拉取
+            # 无订阅设备，仅存储供轮询拉取（从未推送过，不叫 delivered）
             conn = await get_db()
             await conn.execute(
-                "UPDATE proactive_messages SET status = 'delivered' WHERE id = ?",
+                "UPDATE proactive_messages SET status = 'stored' WHERE id = ?",
                 (msg_id,),
             )
             await conn.commit()
     except ImportError:
         log.warning("web_push 模块不可用，早安消息仅存储在数据库中")
+        await _mark_stored(msg_id, label="早安消息")
     except Exception as e:
         log.warning("早安消息推送失败: %s", e)
+        await _mark_stored(msg_id, label="早安消息")
 
     log.info("早安问候任务完成")
 
@@ -660,6 +816,9 @@ async def daily_diary():
     else:
         material.append("今天冷冷没有跟小汐说什么新的事。")
 
+    # 「不用 emoji」是有意比 BASE_PERSONA（已有限度开放）更严格：
+    # 日记是写给自己的，干净文本更像日记；任务级指令比 System 的
+    # BASE 更具体，LLM 会以具体者为准
     prompt_text = (
         "\n".join(material)
         + "\n\n请以小汐自己的口吻写一篇短日记（80-150字），记今天小汐是怎么过的、"
@@ -668,9 +827,11 @@ async def daily_diary():
     )
 
     # ── LLM 生成（独立轻量调用，不走 Agent 图）──────────────
+    # model 跟随用户运行时配置，max_tokens 保持日记任务的轻量值
     content = ""
     try:
-        llm = create_deepseek_llm(temperature=1.0, max_tokens=400)
+        from api.routes.config import get_current_model
+        llm = create_deepseek_llm(model=get_current_model(), temperature=1.0, max_tokens=400)
         response = await llm.ainvoke([
             SystemMessage(content=BASE_PERSONA),
             HumanMessage(content=prompt_text),
@@ -700,10 +861,13 @@ async def daily_diary():
             final_content = f"{row[0]}\n\n（晚上小汐自己补的：{content}）"
         else:
             final_content = content
+        # 晚间补记只追加 content；白天 write_diary 手记的标题不被
+        # 自动标题（「MM月DD日」）覆盖，空标题才补上（NULLIF 兜底）
         await conn.execute(
             """INSERT INTO diaries (date, title, content) VALUES (?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET title = excluded.title,
-                   content = excluded.content""",
+               ON CONFLICT(date) DO UPDATE SET
+                   content = excluded.content,
+                   title = COALESCE(NULLIF(diaries.title, ''), excluded.title)""",
             (today_str, title, final_content),
         )
         await conn.commit()

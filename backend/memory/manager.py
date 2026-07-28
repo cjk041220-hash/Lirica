@@ -12,7 +12,6 @@ import datetime
 import json
 import math
 import uuid
-from datetime import timezone, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -22,12 +21,17 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
-_HKT = timezone(timedelta(hours=8))
-_TIME_FMT = "%Y-%m-%d %H:%M"
+from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
 
 
-def _now() -> str:
-    return datetime.datetime.now(_HKT).strftime(_TIME_FMT)
+def _escape_like(s: str) -> str:
+    """转义 LIKE 通配符，category 里的 % / _ 只按字面匹配。
+
+    category 来自 LLM 工具参数，含下划线的类别名（如 user_info）
+    不转义会让 `_` 当单字符通配，匹配语义失控（不是注入风险——
+    已参数化——而是召回串味）。
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _parse_time(t: str | None) -> datetime.datetime:
@@ -101,6 +105,14 @@ class MemoryManager:
         （迁移 v5）强制保证：INSERT ... ON CONFLICT DO UPDATE 一条语句原子完成，
         彻底消除「先查后写」在并发下产生重复行的 TOCTOU 竞态。
         """
+        # 空 category 入库会让 recall_by_category 的 LIKE '%%' 匹配全类别、
+        # 矛盾检测上下文串味；由调用方（remember 工具）转友好文案
+        category = (category or "").strip()
+        if not category:
+            raise ValueError("category 不能为空")
+        content = (content or "").strip()
+        if not content:
+            raise ValueError("content 不能为空")
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
@@ -213,16 +225,18 @@ class MemoryManager:
         if category:
             cursor = await self._db.execute(
                 """SELECT * FROM memories
-                   WHERE category LIKE ? AND status = 'active'
+                   WHERE category LIKE ? ESCAPE '\\' AND status = 'active'
                    ORDER BY created_at DESC LIMIT ?""",
-                (f"%{category}%", limit * 2),  # 多取一些，评分后再截断
+                (f"%{_escape_like(category)}%", limit * 2),  # 多取一些，评分后再截断
             )
         else:
+            # 相关性召回不能用 created_at DESC 预筛：候选池一旦被「最新 N 条」
+            # 限死，_relevance_score 的 access 热度因子对旧记忆完全失效——
+            # 旧的核心偏好/重要约定无论被想起多少次都进不了候选池，「相关路」
+            # 退化成「最新路」（narrative 的 hybrid 注入名存实亡）。
+            # 单用户记忆量级（百级～千级）全表评分完全可承受。
             cursor = await self._db.execute(
-                """SELECT * FROM memories
-                   WHERE status = 'active'
-                   ORDER BY created_at DESC LIMIT ?""",
-                (limit * 2,),
+                "SELECT * FROM memories WHERE status = 'active'"
             )
         rows = await cursor.fetchall()
         matched = self._rows_to_dicts(cursor, rows)
@@ -253,9 +267,9 @@ class MemoryManager:
         """
         cursor = await self._db.execute(
             """SELECT * FROM memories
-               WHERE category LIKE ? AND status = 'active'
+               WHERE category LIKE ? ESCAPE '\\' AND status = 'active'
                ORDER BY created_at DESC LIMIT ?""",
-            (f"%{category}%", limit),
+            (f"%{_escape_like(category)}%", limit),
         )
         rows = await cursor.fetchall()
         return self._rows_to_dicts(cursor, rows)
@@ -273,6 +287,41 @@ class MemoryManager:
                ) ORDER BY created_at ASC""",
             (limit,),
         )
+        rows = await cursor.fetchall()
+        return self._rows_to_dicts(cursor, rows)
+
+    async def old_memories(self, min_age_days: int = 90, limit: int = 5,
+                           exclude_ids: list[str] | None = None) -> list[dict]:
+        """随机采样足够久远的活跃记忆（「翻小本本」用）。
+
+        纯被动：不更新 last_used_at / access_count。调用方是记忆回声
+        检测器——若刷热度，被 echo 的记忆会在 _relevance_score 里
+        突然「复活」霸榜（L220-223 注释记录的正反馈闭环），必须只读。
+
+        全库日期为 TEXT "%Y-%m-%d %H:%M"，字典序即时间序，
+        created_at <= cutoff 就是年龄达标；RANDOM() 保证每次采样
+        不偏向同一批记忆。
+        """
+        cutoff = (
+            datetime.datetime.now(_HKT) - datetime.timedelta(days=min_age_days)
+        ).strftime(_TIME_FMT)
+        exclude = exclude_ids or []
+        if exclude:
+            placeholders = ",".join("?" for _ in exclude)
+            cursor = await self._db.execute(
+                f"""SELECT * FROM memories
+                    WHERE status = 'active' AND created_at <= ?
+                      AND id NOT IN ({placeholders})
+                    ORDER BY RANDOM() LIMIT ?""",
+                (cutoff, *exclude, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                """SELECT * FROM memories
+                   WHERE status = 'active' AND created_at <= ?
+                   ORDER BY RANDOM() LIMIT ?""",
+                (cutoff, limit),
+            )
         rows = await cursor.fetchall()
         return self._rows_to_dicts(cursor, rows)
 

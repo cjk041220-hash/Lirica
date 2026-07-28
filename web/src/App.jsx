@@ -1,19 +1,43 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import RoomScene from './components/RoomScene'
 import ChatPanel from './components/ChatPanel'
 import ConfigPanel from './components/ConfigPanel'
 import MemoriesPanel from './components/MemoriesPanel'
-import SettingsButton from './components/SettingsButton'
+import SessionsPanel from './components/SessionsPanel'
 import IconBook from './assets/icons/IconBook'
+import IconHistory from './assets/icons/IconHistory'
+import IconSettings from './assets/icons/IconSettings'
 import { useChat } from './hooks/useChat'
 import { useConfig } from './hooks/useConfig'
 import { usePush } from './hooks/usePush'
 import { usePresence } from './hooks/usePresence'
 import { useStatus } from './hooks/useStatus'
 
+// 深夜判定（HKT 00:00–06:59）——与 SkyBackground 的天空时段共用
+// utils/time.js 的 HKT 钟，保证天色与小汐困不困来自同一时区
+import { isLateNight } from './utils/time'
+
+// ── 后端心情 → 前端立绘映射 ──────────────────────────────
+const moodToSprite = {
+  '开心': 'happy',
+  '兴奋': 'happy',
+  '活泼': 'exploring',
+  '好奇': 'exploring',
+  '期待': 'happy',
+  '满足': 'idle',
+  '发呆': 'idle',
+  '懒洋洋': 'idle',
+  '困倦': 'sleepy',
+  '担心': 'sad',
+}
+
 export default function App() {
   const [showConfig, setShowConfig] = useState(false)
   const [showMemories, setShowMemories] = useState(false)
+  const [showSessions, setShowSessions] = useState(false)
+  // 页面打开时即判定深夜——即使立绘状态后续因聊天流改变，
+  // 深夜侧初始沉睡的判断基准是"打开页面的那一刻是不是深夜"。
+  const [openedAtLateNight] = useState(isLateNight)
 
   const chat = useChat()
   const config = useConfig()
@@ -23,13 +47,38 @@ export default function App() {
   const injectedRef = useRef(new Set())
 
   // 立绘状态归并（优先级）：
-  //   聊天流程态（listening/thinking/talking/刚聊完的 happy）>
-  //   冷冷不在时的 sleepy（空闲超 4 分钟 或 标签页不可见）> idle
-  // 打开页面的前两秒，这个状态就在传达「小汐在等我」。
-  const displayState =
-    chat.characterState !== 'idle'
-      ? chat.characterState
-      : (presence.isIdle || !presence.isVisible) ? 'sleepy' : 'idle'
+  //   1. 聊天流程态（listening/thinking/talking/刚聊完的 happy）
+  //      —— 聊天进行中必须让路，否则立绘跟文字脱节
+  //   2. 深夜唤醒序列：
+  //      a) 未发过消息 → sleepy（沉睡，有 Zzz）
+  //      b) 只发了 1 条 → halfawake（睡眼惺忪，还没完全醒）
+  //      c) 发了 ≥2 条 → 进入正常心情映射
+  //   3. 冷冷不在 → sleepy（空闲超 4 分钟 / 标签页不可见）
+  //   4. 正常心情映射 → 按后端 mood 选立绘
+  //   5. fallback → idle
+  const displayState = useMemo(() => {
+    const ch = chat.characterState
+    const cnt = chat.userMsgCount ?? 0
+
+    // 1. 聊天流程态优先
+    if (ch !== 'idle') return ch
+
+    // 2. 深夜唤醒序列（仅限页面打开就在深夜的用户）
+    if (openedAtLateNight) {
+      if (cnt === 0) return 'sleepy'
+      if (cnt === 1) return 'halfawake'
+    }
+
+    // 3. 冷冷不在
+    if (presence.isIdle || !presence.isVisible) return 'sleepy'
+
+    // 4. 心情 → 立绘
+    const moodSprite = status.mood ? moodToSprite[status.mood] : null
+    if (moodSprite) return moodSprite
+
+    // 5. fallback
+    return 'idle'
+  }, [chat.characterState, chat.userMsgCount, openedAtLateNight, presence.isIdle, presence.isVisible, status.mood])
 
   // 小汐的主动消息（页面加载时的未读 / 实时推送到达）→ 注入聊天流并标记已读。
   // 依赖只收 unread 列表和两个稳定回调（useCallback 引用不变），
@@ -39,28 +88,54 @@ export default function App() {
   useEffect(() => {
     const fresh = unread.filter(m => m.id != null && !injectedRef.current.has(m.id))
     if (fresh.length === 0) return
+    // 后端 unread 按 created_at DESC 返回（最新在前），注入聊天流前
+    // 先按时间升序排回，多条积压未读才不会倒序出现
+    fresh.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
     fresh.forEach(m => injectedRef.current.add(m.id))
     receiveProactive(fresh)
-    markRead(fresh.map(m => m.id))
+    // 已读同步失败 → 回滚 injectedRef，让下一轮 60s 轮询拉到未读时重试
+    //（边角：失败且下轮拉回时可能重复注入一条——发生条件苛刻，接受）
+    markRead(fresh.map(m => m.id)).then(ok => {
+      if (!ok) fresh.forEach(m => injectedRef.current.delete(m.id))
+    })
   }, [unread, receiveProactive, markRead])
 
   return (
-    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-warm-paper select-none">
+    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-warm-paper select-none sm:shadow-[0_24px_90px_-16px_rgba(0,0,0,0.6),0_4px_24px_rgba(0,0,0,0.35)]">
       <RoomScene characterState={displayState} />
-      <SettingsButton onClick={() => setShowConfig(true)} />
 
-      {/* 记忆/日记入口 */}
-      <button
-        onClick={() => setShowMemories(true)}
-        className="icon-btn absolute top-4 left-4 z-[60] w-9 h-9 rounded-full glass-panel flex items-center justify-center"
-        aria-label="小汐的记忆"
-      >
-        <IconBook size={16} className="text-ink-tea/60" />
-      </button>
+      {/* 顶栏控制台：三个入口收进顶部居中的一条磨砂胶囊，
+          细线分隔——奇数个图标居中摆最平衡，也浮在夜空上而非压窗框角 */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.22)]">
+        <button
+          onClick={() => setShowSessions(true)}
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          aria-label="以往的对话"
+        >
+          <IconHistory size={16} />
+        </button>
+        <span aria-hidden className="w-px h-3.5 bg-ink-tea/12" />
+        <button
+          onClick={() => setShowMemories(true)}
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          aria-label="小汐的记忆"
+        >
+          <IconBook size={16} />
+        </button>
+        <span aria-hidden className="w-px h-3.5 bg-ink-tea/12" />
+        <button
+          onClick={() => setShowConfig(true)}
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          aria-label="设置"
+        >
+          <IconSettings size={16} />
+        </button>
+      </div>
 
       <ChatPanel chat={chat} status={status} displayState={displayState} />
       {showConfig && <ConfigPanel config={config} push={push} onClose={() => setShowConfig(false)} />}
       {showMemories && <MemoriesPanel onClose={() => setShowMemories(false)} />}
+      {showSessions && <SessionsPanel chat={chat} onClose={() => setShowSessions(false)} />}
     </div>
   )
 }

@@ -76,9 +76,15 @@ docker compose up -d
 |------|------|------|
 | `/api/chat` | POST | 对话（非流式） |
 | `/api/chat/stream` | POST | 流式对话（SSE，token 级） |
+| `/api/chat/history` | GET | 当前会话刷新恢复（读 checkpoint，会被定期裁剪） |
+| `/api/sessions` | GET | 对话档案列表（标题/预览/时间，永久保留） |
+| `/api/sessions/{id}/messages` | GET | 对话档案回看（最近 N 条，升序） |
+| `/api/sessions/{id}` | DELETE | 删除一段对话档案（级联删消息） |
 | `/api/config` | GET | 获取控制台配置 |
 | `/api/config` | POST | 更新配置（模型/温度/思考强度；部分更新，返回合并后全量） |
 | `/api/health` | GET | 健康检查 |
+| `/api/status` | GET | 生命状态：心情/日常（页面「碎碎念」） |
+| `/api/diaries` | GET | 日记列表（含每晚自动写的日记） |
 | `/api/memories` | GET | 获取记忆列表 |
 | `/api/push/vapid-key` | GET | VAPID 公钥（推送订阅前置） |
 | `/api/push/subscribe` | POST/DELETE | 注册 / 取消推送订阅（DELETE 接受 body 或 query） |
@@ -89,6 +95,9 @@ docker compose up -d
 | `/api/memories/clear` | POST | 清空所有记忆（需 `?confirm=true`，自动备份） |
 | `/docs` | GET | Swagger 文档 |
 
+> `/docs` 仅在未设置 `XIAOXI_API_TOKEN` 时开放（设了 token = 生产部署，docs 自动关闭，
+> 避免危险端点的参数说明随 Swagger 公网裸奔）。
+
 ## 项目结构
 
 ```
@@ -98,14 +107,19 @@ docker compose up -d
 ├── docker-compose.yml              # Docker Compose 编排
 ├── docs/                           # 文档
 │   ├── PROJECT_SOURCE.md           # 完整技术文档
-│   ├── PRODUCT_REPORT.md           # 产品审查报告
-│   ├── ACCEPTANCE_REPORT_2026-07-23.md  # 前后端一体验收报告（含工具联通实测）
+│   ├── PRODUCT_REPORT_2026-07-26.md  # 全项目检查产品报告（3 轮测试 + 5 路审查 + 修复方案）
+│   ├── PRODUCT_AUDIT_2026-07-25.md  # 全项目代码审计报告
 │   ├── PROMPT_GUIDE.md             # 提示词指南
-│   └── XIAOXI_GUIDE.md             # 小汐使用指南
+│   └── PRIVACY.md                  # 数据与隐私说明
 │
 ├── scripts/                        # 辅助脚本
 │   ├── gen_assets.py               # 生成 PWA 图标 + 立绘 PNG→WebP 压缩
-│   └── e2e/ui_test.cjs             # 浏览器级交互验证（headless Edge，17 交互点）
+│   ├── cleanup_test_residue.py     # 清理测试残留数据
+│   ├── verify_tools.py             # 工具联通性实测
+│   ├── trim_sprites.py             # 立绘预处理
+│   └── e2e/
+│       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，17 交互点）
+│       └── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
 │
 ├── backend/
 │   ├── main.py                     # 启动入口（uvicorn）
@@ -130,7 +144,10 @@ docker compose up -d
 │   │   │   └── websocket_reject.py # WebSocket 拒绝中间件
 │   │   └── routes/
 │   │       ├── chat.py             # 对话路由（REST + SSE 流式 + 断开检测）+ 记忆管理
-│   │       └── config.py           # 配置路由（模型/思考强度切换）
+│   │       ├── config.py           # 配置路由（模型/思考强度切换）
+│   │       ├── push.py             # 推送路由（VAPID 公钥/订阅/未读主动消息）
+│   │       ├── sessions.py         # 对话档案路由（历史列表/回看/删除）
+│   │       └── status.py           # 状态路由（/api/status 生命状态 + /api/diaries 日记列表）
 │   │
 │   ├── agent/
 │   │   ├── graph.py                # LangGraph ReAct Agent 构建
@@ -139,34 +156,60 @@ docker compose up -d
 │   ├── providers/
 │   │   └── deepseek.py             # DeepSeek V4 Flash/Pro 接入
 │   │
-│   ├── tools/                      # 15 个工具
+│   ├── tools/                      # 18 个工具
 │   │   ├── weather.py              # 天气（Open-Meteo + 高德回退）
 │   │   ├── map_tools.py            # 地图（高德：附近搜索/定位/路线）
 │   │   ├── search.py               # 网络搜索（Tavily）
-│   │   ├── memory.py               # 记忆（增删查导出）
+│   │   ├── memory.py               # 记忆（增删改查导出）
 │   │   ├── diary.py                # 日记（写/读，同日去重）
-│   │   └── tarot.py                # 塔罗牌（78 张韦特塔罗）
+│   │   ├── events.py               # 事件（create_event/list_events，「惦记」系统）
+│   │   ├── tarot.py                # 塔罗牌（78 张韦特塔罗）
+│   │   └── tarot_deck.yaml         # 塔罗牌数据（牌义文案）
 │   │
 │   ├── memory/
 │   │   ├── manager.py              # 记忆管理器（SQLite, async CRUD）
 │   │   ├── narrative.py            # 叙事构建器（记忆 → 提示词注入）
+│   │   ├── chat_archive.py         # 对话档案（会话/消息持久化，永不回喂 LLM）
 │   │   └── location_store.py       # GPS 坐标会话级缓存
 │   │
 │   ├── utils/
 │   │   ├── logger.py               # GBK 安全的结构化日志
-│   │   └── retry.py                # 异步重试装饰器（指数退避）
+│   │   ├── retry.py                # 异步重试装饰器（指数退避）
+│   │   ├── errors.py               # 错误脱敏（防 API Key 随异常文本泄漏）
+│   │   ├── events.py               # 事件管理器（登记/归档/提示词注入/检测器）
+│   │   ├── cycle_tracker.py        # 生理期追踪器
+│   │   ├── web_push.py             # Web Push 发送器（VAPID 签名）
+│   │   ├── security.py             # 启动安全加固检查（fail closed）
+│   │   └── timezone.py             # 时区纪律（统一 HKT/UTC+8）
 │   │
-│   ├── tests/                      # 测试套件
+│   ├── tests/                      # 测试套件（逐文件计数不在此维护，以 pytest --collect-only 为准）
 │   │   ├── conftest.py             # 共享 fixtures
-│   │   ├── test_memory_manager.py  # 记忆 CRUD + 去重 + recall LIMIT（18 测试）
-│   │   ├── test_soul.py            # 提示词组装（7 测试）
-│   │   ├── test_heartbeat.py       # 心跳时段匹配（8 测试）
-│   │   ├── test_weather.py         # 天气坐标解析（6 测试）
-│   │   ├── test_narrative.py       # 叙事构建器（6 测试）
-│   │   ├── test_config_routes.py   # 运行时配置（4 测试）
-│   │   ├── test_diary.py           # 日记工具（5 测试）
-│   │   ├── test_migrations.py      # 数据库迁移（3 测试）
-│   │   └── test_integration.py     # 端到端集成测试
+│   │   ├── test_auth_middleware.py # 认证 + IP 限流中间件
+│   │   ├── test_backup_permissions.py  # 备份权限收紧
+│   │   ├── test_chat_archive.py    # 对话档案（CRUD/边界/韧性/LLM 隔离自检）
+│   │   ├── test_checkpoint_prune.py    # Checkpoint 裁剪 + 僵尸 thread 清理
+│   │   ├── test_config_routes.py   # 运行时配置（默认值/思考强度/统一重建）
+│   │   ├── test_cycle_tracker.py   # 生理期追踪器
+│   │   ├── test_diary.py           # 日记工具（写入/去重/读取）
+│   │   ├── test_errors.py          # 错误脱敏（防 Key 泄漏回归）
+│   │   ├── test_event_tools.py     # 事件工具层（create_event/list_events）
+│   │   ├── test_events.py          # 事件管理器（登记/去重/归档/检测器）
+│   │   ├── test_heartbeat.py       # 心跳时段匹配
+│   │   ├── test_init_db_upgrade.py # 旧版数据库升级路径
+│   │   ├── test_integration.py     # 端到端集成测试
+│   │   ├── test_memory_manager.py  # 记忆管理器（CRUD/去重/相关性排序）
+│   │   ├── test_memory_tools.py    # 记忆工具层（remember/recall）
+│   │   ├── test_migrations.py      # 数据库迁移
+│   │   ├── test_narrative.py       # 叙事构建器
+│   │   ├── test_pre_model_hook.py  # 记忆注入 + 消息裁剪
+│   │   ├── test_proactive.py       # 主动消息系统
+│   │   ├── test_push_routes.py     # 推送路由
+│   │   ├── test_security.py        # 启动安全加固（fail closed）
+│   │   ├── test_soul.py            # 系统提示词组装
+│   │   ├── test_status_routes.py   # 状态路由（/api/status + /api/diaries）
+│   │   ├── test_tarot.py           # 塔罗工具（占卜 + 数据损坏降级）
+│   │   ├── test_weather.py         # 天气工具（坐标解析/WMO 码映射）
+│   │   └── test_web_push.py        # Web Push 发送器
 │   │
 │   └── data/                       # 运行时数据（不入 git）
 │       ├── userdata.db             # 业务数据库
@@ -179,7 +222,7 @@ docker compose up -d
     │   ├── hooks/                  # useChat（SSE 流式）/ useConfig / usePush
     │   └── assets/icons/           # 内联 SVG 图标组件
     ├── public/
-    │   ├── sprites/                # 9 张角色立绘（WebP，已压缩 21MB→1MB）
+    │   ├── sprites/                # 10 张角色立绘（WebP，含 halfawake 深夜状态；PNG→WebP 约 23MB→2MB）
     │   ├── sw.js                   # Service Worker（cache-first + 推送通知）
     │   └── manifest.json           # PWA manifest
     ├── dist/                       # 生产构建产物（由 FastAPI 挂载，npm run build 生成）
@@ -197,24 +240,27 @@ docker compose up -d
 | 地图 | 高德地图 Web 服务 API |
 | 搜索 | Tavily（1000 次/月免费） |
 | 数据库 | SQLite（aiosqlite 异步，WAL 模式） |
-| 对话持久化 | SQLite（langgraph-checkpoint-sqlite） |
+| 对话持久化 | SQLite checkpointer（短期上下文，定期裁剪）+ 对话档案表（永久回看） |
 | 心跳调度 | APScheduler（AsyncIOScheduler） |
 | 前端 | Vite 8 + React 19 + Tailwind CSS v4（PWA，Web Push） |
 | 动画 | CSS / Tailwind 自定义动画（呼吸 / 淡入 / 星空 / 浮云） |
 | 容器化 | Docker 多阶段构建 |
-| 测试 | pytest + pytest-asyncio（160 测试，~12 秒）+ 浏览器 E2E（17 交互点） |
+| 测试 | pytest + pytest-asyncio（320+ 测试，以 `pytest --collect-only` 为准）+ 浏览器 E2E（20+ 交互点） |
 
 ## 核心能力
 
-### 小汐的 15 个工具
+### 小汐的 18 个工具
 
 - **🌤️ 天气查询** — Open-Meteo，50+ 城市本地坐标 + 高德地理编码回退
 - **📍 附近搜索** — 高德 POI，支持 GPS 自动传入
 - **🗺️ 地址定位 / 模糊搜索** — 高德地理编码
 - **🚇 公交路线 / 🚲 骑行路线** — 高德路线规划
 - **🔍 网络搜索** — Tavily，世界观包装（「去映海里找找看」）
-- **🧠 记忆系统** — 记住/回忆/列出/删除/导出，自动去重
+- **🧠 记忆系统** — 记住/回忆/列出/导出，自动去重
+- **✏️ 记忆更新 / 删除** — update_memory 覆盖矛盾、合并变化；delete_memory 忘掉过时的
 - **📖 日记系统** — 写/读，同日 UPDATE 去重
+- **📅 事件登记** — create_event 记下未来要发生的事（考试/旅行/约定），小汐会惦记、会关心、会自动翻篇
+- **📔 事件查看** — list_events 看小汐的小本本上记了哪些 upcoming 的事
 - **🎴 塔罗牌占卜** — 78 张韦特塔罗，3 种牌阵
 
 ### 内在系统
@@ -223,7 +269,7 @@ docker compose up -d
 - **📖 叙事注入** — 每次对话动态注入最近 5 条记忆（SQL LIMIT，不烘焙进 system prompt）
 - **🧬 生命状态** — 心情/日常注入系统提示词（心跳后自动刷新，不再过期）
 - **📍 GPS 缓存** — 会话级内存缓存（8h TTL，asyncio.Lock）
-- **💾 对话持久化** — SQLite checkpointer
+- **💾 对话持久化** — SQLite checkpointer（小汐的短期工作记忆，每 2h 裁剪）+ 对话档案（`chat_sessions`/`chat_messages`，永久保留、可回看续聊，**永不进入 LLM 上下文**——重要信息由记忆系统自己提取）
 - **🔒 安全** — 可选 Bearer Token 认证 + IP 速率限制 + WebSocket 拒绝 + 清空保护
 - **🛡️ 运维** — Checkpoint 自动裁剪（每 thread 保留 10 个）+ SQLite Online Backup（保留 5 份）
 - **🔄 重试** — 外部 API 调用指数退避重试（Open-Meteo 3 次、高德/Tavily 2 次）
@@ -255,4 +301,4 @@ cd backend
 
 ## 版本
 
-**v0.4.4**
+**5.0**

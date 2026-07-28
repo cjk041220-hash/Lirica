@@ -39,6 +39,6 @@ SSE 流协议：每行 `data: <json>\n\n`，JSON 形如 `{"content":"增量文�
 
 - `src/hooks/` — `useChat`（对话状态机 + SSE）、`useConfig`（设置）、`usePush`（Web Push）
 - `src/components/` — `RoomScene`（场景）、`CharacterSprite`（立绘）、`ChatPanel`/`ChatInput`、`ConfigPanel`、`MemoriesPanel`、`MessageBubble`
-- `public/sprites/` — 9 张角色立绘（WebP，已压缩）
+- `public/sprites/` — 10 张角色立绘（WebP，含 halfawake 深夜状态）
 - `public/sw.js` — Service Worker：cache-first（跳过 `/api`）+ 推送通知
 - `scripts/gen_assets.py` — 生成 PWA 图标 / 立绘 PNG→WebP 的工具

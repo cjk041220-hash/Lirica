@@ -105,9 +105,8 @@ async def test_build_hybrid_surfaces_old_hot_memory(memory_mgr, tmp_db):
     """
     import datetime
     import uuid
-    from datetime import timedelta, timezone
-
-    _HKT = timezone(timedelta(hours=8))
+    from datetime import timedelta
+    from utils.timezone import HKT as _HKT
     now = datetime.datetime.now(_HKT)
 
     def ts(days_ago: int) -> str:

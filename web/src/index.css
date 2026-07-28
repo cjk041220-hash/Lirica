@@ -1,25 +1,29 @@
 @import "tailwindcss";
 
+/* 移除 user-scalable=no 后的双击缩放防护：manipulation 仍允许捏合缩放与滑动，仅禁双击放大；
+   拖拽把手自有 touch-none（更高优先级）覆盖，不受影响 */
+* { touch-action: manipulation; }
+
 @theme {
   --color-warm-paper: #FCFAF8;
   --color-ink-tea: #5C544D;
   --color-healing-aqua: #88B5B5;
-  --color-healing-aqua-light: #a8d0d0;
   --color-wood: #D4C5B3;
   --color-wood-light: #E8D5B7;
   --color-wood-border: #C4B5A3;
-  --color-warm-warning: #C4A882;
-  --color-sky-night: #1a1a2e;
   --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-breathe-slow: breathe 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  --animate-breathe-slower: breathe 5.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-fade-in-up: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-pulse-dot: pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-twinkle: twinkle 3.5s ease-in-out infinite;
   --animate-float-soft: floatSoft 6s ease-in-out infinite;
   --animate-shimmer: shimmer 2.5s ease-in-out infinite;
   --animate-zzz: zzzFloat 2.8s ease-in-out infinite;
+  --animate-bubble-pop: bubblePop 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-wiggle: wiggle 0.3s ease-in-out;
 }
 
 @keyframes breathe {
@@ -53,17 +57,92 @@
   25% { opacity: 0.9; }
   100% { opacity: 0; transform: translateY(-22px) scale(1.15); }
 }
+/* 戳一戳气泡：淡入 + 轻微上浮（-50% 横移烤进关键帧，forwards 保持居中） */
+@keyframes bubblePop {
+  from { opacity: 0; transform: translate(-50%, 6px) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+/* 冷却中被连戳：轻微晃一下表示「收到了，但别戳了」 */
+@keyframes wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(-1.2deg); }
+  70% { transform: rotate(1.2deg); }
+}
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+/* ── 天空：活的天象 ─────────────────────────────────── */
+/* 云真的横飘过窗（不同速度/高度营造视差） */
+@keyframes cloudDrift {
+  from { transform: translateX(-130%); }
+  to   { transform: translateX(360%); }
+}
+/* 月冕缓慢呼吸 */
+@keyframes moonPulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.06); }
+}
+/* 太阳光晕微颤 */
+@keyframes sunPulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.05); }
+}
+/* 流星：大部分时间隐形，末尾一闪划过 */
+@keyframes shoot {
+  0%   { opacity: 0; transform: translate3d(0,0,0) rotate(18deg) scaleX(0.2); }
+  88%  { opacity: 0; transform: translate3d(0,0,0) rotate(18deg) scaleX(0.2); }
+  92%  { opacity: 1; transform: translate3d(0,0,0) rotate(18deg) scaleX(1); }
+  100% { opacity: 0; transform: translate3d(150px,52px,0) rotate(18deg) scaleX(1); }
+}
+/* 亮星的十字星芒 */
+@keyframes sparkle {
+  0%, 100% { opacity: 0.25; transform: scale(0.6) rotate(0deg); }
+  50%      { opacity: 1;    transform: scale(1) rotate(45deg); }
+}
+.star-cross {
+  position: absolute;
+  width: 11px; height: 11px;
+  background:
+    linear-gradient(transparent 44%, rgba(255,255,255,0.95) 50%, transparent 56%),
+    linear-gradient(90deg, transparent 44%, rgba(255,255,255,0.95) 50%, transparent 56%);
+  border-radius: 50%;
+  filter: blur(0.2px);
+}
+
+/* 全局重置必须放进 @layer base：Tailwind v4 的工具类在 @layer utilities，
+   而未分层样式永远胜过有分层样式（与特异性无关）——此前裸写的 * { margin: 0 }
+   一直把 mx-auto 压成 0，桌面宽屏下 430px 房间列永远贴左，无法居中 */
+@layer base {
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+}
 html, body, #root { height: 100%; overflow: hidden; }
 
 body {
   font-family: var(--font-sans);
-  background-color: var(--color-warm-paper);
   color: var(--color-ink-tea);
+  /* 桌面宽屏时房间列居中悬浮，四周是夜的底色：
+     暖调深色 + 窗光般的微弱青色/木色晕染，不是死白也不是纯黑 */
+  background-color: #2b2724;
+  background-image:
+    radial-gradient(1100px 720px at 50% 36%, rgba(136, 181, 181, 0.09), transparent 62%),
+    radial-gradient(820px 620px at 50% 108%, rgba(212, 197, 179, 0.10), transparent 66%),
+    linear-gradient(180deg, #332f2b 0%, #292522 100%);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   text-rendering: optimizeLegibility;
+}
+
+/* 房间前的一小片光，跟着里面的小家伙一起缓慢呼吸 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(560px 780px at 50% 44%, rgba(136, 181, 181, 0.12), transparent 70%);
+  animation: ambientGlow 9s ease-in-out infinite;
+}
+@keyframes ambientGlow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
@@ -117,11 +196,6 @@ body {
 }
 .icon-btn:hover::after { opacity: 1; }
 .icon-btn:active { transform: scale(0.9); }
-
-/* 输入框聚焦光 */
-.input-glow:focus {
-  box-shadow: 0 0 0 3px rgba(136, 181, 181, 0.12), 0 2px 8px rgba(136, 181, 181, 0.08);
-}
 
 /* 面板弹出动画 */
 .panel-enter {

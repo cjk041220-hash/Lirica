@@ -8,6 +8,8 @@
 //   先启动后端 :8000，然后
 //   NODE_PATH="<npm root -g>\@ejazullah\mcp-playwright\node_modules" \
 //     node scripts/e2e/gps_test.cjs
+//
+// 退出码：任一断言 [FAIL] → 非零（修复旧版断言失败仍 exit 0 的缺陷，否则 CI 看不见失败）
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -35,6 +37,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
     }
   });
   const consoleErrors = [];
+  let failed = false; // 断言失败计数；非零即非零退出
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
 
   await page.goto(BASE, { waitUntil: 'networkidle', timeout: 30000 });
@@ -48,6 +51,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
 
   // ── 断言 1：请求体携带坐标 ──────────────────────────────
   if (!chatReqBody) {
+    failed = true;
     console.log('[FAIL] /api/chat/stream 请求未发出');
   } else {
     const { latitude, longitude, session_id, message } = chatReqBody;
@@ -56,6 +60,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
         typeof longitude === 'number' && Math.abs(longitude - HK_LON) < 0.01) {
       console.log('[PASS] GPS 坐标已随对话上传后端（香港·尖沙咀）');
     } else {
+      failed = true;
       console.log('[FAIL] 请求体缺少坐标或坐标不符');
     }
   }
@@ -84,5 +89,9 @@ fs.mkdirSync(SHOTS, { recursive: true });
   await page.screenshot({ path: path.join(SHOTS, 'gps-e2e.png') });
   if (consoleErrors.length) console.log('console errors:', consoleErrors.slice(0, 5));
   await ctx.close();
+  if (failed) {
+    console.log('[DONE] 存在断言失败，以非零退出');
+    process.exit(1);
+  }
   console.log('[DONE]');
 })().catch(e => { console.error('[ERROR]', e); process.exit(1); });

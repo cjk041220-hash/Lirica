@@ -2,6 +2,8 @@ import { useState, useRef } from 'react'
 import IconSend from '../assets/icons/IconSend'
 import IconStop from '../assets/icons/IconStop'
 
+const MAX_LEN = 2000  // 与后端 _MAX_MESSAGE_LENGTH 一致，物理阻断超长输入（否则 422 + 通用错误文案）
+
 export default function ChatInput({ onSend, isStreaming, onStop }) {
   const [text, setText] = useState('')
   const [focused, setFocused] = useState(false)
@@ -24,6 +26,11 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
 
   return (
     <div className="px-4 pb-3 pt-1.5 shrink-0">
+      {text.length >= MAX_LEN - 100 && (
+        <div className="text-right text-[10px] text-ink-tea/40 pb-0.5 pr-2">
+          {text.length}/{MAX_LEN}
+        </div>
+      )}
       <div className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
         focused
           ? 'bg-white/70 shadow-[0_2px_12px_rgba(136,181,181,0.1)]'
@@ -33,6 +40,7 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           ref={inputRef}
           type="text"
           value={text}
+          maxLength={MAX_LEN}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={() => setFocused(true)}

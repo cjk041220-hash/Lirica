@@ -26,6 +26,10 @@ const latestAssistant = () => {
   return ts[ts.length - 1] || '';
 };
 
+// 戳一戳文案池——单一真相源 web/src/poke-lines.json（与组件共用，改一处即可）
+const POKE_LINES_SRC = require(path.join(__dirname, '..', '..', 'web', 'src', 'poke-lines.json'));
+const POKE_LINES_ALL = Object.values(POKE_LINES_SRC).flat();
+
 const consoleErrors = [];
 const apiFails = [];
 
@@ -65,8 +69,8 @@ const apiFails = [];
     });
     sprite.ok && sprite.webp ? ok('角色立绘加载（WebP，naturalWidth>0）') : bad('角色立绘', JSON.stringify(sprite));
 
-    const topBtns = await page.locator('button[aria-label="设置"], button[aria-label="小汐的记忆"]').count();
-    topBtns >= 2 ? ok('顶栏入口按钮存在（设置+记忆）') : bad('顶栏按钮', topBtns);
+    const topBtns = await page.locator('button[aria-label="设置"], button[aria-label="小汐的记忆"], button[aria-label="以往的对话"]').count();
+    topBtns >= 3 ? ok('顶栏入口按钮存在（设置+记忆+历史）') : bad('顶栏按钮', topBtns);
 
     // ── 设置面板 ──
     await page.locator('button[aria-label="设置"]').click();
@@ -168,6 +172,68 @@ const apiFails = [];
     }
     asst ? ok(`助手流式回复渲染：“${asst.slice(0, 22)}…”`) : bad('助手回复', '45s 内未渲染文本');
     await shot(page, '05-chat-reply');
+
+    // ── 对话历史面板（v8 对话档案：此时「你好呀」已落档）──
+    await page.locator('button[aria-label="以往的对话"]').click();
+    await page.waitForSelector('h2:has-text("以往的对话")', { timeout: 5000 });
+    await page.waitForTimeout(500);
+    const sRow = page.locator('div[role="button"]', { hasText: '你好呀' }).first();
+    if (await sRow.count()) {
+      const hasNow = await sRow.locator('text=现在').count();
+      hasNow
+        ? ok('历史面板列出当前会话（标题=首条消息 + 「现在」徽标）')
+        : bad('历史面板徽标', '当前会话条目缺「现在」');
+    } else bad('历史面板', '未列出会话「你好呀」（档案落库或渲染失败）');
+    await shot(page, '05c-sessions');
+    // 「开一段新聊天」→ 面板关闭、输入框可用
+    await page.locator('button', { hasText: '＋ 开一段新聊天' }).click();
+    await page.waitForTimeout(300);
+    (await page.locator('h2:has-text("以往的对话")').count()) === 0
+      ? ok('开一段新聊天 → 面板关闭')
+      : bad('新聊天', '面板仍在');
+    // 切回刚才会话验证「可续聊」载入（档案读取，零 LLM 成本）
+    await page.locator('button[aria-label="以往的对话"]').click();
+    await page.waitForSelector('h2:has-text("以往的对话")', { timeout: 5000 });
+    await page.waitForTimeout(300);
+    await page.locator('div[role="button"]', { hasText: '你好呀' }).first().click();
+    await page.waitForTimeout(600);
+    (await page.locator('text=你好呀').count())
+      ? ok('点旧会话 → 档案消息载入（可续聊）')
+      : bad('续聊载入', '历史消息未渲染');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+
+    // ── 戳一戳小汐（纯前端交互，零 LLM 成本）──
+    const spriteImg = page.locator('[data-testid="sprite-img"]');
+    const sb = await spriteImg.boundingBox();
+    if (sb) {
+      // 点立绘中上部（避开底部聊天面板）
+      await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height * 0.35);
+      const bubble = page.locator('[data-testid="poke-bubble"]');
+      try {
+        await bubble.waitFor({ state: 'visible', timeout: 3000 });
+        const text = (await bubble.textContent()).trim();
+        POKE_LINES_ALL.includes(text)
+          ? ok(`戳一戳弹出气泡：“${text}”`)
+          : bad('戳一戳气泡', `文案不在池内：${text}`);
+        await shot(page, '05b-poke-bubble');
+
+        // 冷却：6s 内连戳不产生新气泡（只晃一下）
+        await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height * 0.35);
+        await page.waitForTimeout(250);
+        const count = await bubble.count();
+        const text2 = count ? (await bubble.first().textContent()).trim() : '';
+        (count === 1 && text2 === text)
+          ? ok('戳一戳冷却：连戳不刷屏（气泡唯一且未刷新）')
+          : bad('戳一戳冷却', `count=${count} text变化=${text2 !== text}`);
+
+        // 气泡 2.8s 后自动消失
+        await bubble.first().waitFor({ state: 'hidden', timeout: 4500 });
+        ok('戳一戳气泡自动消失');
+      } catch (e) {
+        bad('戳一戳', e && e.message ? e.message.split('\n')[0] : e);
+      }
+    } else bad('戳一戳', '立绘无 boundingBox');
 
     // ── 拖拽把手改变高度（高度差断言）──
     const handle = page.locator('[data-testid="chat-handle"]');

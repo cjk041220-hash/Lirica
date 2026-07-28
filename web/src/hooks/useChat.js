@@ -5,6 +5,10 @@ import { getGpsCoords } from '../api/location'
 let msgId = 0
 const nextId = () => `msg-${++msgId}-${Date.now()}`
 
+// 新会话 id 的单调序号尾缀：Date.now() 只有毫秒分辨率，
+// 同毫秒连点「开一段新聊天」会撞 id（后端会视为同一会话）
+let sessionSeq = 0
+
 // 会话 ID 持久化（修复 P1-1）：刷新页面不再是"陌生人"，
 // checkpoint 连续性与产品叙事"一直在网页里陪你"对齐。
 const SESSION_KEY = 'xiaoxi-session'
@@ -44,21 +48,47 @@ export function useChat() {
   const [characterState, setCharacterState] = useState('idle')
   const abortRef = useRef(null)
   const happyTimerRef = useRef(null)  // 「刚聊完→开心」的回落定时器
-  const sessionId = useRef(getSessionId())
+  // 会话 ID：state（供 SessionsPanel 高亮当前会话）+ 镜像 ref
+  //（sendMessage/stopStreaming 等零依赖回调里读 ref，避免闭包过期值）
+  const [sessionId, _setSessionId] = useState(getSessionId)
+  const sessionIdRef = useRef(sessionId)
+  // 会话纪元：切换会话时 +1。旧流被 abort 后 finally 里的立绘/
+  // streaming 收尾动作只对当前纪元生效，避免给新会话演一出伤心
+  const epochRef = useRef(0)
+  // 本会话用户已发消息数（深夜唤醒序列用）。必须是 state 而非 ref：
+  // App.jsx 的 displayState useMemo 依赖它触发重算，ref 对象引用恒定，
+  // 值变不触发重算（此前靠 characterState 变化间接重算才碰巧工作）
+  const [userMsgCount, setUserMsgCount] = useState(0)
 
-  // 刷新后从 checkpoint 恢复对话历史（修复 P1-1 的"刷新即失忆"）
+  // 刷新后恢复对话历史（修复 P1-1 的"刷新即失忆"）：
+  // 优先读持久对话档案（迁移 v8）；档案为空的旧会话（v8 之前
+  // 建立、还没有新消息）回退 checkpoint 历史兜底
   const loadHistory = useCallback(async () => {
+    const sid = sessionIdRef.current
+    const toLocal = (list) => (list || [])
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+      .map(m => ({ id: nextId(), role: m.role, content: m.content }))
+
+    let history = []
     try {
-      const res = await apiFetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId.current)}`)
-      if (!res.ok) return
-      const data = await res.json()
-      const history = (data.messages || [])
-        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map(m => ({ id: nextId(), role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
-      if (history.length === 0) return
-      // 仅在当前为空时注入，避免覆盖已到达的主动消息
-      setMessages(prev => (prev.length === 0 ? history : prev))
-    } catch {}
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`)
+      if (res.ok) history = toLocal((await res.json()).messages)
+    } catch (e) {
+      console.warn('[useChat] archive load failed:', e)
+    }
+    if (history.length === 0) {
+      try {
+        const res = await apiFetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`)
+        if (res.ok) history = toLocal((await res.json()).messages)
+      } catch (e) {
+        console.warn('[useChat] failed to load history:', e)
+      }
+    }
+    if (history.length === 0) return
+    // 仅在当前为空时注入，避免覆盖已到达的主动消息
+    setMessages(prev => (prev.length === 0 ? history : prev))
+    // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
+    setUserMsgCount(history.filter(m => m.role === 'user').length)
   }, [])
 
   // 挂载时拉一次历史
@@ -68,9 +98,22 @@ export function useChat() {
   useEffect(() => () => clearTimeout(happyTimerRef.current), [])
 
   const sendMessage = useCallback(async (text) => {
+    // 防止双重发送：用 abortRef 而非 isStreaming——本回调依赖数组为空，
+    // 闭包里的 isStreaming 永远是挂载时的 false（守卫形同虚设）；
+    // abortRef 在 GPS await 之前就同步置位，才是覆盖整个发送窗口的真锁
+    if (abortRef.current) return
+
+    // 创建 AbortController 必须早于 setIsStreaming(true)，
+    // 否则用户在 GPS 获取期间的停止操作会因 abortRef 为空而丢失。
+    const controller = new AbortController()
+    abortRef.current = controller
+    const myEpoch = epochRef.current  // 本次发送所属的会话纪元
+
     // 添加用户消息
     const userMsg = { id: nextId(), role: 'user', content: text }
     setMessages(prev => [...prev, userMsg])
+    // 深夜唤醒序列：记录用户发送的消息数
+    setUserMsgCount(c => c + 1)
     setIsStreaming(true)
     clearTimeout(happyTimerRef.current)
     setCharacterState('listening')
@@ -79,11 +122,13 @@ export function useChat() {
     // 添加空的助手消息占位
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', streaming: true }])
 
-    const controller = new AbortController()
-    abortRef.current = controller
-
     // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null
     const coords = await getGpsCoords()
+
+    // GPS 窗口期间用户切了会话或点了停止 → 放弃本次发送。
+    // 不拦截的话，await 返回后代码会继续把这条消息发给（新的）
+    // sessionIdRef.current，用户切会话前输入的话会幽灵般窜进新会话
+    if (controller.signal.aborted) return
 
     // 只有流正常读完才算「聊成功」—— 401 / 网络错误 / 中断都不算，
     // 失败时立绘不演开心（气泡报错 + 立绘卖萌是情绪错位）
@@ -96,7 +141,7 @@ export function useChat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          session_id: sessionId.current,
+          session_id: sessionIdRef.current,
           ...(coords || {}),
         }),
         signal: controller.signal,
@@ -124,10 +169,11 @@ export function useChat() {
       const decoder = new TextDecoder()
       let buffer = ''
       let streamDone = false
+      let streamError = false  // 收到 type=error 事件 → 本轮不算成功
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read()
-        if (done || streamDone) break
+        if (done) break
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
@@ -182,6 +228,23 @@ export function useChat() {
               continue
             }
 
+            // 失败事件（agent 未就绪 / 流内异常）：与「正常回复」区分开——
+            // succeeded 保持 false，finally 里立绘回 idle 不演 happy
+            // （气泡报错 + 立绘卖萌是情绪错位）。错误事件是终结性的。
+            if (parsed.type === 'error') {
+              streamError = true
+              streamDone = true
+              const msg = parsed.content || '……小汐好像遇到了什么问题。'
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content ? m.content + '\n\n（' + msg + '）' : msg }
+                    : m
+                )
+              )
+              break
+            }
+
             // 追加文本内容
             if (parsed.content) {
               setMessages(prev =>
@@ -192,40 +255,138 @@ export function useChat() {
                 )
               )
             }
-          } catch {
+          } catch (e) {
             // 非 JSON 行，忽略
+            console.warn('[useChat] SSE parse error:', e)
           }
         }
       }
-      succeeded = true  // 流正常读完（收到 [DONE] 或服务端关流）
-    } catch (err) {
-      if (err.name !== 'AbortError') {
+      // 当流因异常断开（非 [DONE] 收尾）时，buffer 里可能残留最后一条
+      // 完整的 data: 行（末尾缺换行符）。直接丢弃会导致该 chunk 的文本
+      // 永远不到达助手气泡，造成「丢字」。flush 一把兜底。
+      if (buffer.startsWith('data: ') && buffer !== 'data: [DONE]') {
+        const data = buffer.slice(6).trim()
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.content) {
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === assistantId
+                  ? { ...m, content: m.content + parsed.content }
+                  : m
+              )
+            )
+          }
+          if (parsed.type === 'error') streamError = true
+        } catch { /* 非完整 JSON 行，丢弃 */ }
+      }
+      // 早断检测：流读完（done）却没收到 [DONE]、也没有 error 事件——
+      // 连接被中途切断（后端重启/代理掐断）。半截回复不能算聊成功，
+      // 且必须让用户知道话没说完，否则违背「只有流正常读完才算成功」
+      // 的 invariant（立绘还会对半句话演 6 秒开心）
+      if (!streamDone && !streamError) {
+        streamError = true
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantId
-              ? { ...m, content: m.content || '……小汐好像遇到了什么问题。' }
+              ? { ...m, content: (m.content || '……') + '\n\n（连接中断了，小汐的话没说完……）' }
+              : m
+          )
+        )
+      }
+      // 流正常读完（收到 [DONE]）且无 error 事件才算成功
+      succeeded = !streamError
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        // 已有部分文字时「追加」中断提示，而不是仅在内容为空时填兜底文案——
+        // 否则用户看到一条被截断的回复却毫不知情
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantId
+              ? { ...m, content: m.content ? m.content + '\n\n（连接出了问题，小汐的话没说完……）' : '……小汐好像遇到了什么问题。' }
               : m
           )
         )
       }
     } finally {
-      setMessages(prev =>
-        prev.map(m => m.id === assistantId ? { ...m, streaming: false } : m)
-      )
-      setIsStreaming(false)
-      // 聊成功 → 小汐开心一阵再归于平静；失败/中断直接回 idle
-      clearTimeout(happyTimerRef.current)
-      setCharacterState(succeeded ? 'happy' : 'idle')
-      if (succeeded) {
-        happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
+      // 锁按身份释放：只清自己的 controller。切换会话时 changeSession
+      // 已同步置空并可能装上新会话的 controller，无条件置空会误废它
+      if (abortRef.current === controller) abortRef.current = null
+      // 发送期间切换了会话 → 旧流的立绘/streaming 收尾属于上一纪元，
+      // 跳过（消息追加本就按 id map，对新列表是 no-op）
+      if (epochRef.current === myEpoch) {
+        setMessages(prev =>
+          prev.map(m => m.id === assistantId ? { ...m, streaming: false } : m)
+        )
+        setIsStreaming(false)
+        // 聊成功 → 小汐开心一阵再归于平静；失败 → 难过一阵再归于平静
+        clearTimeout(happyTimerRef.current)
+        if (succeeded) {
+          setCharacterState('happy')
+          happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
+        } else {
+          setCharacterState('sad')
+          happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
+        }
       }
-      abortRef.current = null
     }
   }, [])
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort()
   }, [])
+
+  // ── 会话切换（对话历史功能）──────────────────────────────
+
+  // 切换底层会话：掐断进行中的流、换 id、清空界面。
+  // 旧流被 abort 后其 finally 因纪元不匹配不再动界面状态
+  const changeSession = useCallback((id) => {
+    epochRef.current += 1
+    abortRef.current?.abort()
+    // 同步释放锁，不等旧流的 finally——旧流的 finally 按身份释放
+    //（abortRef.current === controller）不会误清新会话的 controller。
+    // 若不置空，旧流卡在 GPS await（最长 10s）期间新会话的发送会被
+    // 「防双重发送」守卫静默吞掉，用户的话从输入框消失且无回应
+    abortRef.current = null
+    sessionIdRef.current = id
+    _setSessionId(id)
+    try { localStorage.setItem(SESSION_KEY, id) } catch {}
+    clearTimeout(happyTimerRef.current)
+    setMessages([])
+    setIsStreaming(false)
+    setCharacterState('idle')
+    setUserMsgCount(0)
+  }, [])
+
+  // 开一段新聊天（满足后端 ^[a-z0-9-]{1,64}$；序号尾缀防同毫秒撞 id）
+  const newSession = useCallback(() => {
+    changeSession(`s-${Date.now().toString(36)}-${(sessionSeq++).toString(36)}`)
+  }, [changeSession])
+
+  // 回到一段旧聊天：载入档案消息，可直接续聊（session_id 就是
+  // LangGraph thread_id，checkpoint 还在时小汐本人也接得上）
+  const switchSession = useCallback(async (id) => {
+    if (id === sessionIdRef.current) return
+    changeSession(id)
+    const myEpoch = epochRef.current
+    try {
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(id)}/messages`)
+      if (!res.ok) return
+      const msgs = ((await res.json()).messages || [])
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map(m => ({ id: nextId(), role: m.role, content: m.content }))
+      if (msgs.length === 0) return
+      // fetch 返回前用户又切了会话 → 丢弃过期结果，不往新会话上盖
+      if (epochRef.current !== myEpoch) return
+      // 仅在当前为空时注入，避免覆盖期间到达的主动消息（同 loadHistory 守卫）
+      setMessages(prev => (prev.length === 0 ? msgs : prev))
+      // 深夜唤醒序列依赖 userMsgCount：按载入的用户消息数回填，
+      // 避免回到旧会话时立绘装睡
+      setUserMsgCount(msgs.filter(m => m.role === 'user').length)
+    } catch (e) {
+      console.warn('[useChat] switchSession failed:', e)
+    }
+  }, [changeSession])
 
   // 注入主动消息（后端心跳生成的 proactive message，来自 /api/push/unread）
   const receiveProactive = useCallback((items) => {
@@ -248,5 +409,8 @@ export function useChat() {
     }
   }, [])
 
-  return { messages, isStreaming, characterState, sendMessage, stopStreaming, receiveProactive, loadHistory }
+  return {
+    messages, isStreaming, characterState, sendMessage, stopStreaming,
+    receiveProactive, userMsgCount, sessionId, newSession, switchSession,
+  }
 }

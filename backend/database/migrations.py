@@ -25,7 +25,14 @@ log = get_logger(__name__)
 # v6: 事件系统 — 新增 events 表（小汐的「惦记」：台风/考试/生日等
 #     未来事件的登记、到期关心、过期自动归档），dedupe_key 活跃行
 #     唯一部分索引防止检测器重复生成
-SCHEMA_VERSION = 6
+# v7: 相识纪念日 — life_state 新增 first_met_on（小汐与冷冷第一次
+#     见面的日期），灵魂提示词注入「重要的日子」、事件检测器派生
+#     周年事件。种子来自环境变量 XIAOXI_FIRST_MEET（YYYY-MM-DD）
+# v8: 对话档案 — 新增 chat_sessions + chat_messages 表。与 checkpoint
+#     （prune_checkpoints 每 2h 裁剪、30 天清线程）和 memories（LLM
+#     上下文专用）完全解耦：档案仅供历史列表与回看，永远不会被
+#     读进 LLM 上下文（只有 chat.py 写入、sessions.py 读取）
+SCHEMA_VERSION = 8
 
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
@@ -60,7 +67,9 @@ async def _migrate_v2(conn: aiosqlite.Connection) -> None:
         return
 
     # 3. 重建表（保留数据）
-    await conn.execute("PRAGMA foreign_keys=OFF")
+    # 注：不写 PRAGMA foreign_keys=OFF/ON —— SQLite 规定该 pragma 在
+    # 事务内是 no-op（aiosqlite 默认隐式开事务），而本项目 schema
+    # 未定义任何 FK 约束，重建表无需关闭外键。
 
     await conn.execute("""
         CREATE TABLE memories_new (
@@ -113,7 +122,6 @@ async def _migrate_v2(conn: aiosqlite.Connection) -> None:
     except Exception:
         pass
 
-    await conn.execute("PRAGMA foreign_keys=ON")
     await conn.commit()
 
     cursor = await conn.execute("SELECT COUNT(*) FROM memories")
@@ -211,6 +219,19 @@ async def _migrate_v5(conn: aiosqlite.Connection) -> None:
     3. 此后 manager.add 用 INSERT ... ON CONFLICT(category, content)
        WHERE status = 'active' DO UPDATE 原子去重，彻底消除 TOCTOU。
     """
+    # 0. SQLite 版本守卫：ROW_NUMBER() 窗口函数需要 >= 3.25.0
+    cursor = await conn.execute("SELECT sqlite_version()")
+    row = await cursor.fetchone()
+    if row:
+        version = tuple(int(x) for x in row[0].split("."))
+        if version < (3, 25, 0):
+            log.warning(
+                "迁移 v5 需要 SQLite >= 3.25.0（当前 %s），跳过。"
+                "记忆去重将继续使用应用层「先查后写」，无数据丢失。",
+                row[0],
+            )
+            return
+
     # 1. 清理存量重复活跃行（保留 last_used_at/created_at 最新的一条）
     cursor = await conn.execute("""
         DELETE FROM memories
@@ -289,17 +310,144 @@ async def _migrate_v6(conn: aiosqlite.Connection) -> None:
 _migrations[6] = _migrate_v6
 
 
+# ── v7 迁移：相识纪念日 ──────────────────────────────────────
+
+# life_state 完整 DDL（v7：新增 first_met_on）。init_db / 迁移 / 测试
+# 夹具三处共享此常量，保证 schema 永不漂移（同 EVENTS_SCHEMA_SQL 模式）。
+LIFE_STATE_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS life_state (
+        id              INTEGER PRIMARY KEY DEFAULT 1,
+        mood            TEXT,
+        daily_event     TEXT,
+        updated_at      TEXT,
+        first_met_on    TEXT
+    );
+"""
+
+
+def _valid_iso_date(s: str) -> bool:
+    """校验 YYYY-MM-DD 且是真实存在的日期（挡住 2026-02-30）。"""
+    import datetime as _dt
+    import re
+
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return False
+    try:
+        _dt.date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
+
+
+async def _seed_first_met(conn: aiosqlite.Connection) -> None:
+    """把环境变量 XIAOXI_FIRST_MEET 种进 life_state.first_met_on。
+
+    幂等且单向：只在列为空时写入。相识日只应被设定一次——日后改
+    env 不会覆盖既有值（想改需直接 UPDATE 数据库），避免小汐的
+    「我们认识多少天」因为运维操作悄悄漂移。
+    """
+    import os
+
+    env_val = (os.environ.get("XIAOXI_FIRST_MEET") or "").strip()
+    if not env_val:
+        return
+    if not _valid_iso_date(env_val):
+        log.warning("XIAOXI_FIRST_MEET 应为合法日期 YYYY-MM-DD，已忽略：%s", env_val)
+        return
+    await conn.execute(
+        "UPDATE life_state SET first_met_on = ? "
+        "WHERE id = 1 AND (first_met_on IS NULL OR first_met_on = '')",
+        (env_val,),
+    )
+
+
+async def _migrate_v7(conn: aiosqlite.Connection) -> None:
+    """v7: life_state 新增 first_met_on（相识纪念日）。"""
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='life_state'"
+    )
+    if not await cursor.fetchone():
+        # 表不存在（极老的部分 schema 旧库 / 直接调 ensure_schema 的
+        # 升级测试夹具）→ 直接用完整 DDL 建出含新列的表
+        await conn.executescript(LIFE_STATE_SCHEMA_SQL)
+    else:
+        cursor = await conn.execute("PRAGMA table_info(life_state)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "first_met_on" not in columns:
+            await conn.execute("ALTER TABLE life_state ADD COLUMN first_met_on TEXT")
+
+    await _seed_first_met(conn)
+    await conn.commit()
+    log.info("迁移 v7 完成：life_state.first_met_on 已就绪")
+
+
+_migrations[7] = _migrate_v7
+
+
+# ── v8 迁移：对话档案 ────────────────────────────────────────
+
+# chat_sessions / chat_messages 完整 DDL。init_db / 迁移 / 测试夹具
+# 三处共享此常量（同 EVENTS_SCHEMA_SQL 模式），保证 schema 永不漂移。
+# 故意不定义 FK 约束：全项目 schema 无 FK、PRAGMA foreign_keys 未开启，
+# ON DELETE CASCADE 不会生效——级联删除由 chat_archive.delete_session
+# 显式执行（先删消息、后删会话）。
+CHAT_ARCHIVE_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
+        ON chat_sessions(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id  TEXT NOT NULL,
+        role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+        content     TEXT NOT NULL,
+        created_at  TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+        ON chat_messages(session_id, id);
+"""
+
+
+async def _migrate_v8(conn: aiosqlite.Connection) -> None:
+    """v8: 对话档案 — 会话与消息的持久化存档。
+
+    纯增量建表，幂等。存档与 checkpoint（定期裁剪）和 memories
+    （LLM 上下文专用）完全解耦：重要信息由小汐的记忆系统自己
+    提取，历史只是档案，永远不会回喂 LLM 上下文。
+    """
+    await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
+    await conn.commit()
+    log.info("迁移 v8 完成：chat_sessions + chat_messages 表已建立")
+
+
+_migrations[8] = _migrate_v8
+
+
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
 
 async def _get_current_version(conn: aiosqlite.Connection) -> int:
-    """读取当前 schema 版本。如果 schema_version 表不存在，返回 0。"""
-    try:
-        cursor = await conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-    except Exception:
-        # 表不存在
+    """读取当前 schema 版本。schema_version 表不存在时返回 0。
+
+    只把「表不存在」当作全新安装处理：旧写法吞掉一切异常回落为 0，
+    磁盘错误 / 表损坏也会被当成 v0 → 触发全量迁移重放。重放目前
+    恰好幂等，但这份安全性依赖每个迁移函数的自觉，框架层必须有兜底：
+    其他异常如实上抛、拒绝启动，而不是赌迁移幂等。
+    """
+    cursor = await conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'"
+    )
+    if await cursor.fetchone() is None:
         return 0
+    cursor = await conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+    row = await cursor.fetchone()
+    return row[0] if row else 0
 
 
 async def _create_version_table(conn: aiosqlite.Connection) -> None:

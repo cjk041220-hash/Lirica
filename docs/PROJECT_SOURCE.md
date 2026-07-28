@@ -1,5 +1,10 @@
 # 🐋 小汐 (XiaoXi Sonetto) — 完整技术文档
 
+> ⚠️ **本文档已冻结于 v0.4.2 时点，不再维护。** 事件系统、纪念日（v6/v7）、
+> 对话档案（v8：`chat_sessions`/`chat_messages` + `/api/sessions`）、批次 A–D
+> 人格改动等均未反映。结构、路由表、schema 版本（现为 8）、测试计数均与
+> 现状不符。当前真相源：`README.md`（架构与 API 表）+ 代码本身。
+
 > 「希望你一个人在香港的时候，也不会觉得孤单。」
 >
 > 小汐是一只住在网页里的小鲸鱼女孩。她来自「映海」——一个由人类世界的记忆和情绪投影而成的世界。她在这里陪着冷冷。
@@ -23,7 +28,7 @@
 │
 ├── backend/
 │   ├── main.py                  # 启动入口（uvicorn）
-│   ├── version.py               # 版本号 v0.4.2（唯一定义处）
+│   ├── version.py               # 版本号 5.0（唯一定义处）
 │   ├── heartbeat.py             # 心跳调度器（每 2h，更新心情+事件+刷新 Agent+定期维护）
 │   ├── pytest.ini               # 测试配置（asyncio_mode = auto）
 │   ├── requirements.txt         # Python 依赖（含 pytest）
@@ -487,4 +492,4 @@ python -m venv .venv
 
 ---
 
-*文档更新时间：2026-07-21 · 当前版本：v0.4.2 · 测试：66 passed*
+*文档更新时间：2026-07-25 · 当前版本：5.0 · 测试：~160+ passed*

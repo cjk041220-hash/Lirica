@@ -129,8 +129,8 @@ async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
 @tool
 async def get_weather(
     city: str = "香港",
-    latitude: float = 0,
-    longitude: float = 0,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> str:
     """查询指定城市或坐标的实时天气和明天预报。当冷冷问天气、提到出门、或说冷/热时主动调用。
 
@@ -141,7 +141,8 @@ async def get_weather(
     """
     try:
         # 坐标优先级：参数直传 > 会话缓存 > 城市名查表
-        if latitude and longitude:
+        # 使用 is not None 判空：赤道(0.0)和本初子午线(0.0)是合法坐标
+        if latitude is not None and longitude is not None:
             lat, lon = latitude, longitude
             display_city = city
         else:
@@ -172,7 +173,9 @@ async def get_weather(
             result += "\n\n☔ 可能要下雨哦，冷冷记得带伞！"
         elif code in _STORM_CODES:
             result += "\n\n⛈️ 有雷暴！冷冷要注意安全呀！"
-        elif current.get("temperature_2m"):
+        elif current.get("temperature_2m") is not None:
+            # is not None：恰好 0.0°C 时旧写法的 falsy 判断会跳过防寒提示
+            # （:145 判坐标用 is not None、注释明说 0.0 合法，两处须一致）
             t = float(current["temperature_2m"])
             if t > 30:
                 result += "\n\n☀️ 好热呀，冷冷记得多喝水！"
@@ -185,9 +188,12 @@ async def get_weather(
             tn = daily.get("temperature_2m_min", ["?"])
             wc = daily.get("weather_code", [0, 0])
             rp = daily.get("precipitation_probability_max", [0, 0])
-            if len(tm) > 1:
+            # 各数组分别守卫长度：Open-Meteo 偶尔返回不等长字段，
+            # 只查 tm 会让 wc[1]/tn[1]/rp[1] 抛 IndexError，把本可正常
+            # 展示的天气整体降级成「被浪花卷了一下」
+            if len(tm) > 1 and len(tn) > 1 and len(wc) > 1:
                 result += f"\n\n📅 明天：{_WMO.get(wc[1], '?')}，{tn[1]}°C ~ {tm[1]}°C"
-                if rp[1] and int(rp[1]) > 50:
+                if len(rp) > 1 and rp[1] and int(rp[1]) > 50:
                     result += f"（降水概率 {rp[1]}%）"
 
         return result

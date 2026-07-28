@@ -2,6 +2,7 @@
 
 用法：backend/.venv/Scripts/python.exe scripts/gen_assets.py
 """
+import platform
 import sys
 from pathlib import Path
 
@@ -9,8 +10,18 @@ from PIL import Image, ImageDraw, ImageFont
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 PUBLIC = WEB / "public"
-FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc"
-FONT_REG = "C:/Windows/Fonts/msyh.ttc"
+
+# 按平台选择中文字体
+_sys = platform.system()
+if _sys == "Windows":
+    FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc"
+    FONT_REG = "C:/Windows/Fonts/msyh.ttc"
+elif _sys == "Darwin":
+    FONT_BOLD = "/System/Library/Fonts/PingFang.ttc"
+    FONT_REG = "/System/Library/Fonts/PingFang.ttc"
+else:  # Linux
+    FONT_BOLD = "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"
+    FONT_REG = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
 
 AQUA = (136, 181, 181)       # healing-aqua #88B5B5
 AQUA_DEEP = (122, 165, 165)

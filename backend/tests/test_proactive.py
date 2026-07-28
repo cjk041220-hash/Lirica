@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 
 # ── 触发条件测试 ──────────────────────────────────────────────
@@ -49,25 +49,40 @@ async def test_should_not_send_within_interval(tmp_db):
 
 
 async def test_should_send_when_conditions_met(tmp_db):
-    """所有条件满足且随机值 < 概率阈值时触发。"""
+    """所有条件满足且随机值 < 概率阈值时触发。
+
+    mock datetime 为固定的白天时刻（14:00）：旧实现用真实 now()，
+    注释自认「只要此刻不是深夜必定通过」——凌晨 1 点跑测试必然翻红
+    （2026-07-27 全量测试实测命中）。
+    """
+    import database.core as db_core
     import heartbeat
 
-    # 插入一条 5 小时前的主动消息
-    old_time = (datetime.datetime.now(_HKT) - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
-    await tmp_db.execute(
-        "INSERT INTO proactive_messages (id, content, created_at, status) VALUES (?, ?, ?, 'delivered')",
-        ("test_msg_old", "hello", old_time),
-    )
-    await tmp_db.commit()
+    # 注入测试数据库（同 test_should_not_send_within_interval 的模式）
+    original_db = db_core._db
+    db_core._db = tmp_db
 
-    fake_now = datetime.datetime(2026, 7, 21, 14, 0, tzinfo=_HKT)
-    with patch("heartbeat.datetime") as mock_dt:
-        mock_dt.datetime.now.return_value = fake_now
-        mock_dt.datetime.strptime = datetime.datetime.strptime
-        with patch("heartbeat.random") as mock_random:
-            mock_random.random.return_value = 0.1  # < 0.5
-            result = await heartbeat._should_send_proactive()
-            assert result is True
+    try:
+        fake_now = datetime.datetime(2026, 7, 21, 14, 0, tzinfo=_HKT)
+        # 插入一条「假时间」5 小时前的主动消息（> 4h 最小间隔）
+        old_time = (fake_now - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
+        await tmp_db.execute(
+            "INSERT INTO proactive_messages (id, content, created_at, status) VALUES (?, ?, ?, 'delivered')",
+            ("test_msg_old", "hello", old_time),
+        )
+        await tmp_db.commit()
+
+        with patch("heartbeat.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = fake_now
+            # strptime 交给真实实现（解析刚插入的消息时间）
+            mock_dt.datetime.strptime.side_effect = datetime.datetime.strptime
+            # 只 mock random：保证 50% 概率必定命中
+            with patch("heartbeat.random") as mock_random:
+                mock_random.random.return_value = 0.1  # < 0.5
+                result = await heartbeat._should_send_proactive()
+                assert result is True
+    finally:
+        db_core._db = original_db
 
 
 # ── 消息生成测试 ──────────────────────────────────────────────

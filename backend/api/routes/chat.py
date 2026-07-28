@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, field_validator
 
-from memory import location_store
+from memory import chat_archive, location_store
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -97,14 +97,27 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
-class DeleteMemoryRequest(BaseModel):
-    memory_id: str
-
-
 # ── 辅助 ────────────────────────────────────────────────────
 
 def _ensure_sid(req: ChatRequest) -> str:
     return req.session_id or str(uuid.uuid4())
+
+
+def _location_suffix(lat: float, lon: float) -> str:
+    """GPS 上下文注入文本（REST 与 SSE 两条路径共用）。
+
+    措辞同时服务两类工具：
+    - 天气工具要 latitude/longitude 分参，故纬度/经度各自带标签可辨；
+    - 地图工具的 location 参数要求「经度,纬度」整串（map_tools.py 契约），
+      故直接拼好可复制的串，消除 LLM 对「谁在前」的推理负担——
+      此前注入「(lat, lon)」与工具契约相反，LLM 照抄会命中高德
+      INVALID_PARAMS 后软失败成「没找到附近有什么」。
+    前缀 `\n\n[系统信息：` 与 _strip_location_suffix 的切分耦合，勿改。
+    """
+    return (
+        f"\n\n[系统信息：冷冷当前 GPS 坐标：纬度 {lat}，经度 {lon}"
+        f"（地图工具的 location 参数请用「经度,纬度」格式：{lon},{lat}）。]"
+    )
 
 
 async def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:
@@ -120,7 +133,7 @@ async def _build_input_with_location(user_message: str, req: ChatRequest, sid: s
     cached = await location_store.get(sid)
     if cached:
         lat, lon = cached
-        location_context = f"\n\n[系统信息：冷冷当前 GPS 坐标为 ({lat}, {lon})，使用地图工具时可直接用这个坐标作为 location 参数。]"
+        location_context = _location_suffix(lat, lon)
 
     return {"messages": [HumanMessage(content=user_message + location_context)]}
 
@@ -139,29 +152,41 @@ async def chat(req: ChatRequest, request: Request):
     """非流式对话。返回完整 AI 回复。"""
     sid = _ensure_sid(req)
 
-    try:
-        agent = request.app.state.agent
-        if agent is None:
-            raise HTTPException(503, "小汐还在睡觉……过一会儿再来找她吧")
+    # agent 就绪检查必须在 try 之外：HTTPException 继承自 Exception，
+    # 放在 try 里会被下方兜底 except 吞成 500，503 优雅降级永远不生效
+    # （与 chat_stream 的写法对齐）
+    agent = request.app.state.agent
+    if agent is None:
+        raise HTTPException(503, "小汐还在睡觉……过一会儿再来找她吧")
 
+    try:
         # 构建带 GPS 上下文的输入（记忆由 pre_model_hook 注入，不在此处）
         input_data = await _build_input_with_location(req.message, req, sid)
 
-        # 同 session 串行化，防止 checkpointer 交错写入
+        # 同 session 串行化，防止 checkpointer 交错写入。
+        # 档案写入也在锁内：用户消息在头、助手回复在尾，连点发送时
+        # 档案顺序才与真实对话一致（u1,a1,u2,a2 而非 u1,u2,a1,a2）
         async with _session_lock(sid):
+            # 对话档案：用户消息落库（req.message 不含 GPS 后缀——后缀
+            # 只拼进 input_data，档案与前端看到的一致）。失败只记日志
+            await chat_archive.record_user_message(sid, req.message)
+
             result = await agent.ainvoke(
                 input_data,
                 _build_config(sid),
             )
 
-        messages = result.get("messages", [])
-        reply = ""
-        for msg in reversed(messages):
-            if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
-                content = msg.content
-                if isinstance(content, str) and content.strip():
-                    reply = content
-                    break
+            messages = result.get("messages", [])
+            reply = ""
+            for msg in reversed(messages):
+                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
+                    content = msg.content
+                    if isinstance(content, str) and content.strip():
+                        reply = content
+                        break
+
+            # 对话档案：助手回复落库（空回复会被 record 侧跳过）
+            await chat_archive.record_assistant_message(sid, reply)
 
         return ChatResponse(reply=reply.strip(), session_id=sid)
 
@@ -178,7 +203,10 @@ async def chat_stream(req: ChatRequest, request: Request):
     agent = request.app.state.agent
     if agent is None:
         async def error_gen():
-            yield f"data: {json.dumps({'content': '小汐还在睡觉……过一会儿再来找她吧'}, ensure_ascii=False)}\n\n"
+            # type=error 事件让前端区分「故障」与「正常回复」：
+            # 失败时立绘不演开心、气泡展示错误文案（旧前端不认识
+            # 该 type 会直接忽略，随后 [DONE] 正常收尾，协议向后兼容）
+            yield f"data: {json.dumps({'type': 'error', 'content': '小汐还在睡觉……过一会儿再来找她吧'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
@@ -191,44 +219,62 @@ async def chat_stream(req: ChatRequest, request: Request):
     cached = await location_store.get(sid)
     if cached:
         lat, lon = cached
-        user_content += f"\n\n[系统信息：冷冷当前 GPS 坐标为 ({lat}, {lon})，使用地图工具时可直接用这个坐标作为 location 参数。]"
+        user_content += _location_suffix(lat, lon)
+
+    # 助手回复累积器：generate 闭包共享，在会话锁内的 finally 统一落库。
+    # 正常收尾 / 流内异常时归档用户实际看到的那份文本；客户端硬断开
+    #（任务被取消）是尽力归档——flush 可能被第二次取消打断
+    chunks: list[str] = []
 
     async def generate():
-        # 同 session 串行化：第二条流排队等待而非并发写 checkpointer
-        lock = _session_lock(sid)
-        await lock.acquire()
+        # 同 session 串行化：async with 保证锁在异常 / 取消时安全释放，
+        # 避免旧版手动 acquire→try→finally 中 acquire 与 try 之间的
+        # CancelledError 导致锁永远不释放的死锁窗口。
+        # 档案写入也在锁内（用户消息在头、助手消息在内层 finally）：
+        # 连点发送时档案顺序才与真实对话一致，否则 u2 会抢在 a1 之前插入
         try:
-            async for event in agent.astream_events(
-                {"messages": [HumanMessage(content=user_content)]},
-                _build_config(sid),
-                version="v2",
-            ):
-                # 检测客户端是否已断开连接，避免白白消耗 API Token
-                if await request.is_disconnected():
-                    log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
-                    break
+            async with _session_lock(sid):
+                # 对话档案：用户消息落库（req.message 不含 GPS 后缀）。
+                # 客户端在流开始迭代前就断开则不归档——对话没有发生
+                await chat_archive.record_user_message(sid, req.message)
+                try:
+                    async for event in agent.astream_events(
+                        {"messages": [HumanMessage(content=user_content)]},
+                        _build_config(sid),
+                        version="v2",
+                    ):
+                        # 检测客户端是否已断开连接，避免白白消耗 API Token
+                        if await request.is_disconnected():
+                            log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
+                            break
 
-                kind = event.get("event", "")
+                        kind = event.get("event", "")
 
-                if kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        text = chunk.content
-                        if isinstance(text, str) and text:
-                            yield f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
+                        if kind == "on_chat_model_stream":
+                            chunk = event.get("data", {}).get("chunk")
+                            if chunk and hasattr(chunk, "content") and chunk.content:
+                                text = chunk.content
+                                if isinstance(text, str) and text:
+                                    chunks.append(text)  # 档案累积，与下发同源
+                                    yield f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
 
-                elif kind == "on_tool_start":
-                    name = event.get("name", "unknown")
-                    # 只下发工具名，不回传完整入参（含坐标/搜索词等，
-                    # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
-                    yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
+                        elif kind == "on_tool_start":
+                            name = event.get("name", "unknown")
+                            # 只下发工具名，不回传完整入参（含坐标/搜索词等，
+                            # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
+                            yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
 
-                elif kind == "on_tool_end":
-                    name = event.get("name", "unknown")
-                    output = event.get("data", {}).get("output", "")
-                    yield f"data: {json.dumps({'type': 'tool_end', 'name': name, 'output': str(output)[:500]}, ensure_ascii=False)}\n\n"
+                        elif kind == "on_tool_end":
+                            name = event.get("name", "unknown")
+                            output = event.get("data", {}).get("output", "")
+                            yield f"data: {json.dumps({'type': 'tool_end', 'name': name, 'output': str(output)[:500]}, ensure_ascii=False)}\n\n"
 
-            yield "data: [DONE]\n\n"
+                    yield "data: [DONE]\n\n"
+                finally:
+                    # 对话档案：已生成的助手文本在锁内落库（顺序保证见上）。
+                    # record_* 自身吞异常；唯一未覆盖的是 flush 期间任务
+                    # 被再次取消（客户端硬断开的尽力归档缺口，罕见，接受）
+                    await chat_archive.record_assistant_message(sid, "".join(chunks))
 
         except asyncio.CancelledError:
             # 客户端断开连接时 ASGI 服务器会取消此任务
@@ -236,11 +282,8 @@ async def chat_stream(req: ChatRequest, request: Request):
             raise
         except Exception:
             log.exception("流式聊天处理失败")
-            yield f"data: {json.dumps({'content': '呜，小汐被浪花打了一下……等浪退了再试一次好不好？'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': '呜，小汐被浪花打了一下……等浪退了再试一次好不好？'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
-        finally:
-            lock.release()
-            log.debug("流式生成器退出 (sid=%s)", sid)
 
     return StreamingResponse(
         generate(),

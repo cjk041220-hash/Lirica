@@ -32,17 +32,28 @@ export function usePresence() {
       if (visible) wake()
     }
 
+    // 高频事件（pointermove 可达 60+ 次/秒）需要节流，
+    // 否则每帧都重置 4 分钟定时器，浪费无谓的 clearTimeout/setTimeout。
+    let moveTimer = null
+    const throttledWake = () => {
+      if (moveTimer) return
+      moveTimer = setTimeout(() => { moveTimer = null; wake() }, 500)
+    }
+
     // 活跃事件只负责重置计时器，handler 本身极轻（setState 有 bail-out）
-    const events = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']
+    const events = ['pointerdown', 'keydown', 'wheel', 'touchstart']
     events.forEach(e => window.addEventListener(e, wake, { passive: true }))
+    window.addEventListener('pointermove', throttledWake, { passive: true })
     document.addEventListener('visibilitychange', onVisibility)
 
     timerRef.current = setTimeout(() => setIsIdle(true), IDLE_MS)
 
     return () => {
       events.forEach(e => window.removeEventListener(e, wake))
+      window.removeEventListener('pointermove', throttledWake)
       document.removeEventListener('visibilitychange', onVisibility)
       clearTimeout(timerRef.current)
+      clearTimeout(moveTimer)
     }
   }, [])
 

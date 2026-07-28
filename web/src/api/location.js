@@ -30,20 +30,42 @@ export function getGpsCoords() {
       if (!isGpsEnabled()) return resolve(null)
       if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null)
 
-      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
+      // 缓存解析单独兜底：此前坏 JSON 会被外层 catch 直接 resolve(null)，
+      // 缓存一旦损坏就永久跳过真实定位；现在删掉坏缓存继续往下走
+      let cached = null
+      try {
+        cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
+      } catch {
+        try { localStorage.removeItem(CACHE_KEY) } catch {}
+      }
       if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
         return resolve({ latitude: cached.lat, longitude: cached.lon })
       }
 
+      let settled = false
+      // 兜底超时：若浏览器 geolocation 实现有 bug 导致两个回调都不触发，
+      // 10s 后 resolve(null) 防止 sendMessage 永远卡在 GPS 获取阶段
+      const safety = setTimeout(() => {
+        if (!settled) { settled = true; resolve(null) }
+      }, 10_000)
+
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          if (settled) return
+          settled = true
+          clearTimeout(safety)
           const { latitude, longitude } = pos.coords
           try {
             localStorage.setItem(CACHE_KEY, JSON.stringify({ lat: latitude, lon: longitude, ts: Date.now() }))
           } catch {}
           resolve({ latitude, longitude })
         },
-        () => resolve(null),
+        () => {
+          if (settled) return
+          settled = true
+          clearTimeout(safety)
+          resolve(null)
+        },
         { timeout: 6000, maximumAge: MAX_AGE_MS }
       )
     } catch {

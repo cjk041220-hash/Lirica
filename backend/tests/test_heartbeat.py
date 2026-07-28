@@ -132,7 +132,7 @@ async def test_event_watchdog_runs_detectors_and_refreshes():
     from datetime import timezone, timedelta
     import heartbeat as hb
 
-    _HKT = timezone(timedelta(hours=8))
+    from utils.timezone import HKT as _HKT
     fake_now = _dt.datetime(2026, 7, 25, 12, 0, tzinfo=_HKT)  # 12 % 6 == 0
 
     with patch("utils.events.archive_expired", new_callable=AsyncMock, return_value=1) as archive, \
@@ -156,7 +156,7 @@ async def test_event_watchdog_skips_weather_off_schedule():
     from datetime import timezone, timedelta
     import heartbeat as hb
 
-    _HKT = timezone(timedelta(hours=8))
+    from utils.timezone import HKT as _HKT
     fake_now = _dt.datetime(2026, 7, 25, 13, 0, tzinfo=_HKT)  # 13 % 6 != 0
 
     with patch("utils.events.archive_expired", new_callable=AsyncMock, return_value=0), \
@@ -211,7 +211,7 @@ async def test_daily_diary_does_not_overwrite_manual_entry(tmp_db):
     import datetime
     from datetime import timezone, timedelta
 
-    _HKT = timezone(timedelta(hours=8))
+    from utils.timezone import HKT as _HKT
     today = datetime.datetime.now(_HKT).date().isoformat()
 
     # 白天手记的一篇
@@ -256,6 +256,118 @@ async def test_daily_diary_llm_failure_uses_fallback(tmp_db):
     assert len(row[0]) >= 5  # 兜底文案非空
 
 
+async def test_daily_diary_preserves_manual_title(tmp_db):
+    """晚间补记不得覆盖白天手记的自定义标题（此前被「MM月DD日」冲掉）。"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import datetime
+
+    from utils.timezone import HKT as _HKT
+    today = datetime.datetime.now(_HKT).date().isoformat()
+
+    await tmp_db.execute(
+        "INSERT INTO diaries (date, title, content) VALUES (?, ?, ?)",
+        (today, "冷冷起的标题", "白天的手记。"),
+    )
+    await tmp_db.commit()
+
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(return_value=MagicMock(content="晚上的补记。"))
+
+    with patch("heartbeat.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db), \
+         patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm):
+        import heartbeat as hb
+        await hb.daily_diary()
+
+    cursor = await tmp_db.execute(
+        "SELECT title, content FROM diaries WHERE date = ?", (today,)
+    )
+    title, content = await cursor.fetchone()
+    assert title == "冷冷起的标题"          # 白天标题保留
+    assert "白天的手记。" in content        # 内容追加不覆盖
+    assert "晚上的补记。" in content
+
+
+async def test_morning_greeting_malformed_daily_keeps_current_weather(tmp_db):
+    """今日预报字段畸形（[None]）时：保留已构建的当前天气，只降级预报段。
+
+    旧写法 int(None) 抛 TypeError 被外层 except 吞掉，把当前天气
+    整段清空，日志还谎报「天气 API 调用失败」。
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    malformed = {
+        "current": {
+            "weather_code": 1,
+            "temperature_2m": 28.5,
+            "apparent_temperature": 31.0,
+            "relative_humidity_2m": 80,
+            "wind_speed_10m": 12,
+        },
+        # Open-Meteo 该字段可能返回 null 元素 —— int(None) 曾炸掉整段
+        "daily": {"precipitation_probability_max": [None]},
+    }
+
+    async def fake_fetch(client, lat, lon):
+        return malformed
+
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(return_value=MagicMock(content="早安呀冷冷～今天也要开开心心的哦！"))
+    captured = {}
+
+    async def fake_ainvoke(messages, **kwargs):
+        captured["messages"] = messages
+        return MagicMock(content="早安呀冷冷～今天也要开开心心的哦！")
+
+    fake_llm.ainvoke = fake_ainvoke
+
+    with patch("heartbeat.get_db", return_value=tmp_db), \
+         patch("tools.weather._fetch_open_meteo", fake_fetch), \
+         patch("utils.web_push.send_push", AsyncMock(return_value=0)), \
+         patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm):
+        import heartbeat as hb
+        await hb.daily_morning_greeting()
+
+    human = captured["messages"][-1]
+    # 当前天气保住了（气温 28.5），预报段被优雅省略
+    assert "当前天气" in human.content
+    assert "28.5" in human.content
+
+
+async def test_background_llm_calls_use_runtime_model(tmp_db):
+    """三处后台轻量 LLM 调用的 model 维度须跟随用户运行时配置。
+
+    temperature/max_tokens 保持各任务的轻量值（主动消息 200）。
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import heartbeat as hb
+    from api.routes import config as cfg
+
+    calls = []
+
+    def capture_llm(model=None, temperature=None, max_tokens=None):
+        calls.append({"model": model, "temperature": temperature, "max_tokens": max_tokens})
+        fake = MagicMock()
+        fake.ainvoke = AsyncMock(return_value=MagicMock(content="小汐在想你~冷冷今天还好吗？"))
+        return fake
+
+    original_cfg = cfg._runtime_config.copy()
+    cfg._runtime_config["model"] = "deepseek-v4-pro"
+    try:
+        with patch("heartbeat.get_db", return_value=tmp_db), \
+             patch("utils.events.get_db", return_value=tmp_db), \
+             patch("providers.deepseek.create_deepseek_llm", capture_llm):
+            text = await hb._generate_proactive_message("开心", "在窗边看雨", 15)
+    finally:
+        cfg._runtime_config.clear()
+        cfg._runtime_config.update(original_cfg)
+
+    assert len(text) >= 5
+    assert calls, "create_deepseek_llm 应被调用"
+    assert calls[0]["model"] == "deepseek-v4-pro"   # 跟随运行时配置
+    assert calls[0]["max_tokens"] == 200            # 轻量约束保持
+
+
 async def test_scheduler_actually_runs_proactive_chain(tmp_db):
     """集成回归：真实调度器触发心跳后，主动消息确实落库。
 
@@ -278,7 +390,8 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
     async def always_send():
         return True  # 跳过 4h 间隔 / 50% 概率 / 深夜判断，保证确定性
 
-    async def fake_generate(mood, daily_event, hour):
+    async def fake_generate(mood, daily_event, hour, now_dt=None):
+        # now_dt：周末感知沿链下传的时间（v5.1 新增，此处忽略）
         return "冷冷，小汐在想你~（调度集成测试）"
 
     async def fake_send_push(title, body, url="/"):
@@ -320,12 +433,12 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
             "心跳 job 本体没有真正执行（协程未被 await？）"
         )
 
-        # 消息应被标记为 delivered（无推送订阅时的待拉取状态）
+        # 消息应被标记为 stored（无推送订阅时的存储待拉取状态）
         cursor = await tmp_db.execute(
             "SELECT status FROM proactive_messages ORDER BY created_at DESC LIMIT 1"
         )
         (status,) = await cursor.fetchone()
-        assert status == "delivered"
+        assert status == "stored"
 
         # 生命状态也应被心跳刷新（不再是最初的种子值）
         cursor = await tmp_db.execute("SELECT updated_at FROM life_state WHERE id = 1")
@@ -339,3 +452,203 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
         hb._generate_proactive_message = saved["generate"]
         hb._periodic_maintenance = saved["maintenance"]
         wp.send_push = saved["push"]
+
+
+# ── 周末感知（批次 A）──────────────────────────────────────────
+
+
+def test_weekend_label():
+    """周六/日 → 标签；工作日 → None（固定日期构造，不依赖运行当天）。"""
+    import datetime as dt
+    from heartbeat import weekend_label
+    from utils.timezone import HKT
+
+    sat = dt.datetime(2026, 8, 1, 14, 0, tzinfo=HKT)   # 周六
+    sun = dt.datetime(2026, 8, 2, 14, 0, tzinfo=HKT)   # 周日
+    mon = dt.datetime(2026, 8, 3, 14, 0, tzinfo=HKT)   # 周一
+    assert weekend_label(sat) == "周六"
+    assert weekend_label(sun) == "周日"
+    assert weekend_label(mon) is None
+
+
+async def test_proactive_prompt_mentions_weekend(tmp_db):
+    """周六的主动消息 prompt 带周末素材；工作日不带。LLM 全 mock。"""
+    import datetime as dt
+    import database.core as db_core
+    import heartbeat
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    original = db_core._db
+    db_core._db = tmp_db
+    captured = {}
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content="冷冷，小汐在想你~")
+
+    try:
+        with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+             patch("utils.events.get_active_events", return_value=[]), \
+             patch("utils.events.get_recent_proactive_texts", return_value=[]), \
+             patch("utils.cycle_tracker.get_care_context", return_value=None):
+            sat = dt.datetime(2026, 8, 1, 14, 0, tzinfo=HKT)
+            await heartbeat._generate_proactive_message("开心", "映海很清澈", 14, now_dt=sat)
+            assert "今天是周六" in captured["human"]
+
+            mon = dt.datetime(2026, 8, 3, 14, 0, tzinfo=HKT)
+            await heartbeat._generate_proactive_message("开心", "映海很清澈", 14, now_dt=mon)
+            assert "周六" not in captured["human"]
+    finally:
+        db_core._db = original
+
+
+async def test_morning_prompt_mentions_weekend(tmp_db):
+    """周六早安 prompt 带「不用上课」素材。LLM/天气/推送全 mock。"""
+    import datetime as dt
+    import database.core as db_core
+    import heartbeat
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    original = db_core._db
+    db_core._db = tmp_db
+    captured = {}
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content="冷冷早安呀～今天也要好好的！")
+
+    async def fake_fetch(client, lat, lon):
+        return {}
+
+    try:
+        with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+             patch("memory.location_store.get_any", return_value=None), \
+             patch("tools.weather._fetch_open_meteo", side_effect=fake_fetch), \
+             patch("utils.web_push.send_push", return_value=0), \
+             patch("heartbeat.datetime") as mock_dt:
+            mock_dt.datetime.now.return_value = dt.datetime(2026, 8, 1, 8, 0, tzinfo=HKT)
+            mock_dt.datetime.strptime.side_effect = dt.datetime.strptime
+            mock_dt.timedelta = dt.timedelta
+            await heartbeat.daily_morning_greeting()
+
+        assert "周六" in captured["human"]
+        assert "不用上课" in captured["human"]
+    finally:
+        db_core._db = original
+
+
+# ── 心情涟漪（批次 C）──────────────────────────────────────────
+
+
+def test_mood_weights_signals():
+    """纯函数权重：信号抬升目标 mood，所有权重 >= 0.2，池约束优先。"""
+    from heartbeat import _mood_weights
+
+    evening = ["满足", "发呆", "期待", "担心", "困倦"]
+    base = _mood_weights(evening, care=False, joy=False, talked_recently=False,
+                         is_weekend=False, current_mood=None)
+    assert base == [1.0] * 5
+
+    cared = _mood_weights(evening, care=True, joy=False, talked_recently=False,
+                          is_weekend=False, current_mood=None)
+    assert cared[evening.index("担心")] > 1.0
+    assert all(w >= 0.2 for w in cared)
+
+    # 池里没有「担心」→ care 信号不会凭空造出它，只抑制池内的活泼/兴奋类
+    morning = ["好奇", "期待", "活泼", "开心"]
+    m_cared = _mood_weights(morning, care=True, joy=False, talked_recently=False,
+                            is_weekend=False, current_mood=None)
+    assert "担心" not in morning
+    assert m_cared[morning.index("活泼")] < 1.0
+    assert m_cared[morning.index("好奇")] == 1.0  # 未列出的 mood 恒 1.0
+
+    # 惯性：当前 mood 乘 1.3
+    inertial = _mood_weights(evening, care=False, joy=False, talked_recently=False,
+                             is_weekend=False, current_mood="困倦")
+    assert inertial[evening.index("困倦")] == pytest.approx(1.3)
+
+
+async def test_choose_mood_fallback_on_event_failure(tmp_db):
+    """事件查询炸了 → 优雅退回均匀随机，返回池内词，不抛。"""
+    import datetime as dt
+    import heartbeat
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    with patch("utils.events.get_active_events", side_effect=RuntimeError("boom")):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.LATE_NIGHT],
+            now_dt=dt.datetime.now(HKT),
+        )
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.LATE_NIGHT]["moods"]
+
+
+async def test_choose_mood_memory_failure_graceful(tmp_db):
+    """memory_manager.recent 炸了 → 同样退回均匀随机。"""
+    import datetime as dt
+    import heartbeat
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from utils.timezone import HKT
+
+    broken_mgr = SimpleNamespace(recent=AsyncMock(side_effect=RuntimeError("db lost")))
+    app = SimpleNamespace(state=SimpleNamespace(memory_manager=broken_mgr))
+    with patch("utils.events.get_active_events", return_value=[]):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.DAYTIME],
+            app=app, now_dt=dt.datetime.now(HKT),
+        )
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
+
+
+async def test_choose_mood_reads_recent_memories(tmp_db):
+    """正常路径：读近 10 条记忆（被动）+ 活跃事件，返回池内词。"""
+    import datetime as dt
+    import heartbeat
+    from memory.manager import MemoryManager
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("日常", "冷冷来聊过天")
+    app = SimpleNamespace(state=SimpleNamespace(memory_manager=mgr))
+    with patch("utils.events.get_active_events", return_value=[]):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.DAYTIME],
+            app=app, now_dt=dt.datetime.now(HKT),
+        )
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
+    # 被动性护栏：recent() 不刷计数器（choose 路径同样不刷）
+    cursor = await tmp_db.execute("SELECT access_count FROM memories")
+    assert (await cursor.fetchone())[0] == 0
+
+
+# ── 看门狗段间隔离（批次 D 接线回归）───────────────────────────
+
+
+async def test_watchdog_isolation_echo_stage(tmp_db):
+    """记忆回声段抛异常 → 归档/档案检测照常执行，watchdog 不向外抛。"""
+    import database.core as db_core
+    import heartbeat
+    from unittest.mock import AsyncMock, patch
+
+    original = db_core._db
+    db_core._db = tmp_db
+    try:
+        with patch("utils.events.archive_expired", new=AsyncMock(return_value=0)) as m_arch, \
+             patch("utils.events.detect_profile_events", new=AsyncMock(return_value=0)) as m_prof, \
+             patch("utils.events.detect_weather_events", new=AsyncMock(return_value=0)), \
+             patch("utils.events.detect_anniversary_events", new=AsyncMock(return_value=0)), \
+             patch("utils.events.detect_memory_echoes", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            await heartbeat.event_watchdog()  # 不抛
+        m_arch.assert_awaited_once()
+        m_prof.assert_awaited_once()
+    finally:
+        db_core._db = original

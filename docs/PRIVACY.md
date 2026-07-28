@@ -7,6 +7,8 @@
 
 | 表 | 敏感度 | 内容 |
 |----|--------|------|
+| **`chat_messages`** | **高** | **对话档案：全量对话原文（你说的 + 小汐回的），永久保留** |
+| `chat_sessions` | 中 | 对话档案的会话索引（标题=首条消息、时间） |
 | `memories` | 中 | 小汐主动记下的关于你的事（喜好、去过的地方、重要的事） |
 | `diaries` | 中 | 小汐写的日记 |
 | `life_state` | 低 | 当前心情与日常事件 |
@@ -18,15 +20,26 @@
 > 8 小时 TTL），服务重启即消失，不进数据库、不进备份。浏览器侧另存
 > 30 分钟缓存于 localStorage（仅本机浏览器可见）。
 
-对话内容（checkpoint）在 `backend/data/checkpoints.db`。
+对话数据有两份，分工不同：
+
+- **对话档案**（`chat_sessions` / `chat_messages`，在 `userdata.db`）：
+  完整对话原文，**永久保留、不裁剪**，供左上角时钟图标回看与续聊。
+  它**永远不会进入小汐的 LLM 上下文**——重要信息由记忆系统自己提取。
+- **checkpoint**（`backend/data/checkpoints.db`）：小汐的"短期工作记忆"，
+  每 2 小时自动裁剪（每会话留最近 10 个、30 天不活跃整体清除），不是档案。
+
+注意"删除"的语义边界：面板里删除一段对话只删档案表；小汐从这段对话里
+提取过的记忆（`memories`）与尚未裁剪的 checkpoint 不受影响——她可能还
+记得那段对话里的事。彻底抹除需同时清记忆。
 
 ## 二、备份里有什么
 
 - 心跳每 2 小时自动备份到 `backend/data/backups/`，保留最近 5 份。
-- 备份是**整库快照**——默认包含上表全部内容，**含 `cycle_records`**。
+- 备份是**整库快照**——默认包含上表全部内容，**含 `cycle_records`
+  与全量对话档案**。
 - 备份目录权限自动收紧为 700/600（Linux/macOS 生效；Windows 依赖 NTFS 权限）。
 
-### 备份脱敏选项（v0.4.5 新增）
+### 备份脱敏选项（5.0 新增）
 
 如果你会把 `backups/` 同步到网盘、复制到别的机器，或可能让他人接触：
 
@@ -35,8 +48,9 @@
 BACKUP_SCRUB_SENSITIVE=true
 ```
 
-开启后每份新备份生成时会剔除 `cycle_records`（生理期数据不进备份）。
-代价：无法从备份恢复该表。已存在的旧备份不受影响，需手动删除。
+开启后每份新备份生成时会剔除 `cycle_records` 与对话档案
+（`chat_sessions` / `chat_messages`）——生理期和聊天记录都不进备份。
+代价：无法从备份恢复这些表。已存在的旧备份不受影响，需手动删除。
 
 ## 三、分享/演示/送人之前
 
@@ -44,8 +58,9 @@ BACKUP_SCRUB_SENSITIVE=true
 
 1. **不要直接发 `userdata.db` 或 `backups/*.db`**——里面有全部隐私数据。
 2. 演示用小汐的"空状态"即可：删掉 `backend/data/` 目录重启，她会从零开始陪你。
-3. 如果一定要带数据演示，先用脱敏备份，并手动清空 `memories` / `diaries` /
-   `proactive_messages` 中不想展示的内容。
+3. 如果一定要带数据演示，先用脱敏备份，并手动清空 `chat_messages` /
+   `chat_sessions` / `memories` / `diaries` / `proactive_messages` 中
+   不想展示的内容。
 4. `.env` 里的 API Key 与 VAPID 私钥**永远不要**随项目发出；
    `.gitignore` 已排除 `.env`，发压缩包前再检查一遍。
 
@@ -53,6 +68,8 @@ BACKUP_SCRUB_SENSITIVE=true
 
 - 设置面板 / `GET /api/memories/export`：导出记忆 JSON（**不含**生理期与推送凭证）。
 - `POST /api/memories/clear?confirm=true`：清空记忆前自动备份。
+- 对话档案：面板里按会话删除（`DELETE /api/sessions/{id}`）；目前没有
+  批量导出/清空入口，需要整体处理时直接操作数据库。
 - 彻底删除生理期记录：目前需直接操作数据库
   （`DELETE FROM cycle_records;`），后续版本会加入面板入口。
 
@@ -60,4 +77,4 @@ BACKUP_SCRUB_SENSITIVE=true
 
 见 README「安全部署须知」。一句话：**没有 `XIAOXI_API_TOKEN` + HTTPS，
 不要把小汐放到公网上**——否则任何人都能读到上面所有数据。
-v0.4.5 起，无 token 绑定非回环地址会**直接拒绝启动**。
+5.0 起，无 token 绑定非回环地址会**直接拒绝启动**。

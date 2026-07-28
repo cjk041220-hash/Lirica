@@ -158,9 +158,14 @@ async def test_migrate_v6_creates_events_table(tmp_path):
         "VALUES ('e3', '明年大雨', 'rainstorm', '2027-08-01', 'active', '2026-07-25 12:00', 'k1')"
     )
 
-    # 4. 版本登记到最新，且迁移幂等
+    # 4. 版本登记到最新（不钉死具体数字——随 SCHEMA_VERSION 演进），且迁移幂等
     cursor = await conn.execute("SELECT MAX(version) FROM schema_version")
-    assert (await cursor.fetchone())[0] == SCHEMA_VERSION == 6
+    assert (await cursor.fetchone())[0] == SCHEMA_VERSION
+
+    # 5. v7 顺带执行：此旧库本无 life_state 表，v7 应直接建出含
+    #    first_met_on 的完整表（而不是在 ALTER 时炸 no such table）
+    cursor = await conn.execute("PRAGMA table_info(life_state)")
+    assert "first_met_on" in {row[1] for row in await cursor.fetchall()}
 
     await ensure_schema(conn)  # 第二次执行不报错
     await conn.close()

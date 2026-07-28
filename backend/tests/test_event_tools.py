@@ -144,3 +144,32 @@ async def test_list_events_shows_upcoming(events_tool_db):
     assert "期中考试" in result
     assert "日本旅行" in result
     assert "2026-09-10 ~ 2026-09-17" in result  # 多天事件展示日期范围
+
+
+async def test_create_event_rejects_unknown_event_type(events_tool_db):
+    """event_type 白名单之外的自由文本被拒（防止垃圾值渲染进系统提示词）。"""
+    from tools.events import create_event
+
+    result = await create_event.ainvoke({
+        "title": "生日派对",
+        "event_date": "2026-09-01",
+        "event_type": "生日！！",
+    })
+    assert "exam" in result  # 提示合法枚举
+
+    cursor = await events_tool_db.execute("SELECT COUNT(*) FROM events")
+    assert (await cursor.fetchone())[0] == 0  # 未入库
+
+
+async def test_create_event_rejects_past_date(events_tool_db):
+    """过去日期被拒：事件是「未来要惦记的事」，过期事件会污染 list_events。"""
+    from tools.events import create_event
+
+    result = await create_event.ainvoke({
+        "title": "去年就去过的事",
+        "event_date": "2020-01-01",
+    })
+    assert "过去" in result
+
+    cursor = await events_tool_db.execute("SELECT COUNT(*) FROM events")
+    assert (await cursor.fetchone())[0] == 0

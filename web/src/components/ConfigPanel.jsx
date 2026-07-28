@@ -32,8 +32,17 @@ export default function ConfigPanel({ config, push, onClose }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
   }, [])
 
+  // Esc 关闭（dialog 语义的键盘出口；焦点圈定留待后续完善）
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const saveToken = () => {
-    setToken(tokenInput)
+    const trimmed = tokenInput.trim()
+    setToken(trimmed)
+    setTokenInput(trimmed)
     setTokenSaved(true)
     setNeedToken(false)
     setTimeout(() => setTokenSaved(false), 2000)
@@ -49,7 +58,7 @@ export default function ConfigPanel({ config, push, onClose }) {
 
   const models = (settings.available_models?.length ? settings.available_models : fallbackModels)
   // 模型卡片短标签：'DeepSeek V4 Flash' → 'V4 Flash'
-  const shortLabel = (m) => (m.name || m.id).replace(/^DeepSeek\s*/i, '')
+  const shortLabel = (m) => ((m && (m.name || m.id)) || '').replace(/^DeepSeek\s*/i, '')
   const isCustomIntensity = settings.thinking_intensity === 'custom'
   const temperature = Number(settings.temperature) || 0
 
@@ -58,6 +67,7 @@ export default function ConfigPanel({ config, push, onClose }) {
       <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
+        role="dialog" aria-modal="true" aria-label="设置"
         style={{ background: 'rgba(252,250,248,0.94)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
 
         <div className="flex items-center justify-between mb-7">

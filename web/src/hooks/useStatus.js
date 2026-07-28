@@ -16,8 +16,9 @@ export function useStatus() {
     try {
       const res = await apiFetch('/api/status')
       if (res.ok) setStatus(await res.json())
-    } catch {
-      // 状态拉取失败不影响聊天主流程，静默
+    } catch (e) {
+      // 状态拉取失败不影响聊天主流程
+      console.warn('[useStatus] failed to refresh:', e)
     }
   }, [])
 

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/backend" || exit 1
 
 echo ""
 echo "    ========================================"
-echo "      xiaoxi v0.4.5"
+echo "      xiaoxi 5.0"
 echo "    ========================================"
 echo ""
 

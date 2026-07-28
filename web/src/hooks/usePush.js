@@ -17,8 +17,10 @@ export function usePush() {
       const res = await apiFetch('/api/push/unread')
       if (!res.ok) return
       const data = await res.json()
-      setUnread(data.messages || data || [])
-    } catch {}
+      setUnread(Array.isArray(data.messages) ? data.messages : [])
+    } catch (e) {
+      console.warn('[usePush] fetch unread failed:', e)
+    }
   }, [])
 
   // 订阅推送
@@ -43,13 +45,14 @@ export function usePush() {
         body: JSON.stringify(subscription),
       })
       if (!res.ok) {
-        await subscription.unsubscribe().catch(() => {})
+        await subscription.unsubscribe().catch(e => console.warn('[usePush] cleanup subscribe failed:', e))
         return false
       }
 
       setSubscribed(true)
       return true
-    } catch {
+    } catch (e) {
+      console.warn('[usePush] subscribe failed:', e)
       return false
     }
   }, [supported])
@@ -60,8 +63,10 @@ export function usePush() {
       const registration = await navigator.serviceWorker.ready
       const subscription = await registration.pushManager.getSubscription()
       if (subscription) {
-        // 后端 DELETE /api/push/subscribe 接受 PushSubscription JSON body
-        await apiFetch('/api/push/subscribe', {
+        // 后端 DELETE /api/push/subscribe 接受 query 或 body 两种 endpoint。
+        // 部分反代/CDN 会剥离 DELETE 请求的 body → 取消订阅静默失败，
+        // 故优先走 query，body 一并发送作兼容兜底
+        await apiFetch(`/api/push/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(subscription),
@@ -69,20 +74,29 @@ export function usePush() {
         await subscription.unsubscribe()
       }
       setSubscribed(false)
-    } catch {}
+    } catch (e) {
+      console.warn('[usePush] unsubscribe failed:', e)
+    }
   }, [])
 
-  // 标记已读（乐观更新 UI，再同步后端）
+  // 标记已读（乐观更新 UI，再同步后端）。返回同步是否成功：
+  // 失败时调用方（App.jsx）回滚 injectedRef，让下一轮 60s 轮询
+  // 重新拉到该未读并重试 markRead——否则消息在后端永久挂未读，
+  // 挤占 LIMIT 10 的未读名额，挤掉更新的主动消息
   const markRead = useCallback(async (ids) => {
-    if (!Array.isArray(ids) || ids.length === 0) return
+    if (!Array.isArray(ids) || ids.length === 0) return true
     setUnread(prev => prev.filter(m => !ids.includes(m.id)))
     try {
-      await apiFetch('/api/push/read', {
+      const res = await apiFetch('/api/push/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_ids: ids }),
       })
-    } catch {}
+      return res.ok
+    } catch (e) {
+      console.warn('[usePush] markRead failed:', e)
+      return false
+    }
   }, [])
 
   // 挂载：拉未读 + 恢复浏览器已有订阅状态
@@ -92,7 +106,7 @@ export function usePush() {
       navigator.serviceWorker.ready
         .then(reg => reg.pushManager.getSubscription())
         .then(sub => setSubscribed(!!sub))
-        .catch(() => {})
+        .catch(e => console.warn('[usePush] getSubscription failed:', e))
     }
   }, [checkUnread, supported])
 
@@ -111,12 +125,28 @@ export function usePush() {
   // 主动消息（随机搭话/生理期关心）进入对话的唯一通道——
   // 否则用户必须刷新页面才看得到，心跳消息形同石沉大海。
   // 限流余量充足（/api/push 允许 30 次/分钟）。
+  // 用递归 setTimeout 而非 setInterval：慢网络下前一次 fetch 未完成时
+  // 不会堆积并发请求，避免多响应竞态 + 带宽挤占。
   useEffect(() => {
-    const timer = setInterval(checkUnread, 60_000)
-    const onVisible = () => { if (document.visibilityState === 'visible') checkUnread() }
+    let timerId = null
+    let unmounted = false
+
+    const scheduleNext = () => {
+      if (unmounted) return
+      timerId = setTimeout(() => {
+        checkUnread().finally(() => scheduleNext())
+      }, 60_000)
+    }
+    scheduleNext()
+
+    const onVisible = () => {
+      if (!unmounted && document.visibilityState === 'visible') checkUnread()
+    }
     document.addEventListener('visibilitychange', onVisible)
+
     return () => {
-      clearInterval(timer)
+      unmounted = true
+      clearTimeout(timerId)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [checkUnread])

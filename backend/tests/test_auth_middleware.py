@@ -199,10 +199,11 @@ def _all_mounted_api_paths() -> set[str]:
     from api.routes.chat import router as chat_router
     from api.routes.config import router as config_router
     from api.routes.push import router as push_router
+    from api.routes.sessions import router as sessions_router
     from api.routes.status import router as status_router
 
     paths = set()
-    for router in (chat_router, config_router, push_router, status_router):
+    for router in (chat_router, config_router, push_router, sessions_router, status_router):
         for route in router.routes:
             paths.add("/api" + route.path)
     return paths
@@ -241,3 +242,39 @@ async def test_diaries_requires_token_when_configured():
     )
     assert status == 200
     assert inner.calls == 1
+
+
+async def test_sessions_requires_token_when_configured():
+    """/api/sessions 存全量对话原文，敏感度不低于日记：
+    配置 token 后必须认证（同 test_diaries 规格的行为级回归）。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="secret-token")
+
+    status, _ = await _invoke(mw, inner, "/api/sessions")
+    assert status == 401
+    assert inner.calls == 0
+
+    status, _ = await _invoke(
+        mw, inner, "/api/sessions",
+        headers=[(b"authorization", b"Bearer secret-token")],
+    )
+    assert status == 200
+    assert inner.calls == 1
+
+
+async def test_rate_limit_history_separate_from_chat():
+    """history 走独立桶：聊天桶刷满后，同 IP 的 history 仍可用。
+
+    顺序回归——_check_rate 首前缀匹配即 break，history 必须排在 chat
+    之前，否则会被 10 次/分钟的聊天桶吞掉（实测复现：刷新+连聊误触 429）。
+    """
+    ip = "9.9.9.9"
+    for _ in range(10):
+        assert auth_mod._check_rate("/api/chat", ip) is True
+    assert auth_mod._check_rate("/api/chat", ip) is False  # 第 11 次被限
+    assert auth_mod._check_rate("/api/chat/history", ip) is True  # 独立桶不受影响
+
+
+def test_rate_limit_health_has_bucket():
+    """健康检查有独立限流桶（公网不可无限频刷的轻量 DoS 面）。"""
+    assert auth_mod._RATE_LIMITS.get("/api/health", 0) >= 1

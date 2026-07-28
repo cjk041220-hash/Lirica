@@ -45,11 +45,9 @@ VOLUME ["/app/backend/data"]
 
 EXPOSE 8000
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+# 健康检查统一定义在 docker-compose.yml（此处移除，避免与 compose 重复且 start-period/retries 参数不一致）
 
 # ⚠️ 必须 --workers 1：APScheduler 是模块级单例，多 Worker 会导致心跳任务重复执行。
-# v0.4.5 起后端启动时会主动校验，workers>1 直接拒绝启动。
+# 5.0 起后端启动时会主动校验，workers>1 直接拒绝启动。
 # 如果需要水平扩展，应将调度器拆到独立进程或使用分布式锁。
 CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

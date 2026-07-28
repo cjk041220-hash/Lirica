@@ -7,7 +7,7 @@ import pytest
 
 from utils import events as ev
 
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 
 @pytest.fixture
@@ -117,10 +117,17 @@ async def test_get_active_events_ordered_by_date(events_db):
     assert [e["title"] for e in events] == ["早的事", "晚的事"]
 
 
+def _date_offset(days: int) -> str:
+    """相对今天的日期字符串。归档测试不能硬编码日期：
+    「2026-07-26」写的时候是「明天」，两天之后就成「昨天」，
+    断言随真实日期推移整体失效（2026-07-27 凌晨实测翻红）。"""
+    return (datetime.datetime.now(_HKT).date() + timedelta(days=days)).isoformat()
+
+
 async def test_archive_expired_single_day(events_db):
     """单日活动：event_date 过了就归档。"""
-    await _insert_event(events_db, "e1", "昨天的考试", "2026-07-24")
-    await _insert_event(events_db, "e2", "明天的考试", "2026-07-26")
+    await _insert_event(events_db, "e1", "昨天的考试", _date_offset(-1))
+    await _insert_event(events_db, "e2", "明天的考试", _date_offset(1))
 
     count = await ev.archive_expired()
     assert count == 1
@@ -133,11 +140,12 @@ async def test_archive_expired_single_day(events_db):
 
 async def test_archive_expired_respects_end_date(events_db):
     """多天事件按 end_date 归档：还在进行中的不归档。"""
-    # 已开始但未结束（今天 7-25 在 7-24 ~ 7-27 之间）
+    # 已开始但未结束（昨天开始、后天结束）
     await events_db.execute(
         """INSERT INTO events
            (id, title, event_type, event_date, end_date, status, created_at)
-           VALUES ('e1', '旅行中', 'trip', '2026-07-24', '2026-07-27', 'active', '2026-07-20 10:00')"""
+           VALUES ('e1', '旅行中', 'trip', ?, ?, 'active', '2026-07-20 10:00')""",
+        (_date_offset(-1), _date_offset(2)),
     )
     await events_db.commit()
 
@@ -478,3 +486,163 @@ async def test_get_recent_proactive_texts(events_db):
 
     texts = await ev.get_recent_proactive_texts(hours=24, limit=5)
     assert texts == ["消息0", "消息1"]  # 30 小时前的不在列
+
+
+# ── 检测器：相识纪念日 ────────────────────────────────────────
+
+
+async def _set_first_met(events_db, value):
+    """写入/清空 first_met_on（None → NULL）。"""
+    await events_db.execute(
+        "UPDATE life_state SET first_met_on = ? WHERE id = 1", (value,)
+    )
+    await events_db.commit()
+
+
+async def test_anniversary_detector_creates_and_dedupes(events_db):
+    """周年前 3 天内创建事件；同日重跑不重复；归档后明年可续期。"""
+    fixed = datetime.date(2026, 3, 12)          # 距 2026-03-14 还有 2 天
+    await _set_first_met(events_db, "2024-03-14")
+
+    with patch.object(ev, "_today", return_value=fixed):
+        assert await ev.detect_anniversary_events() == 1
+        assert await ev.detect_anniversary_events() == 0  # 活跃行去重
+
+    cursor = await events_db.execute(
+        "SELECT title, severity, source, dedupe_key FROM events"
+    )
+    title, severity, source, dedupe = await cursor.fetchone()
+    assert "2 周年" in title
+    assert severity == "high"
+    assert source == "profile"
+    assert dedupe == "profile:anniversary:2026-03-14"
+
+    # 归档（今年已过）后重跑 → 不重建同一条；换到明年窗口内 → 续期新建
+    await events_db.execute("UPDATE events SET status = 'archived'")
+    await events_db.commit()
+    with patch.object(ev, "_today", return_value=datetime.date(2027, 3, 12)):
+        assert await ev.detect_anniversary_events() == 1
+    cursor = await events_db.execute(
+        "SELECT dedupe_key FROM events WHERE status = 'active'"
+    )
+    assert (await cursor.fetchone())[0] == "profile:anniversary:2027-03-14"
+
+
+async def test_anniversary_detector_outside_window(events_db):
+    """距周年超过 3 天 → 不创建。"""
+    await _set_first_met(events_db, "2024-03-14")
+    with patch.object(ev, "_today", return_value=datetime.date(2026, 3, 1)):
+        assert await ev.detect_anniversary_events() == 0
+
+
+async def test_anniversary_detector_no_or_bad_date(events_db):
+    """first_met_on 缺失 / 非法 / 晚于今天 → 0，不抛。"""
+    assert await ev.detect_anniversary_events() == 0  # NULL（夹具默认）
+
+    await _set_first_met(events_db, "not-a-date")
+    assert await ev.detect_anniversary_events() == 0
+
+    future = (ev._today() + timedelta(days=30)).isoformat()
+    await _set_first_met(events_db, future)
+    assert await ev.detect_anniversary_events() == 0
+
+
+async def test_anniversary_detector_leap_day(events_db):
+    """2/29 相识 → 平年落在 2/28，不抛 ValueError。"""
+    await _set_first_met(events_db, "2024-02-29")
+    with patch.object(ev, "_today", return_value=datetime.date(2026, 2, 27)):
+        assert await ev.detect_anniversary_events() == 1
+    cursor = await events_db.execute("SELECT dedupe_key FROM events")
+    assert (await cursor.fetchone())[0] == "profile:anniversary:2026-02-28"
+
+
+# ── 检测器：记忆回声 ──────────────────────────────────────────
+
+
+async def _seed_old_memory(events_db, mem_id, content, days_ago=120):
+    """直接插入一条久远记忆（绕过 add 的 now 时间戳）。"""
+    from utils.timezone import HKT, _TIME_FMT
+
+    old = (datetime.datetime.now(HKT) - timedelta(days=days_ago)).strftime(_TIME_FMT)
+    await events_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, access_count, status) "
+        "VALUES (?, ?, '日常', ?, 0, 'active')",
+        (mem_id, content, old),
+    )
+    await events_db.commit()
+
+
+async def test_memory_echo_creates_once_per_memory(events_db):
+    """每条记忆一生只 echo 一次；限频绕过后也不会重复同一条。"""
+    await _seed_old_memory(events_db, "mem-a", "喜欢下雨天")
+
+    assert await ev.detect_memory_echoes() == 1
+    cursor = await events_db.execute(
+        "SELECT dedupe_key, source, event_type FROM events"
+    )
+    dedupe, source, etype = await cursor.fetchone()
+    assert dedupe == "memory-echo:mem-a"
+    assert source == "memory"
+    assert etype == "memory_echo"
+
+    # 把 created_at 拨到 8 天前绕过全局限频——同一条记忆仍不重复
+    old_ts = (datetime.datetime.now(_HKT) - timedelta(days=8)).strftime("%Y-%m-%d %H:%M")
+    await events_db.execute("UPDATE events SET created_at = ?", (old_ts,))
+    await events_db.commit()
+    assert await ev.detect_memory_echoes() == 0
+
+    # 来第二条旧记忆 → echo 的是另一条（mem-a 的事件仍在活跃期，
+    # 次日才归档，所以这里断言 mem-b 被新建，而不是唯一活跃行）
+    await _seed_old_memory(events_db, "mem-b", "想去北海道")
+    assert await ev.detect_memory_echoes() == 1
+    cursor = await events_db.execute(
+        "SELECT COUNT(*) FROM events "
+        "WHERE status = 'active' AND dedupe_key = 'memory-echo:mem-b'"
+    )
+    assert (await cursor.fetchone())[0] == 1
+
+
+async def test_memory_echo_rate_limit(events_db):
+    """7 天内已有 echo（哪怕已归档）→ 有新候选也不创建。"""
+    await _seed_old_memory(events_db, "mem-a", "旧事一")
+    await _seed_old_memory(events_db, "mem-b", "旧事二")
+    assert await ev.detect_memory_echoes() == 1  # 用掉本周配额
+    assert await ev.detect_memory_echoes() == 0  # 还剩候选，但限频
+
+
+async def test_memory_echo_archived_still_excluded(events_db):
+    """已归档的 echo 同样排除（一生一次跨归档）。"""
+    await _seed_old_memory(events_db, "mem-a", "旧事")
+    old_ts = (datetime.datetime.now(_HKT) - timedelta(days=30)).strftime("%Y-%m-%d %H:%M")
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at, dedupe_key) "
+        "VALUES ('e-old', '想起旧事', 'memory_echo', '2026-01-01', 'normal', 'memory', "
+        "'archived', ?, 'memory-echo:mem-a')",
+        (old_ts,),
+    )
+    await events_db.commit()
+    assert await ev.detect_memory_echoes() == 0  # 唯一候选已被说过
+
+
+async def test_memory_echo_no_candidates(events_db):
+    """空记忆表 / 只有新记忆 → 0，不抛。"""
+    assert await ev.detect_memory_echoes() == 0
+
+    # 只有 90 天内的新记忆
+    from memory.manager import MemoryManager
+    mgr = MemoryManager(events_db)
+    await mgr.add("日常", "刚发生的事")
+    assert await ev.detect_memory_echoes() == 0
+
+
+async def test_memory_echo_event_archives_next_day(events_db):
+    """echo 事件 event_date=今天 → 次日自动归档（翻篇承诺）。"""
+    await _seed_old_memory(events_db, "mem-a", "旧事")
+    assert await ev.detect_memory_echoes() == 1
+
+    # 模拟次日：把事件日期拨到昨天再归档
+    yesterday = (ev._today() - timedelta(days=1)).isoformat()
+    await events_db.execute("UPDATE events SET event_date = ?", (yesterday,))
+    await events_db.commit()
+    assert await ev.archive_expired() == 1

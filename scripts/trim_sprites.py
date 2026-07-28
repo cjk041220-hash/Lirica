@@ -9,7 +9,10 @@ from pathlib import Path
 from PIL import Image
 from PIL.ImageDraw import floodfill
 
-SP = Path(r"E:\小汐sonetto\web\public\sprites")
+SP = Path(__file__).resolve().parent.parent / "web" / "public" / "sprites"
+# 这些立绘由专用脚本（fix_sleeping_sprite.py）从原图重切，含完整横躺画幅，
+# 绝不能被本脚本的「竖向裁切」再切坏，也不需再抠底——跳过。
+SKIP = {"sleeping", "halfawake"}
 TOL = 28
 ALPHA_DENOISE = 40     # 低于此 alpha 视为背景淡晕，清零
 MARGIN = 6
@@ -54,6 +57,9 @@ def process(p: Path):
 
 if __name__ == "__main__":
     for p in sorted(SP.glob("*.webp")):
+        if p.stem in SKIP:
+            print(f"{p.name:16s} skipped (专用脚本处理，避免竖裁切坏横躺画幅)")
+            continue
         W, H, (nw, nh), note = process(p)
         print(f"{p.name:16s} {W}x{H} -> {nw}x{nh} (ratio {nw/nh:.2f})  [{note}]")
     print("done")

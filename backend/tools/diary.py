@@ -1,12 +1,12 @@
 """小汐的日记系统 — 基于全局 aiosqlite 连接读写 userdata.db 的 diaries 表。"""
 import datetime
-from datetime import timezone, timedelta
 
 import aiosqlite
 from langchain_core.tools import tool
 
+from utils.errors import log_tool_error
 # 冷冷在香港（UTC+8）
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 # ── 全局连接注入（由 server.py lifespan 调用 set_db_conn 设置） ──
 
@@ -65,7 +65,9 @@ async def write_diary(content: str) -> str:
             return "📖 小汐更新了今天的日记！"
         return "📖 小汐写好今天的日记啦！映海里又多了一天的回忆。"
     except Exception as e:
-        return f"小汐写日记的时候弄翻了墨水瓶……（{str(e)[:100]}）"
+        # 固定文案不嵌异常细节（SQLite 错误可能带表名/路径），细节走脱敏日志
+        log_tool_error("write_diary", e)
+        return "小汐写日记的时候弄翻了墨水瓶……过一会儿再帮小汐记一次好不好？"
 
 
 @tool
@@ -79,6 +81,12 @@ async def read_diary(date_str: str = "") -> str:
         return "小汐的日记本还没有打开……"
     try:
         if date_str:
+            # 格式校验先行：此前非法日期（「明天」「07-05」）查无结果，
+            # 被误报成「这一页是空白的」——LLM 会据此告诉冷冷那天没记日记
+            try:
+                datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                return f"小汐的日记日期要用 YYYY-MM-DD 格式哦（收到的是「{date_str}」）～"
             cursor = await _db_conn.execute(
                 "SELECT * FROM diaries WHERE date = ?", (date_str,)
             )
@@ -101,4 +109,5 @@ async def read_diary(date_str: str = "") -> str:
                 result += f"{d.get('content', '')[:200]}……\n\n"
             return result
     except Exception as e:
-        return f"小汐翻日记的时候被纸划了一下……（{str(e)[:100]}）"
+        log_tool_error("read_diary", e)
+        return "小汐翻日记的时候被纸划了一下……过一会儿再翻翻看好不好？"

@@ -6,7 +6,7 @@ import pytest
 
 from tools.diary import set_db_conn
 
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 
 
 async def test_write_diary_inserts(tmp_db):
@@ -129,5 +129,20 @@ async def test_write_diary_concurrent_same_day_no_integrity_error(tmp_db):
 
     cursor = await tmp_db.execute("SELECT COUNT(*) FROM diaries")
     assert (await cursor.fetchone())[0] == 1
+
+    diary_module._db_conn = None
+
+
+async def test_read_diary_rejects_malformed_date(tmp_db):
+    """非法日期格式返回格式提示，而不是误报「那天没写日记」。"""
+    import tools.diary as diary_module
+
+    set_db_conn(tmp_db)
+    from tools.diary import read_diary
+
+    for bad in ("明天", "2026/07/05", "07-05", "2026-02-30"):
+        result = await read_diary.ainvoke({"date_str": bad})
+        assert "YYYY-MM-DD" in result, f"{bad} 应触发格式提示"
+        assert "空白" not in result, f"{bad} 不得被误报为没写日记"
 
     diary_module._db_conn = None

@@ -15,7 +15,7 @@ v2.1 修复：
 import asyncio
 import json
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 from pywebpush import webpush_async, WebPushException
 
@@ -52,9 +52,18 @@ def _is_stale_subscription(exc: WebPushException) -> bool:
     status = getattr(response, "status", None)
     if status in (404, 410):
         return True
-    # 兜底：异常文本匹配（部分错误路径不携带 response 对象）
-    text = str(exc)
-    return "410" in text or "404" in text or "Gone" in text
+    # 字符串兜底仅在异常不携带 response 对象时启用：此前无条件匹配
+    # "410"/"404" 子串，endpoint URL 里恰好含这些数字的无关错误
+    # 会被误判为订阅过期 → 健康订阅被误删。收紧为完整特征串。
+    if response is not None:
+        return False
+    text = str(exc).lower()
+    return (
+        "gone" in text
+        or "subscription has expired" in text
+        or "subscription is invalid" in text
+        or "push subscription" in text and "not found" in text
+    )
 
 
 async def send_push(title: str, body: str, url: str = "/") -> int:
@@ -82,12 +91,12 @@ async def send_push(title: str, body: str, url: str = "/") -> int:
         log.debug("无推送订阅，跳过")
         return 0
 
+    # icon/badge/url 由 sw.js 的 push handler 自行决定（硬编码
+    # /icon-192.png，忽略 payload 对应字段）；payload 只传内容字段
     payload = json.dumps({
         "title": title,
         "body": body,
         "url": url,
-        "icon": "/icon-192.png",
-        "badge": "/badge-72.png",
     })
 
     async def _send_one(sub_id: str, endpoint: str, p256dh: str, auth: str) -> tuple:
@@ -167,7 +176,7 @@ async def save_subscription(
     Returns:
         订阅 ID（已存在的订阅返回原 ID）
     """
-    _HKT = timezone(timedelta(hours=8))
+    from utils.timezone import HKT as _HKT
     now = datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
     sub_id = uuid.uuid4().hex[:16]
 

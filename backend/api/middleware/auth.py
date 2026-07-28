@@ -19,7 +19,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 # 漏登记会直接被测试拦下（/api/diaries 就曾这样漏过）
 _PROTECTED_PREFIXES = (
     "/api/chat", "/api/config", "/api/memories", "/api/push",
-    "/api/status", "/api/diaries",
+    "/api/status", "/api/diaries", "/api/sessions",
 )
 
 # 公开端点白名单（即使配置了 token 也免认证）：
@@ -31,18 +31,26 @@ _PUBLIC_PATHS = ("/api/push/vapid-key", "/api/health")
 # 简单的内存限流器（每 IP）
 _rate_buckets: dict[str, list[float]] = {}
 
+# 注意：_check_rate 对字典做「首个前缀匹配即 break」，更长/更具体的前缀
+# 必须排在更短的前面——否则 /api/chat/history 会被 /api/chat 先吃掉，
+# 共用聊天的 10 次/分钟桶（实测复现：页面刷新+连聊即误触 429）。
 _RATE_LIMITS = {
-    "/api/chat": 10,       # 聊天：10 次/分钟（LLM 成本防线，不放宽）
+    "/api/chat/history": 60,  # 历史只读：独立桶，不与聊天 LLM 成本桶相争
+    "/api/chat": 10,          # 聊天：10 次/分钟（LLM 成本防线，不放宽）
     # 配置：30 次/分钟。重建 Agent 只是进程内对象替换，开销很小；
     # 温度滑杆已做 250ms 前端防抖。10 次/分钟对设置页交互过紧
     # （连点模型+风格+拖温度即可触发 429），30 足够防滥用。
     "/api/config": 30,
-    "/api/memories": 30,   # 记忆管理：30 次/分钟
-    "/api/push": 30,       # 推送订阅/已读：30 次/分钟
+    "/api/memories": 30,      # 记忆管理：30 次/分钟
+    "/api/push": 30,          # 推送订阅/已读：30 次/分钟
     # 状态/日记只读：30 次/分钟。前端只在挂载 + 回前台 + 聊完天时拉取，
     # life_state 后端每 2 小时才变一次，无需高频轮询
     "/api/status": 30,
-    "/api/diaries": 30,    # 日记列表：同状态端点档位
+    "/api/diaries": 30,       # 日记列表：同状态端点档位
+    "/api/sessions": 60,      # 对话档案只读为主 + 偶发删除：独立宽松桶
+    # 健康检查：公网可无限频刷是轻量 DoS 面，给宽松桶；
+    # Docker/监控探针走容器内 127.0.0.1 独立桶，不受此限
+    "/api/health": 120,
 }
 
 
@@ -118,7 +126,7 @@ def _check_rate(path: str, ip: str) -> bool:
 
     # 定期清理过期 bucket
     _cleanup_counter += 1
-    if _cleanup_counter >= _CLEANUP_INTERVAL:
+    if _cleanup_counter >= _CLEANUP_INTERVAL or len(_rate_buckets) > 1000:
         _cleanup_counter = 0
         _cleanup_stale_buckets()
 
@@ -141,7 +149,9 @@ def _check_rate(path: str, ip: str) -> bool:
     bucket[:] = [t for t in bucket if t > cutoff]
     if len(bucket) >= limit:
         return False
-    bucket.append(now)
+    # 单 bucket 硬上限：异常流量下防止单 IP 时间戳列表撑爆内存
+    if len(bucket) < 200:
+        bucket.append(now)
     return True
 
 
@@ -169,7 +179,7 @@ class AuthAndRateLimitMiddleware:
         # ── 速率限制 ──
         if not _check_rate(path, ip):
             if method == "OPTIONS":
-                # CORS 预检不拦截
+                # CORS 预检请求：不对 OPTIONS 限流（通过后继续往下走认证豁免）
                 pass
             else:
                 response = JSONResponse(

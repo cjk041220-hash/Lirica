@@ -4,14 +4,14 @@
 在经期前后窗口期，心跳系统会生成关心身体的主动消息。
 """
 import datetime
-from datetime import timezone, timedelta
+from datetime import timedelta
 
 from database.core import get_db
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_HKT = timezone(timedelta(hours=8))
+from utils.timezone import HKT as _HKT
 _DATE_FMT = "%Y-%m-%d"
 
 # 经期关心窗口：预测日期前 N 天到后 N 天
@@ -29,8 +29,15 @@ async def add_record(date_str: str, note: str = "") -> bool:
         note: 可选备注
 
     Returns:
-        是否成功插入（重复日期返回 False）
+        是否成功插入（重复日期或非法日期格式返回 False）
     """
+    # 入口拒绝坏日期：get_cycle_stats 对全部记录 strptime，
+    # 一条坏数据即抛 ValueError，会静默禁用整个生理期关心功能
+    try:
+        datetime.datetime.strptime(date_str, _DATE_FMT)
+    except (TypeError, ValueError):
+        log.warning("生理期记录被拒绝：日期格式非法 %r（需要 YYYY-MM-DD）", date_str)
+        return False
     conn = await get_db()
     try:
         cursor = await conn.execute(
@@ -73,11 +80,18 @@ async def get_cycle_stats() -> dict | None:
     if len(records) < 2:
         return None
 
-    # 按日期排序（升序）计算间隔
-    dates = sorted(
-        datetime.datetime.strptime(r["start_date"], _DATE_FMT).date()
-        for r in records
-    )
+    # 按日期排序（升序）计算间隔。
+    # 逐条 try/except：存量数据（如迁移回填）无格式约束，一条坏数据
+    # 不应该让 strptime 抛 ValueError 静默禁用整个生理期关心功能
+    dates = []
+    for r in records:
+        try:
+            dates.append(datetime.datetime.strptime(r["start_date"], _DATE_FMT).date())
+        except (TypeError, ValueError):
+            log.warning("生理期记录日期非法，已跳过: %r", r.get("start_date"))
+    dates.sort()
+    if len(dates) < 2:
+        return None
 
     # 计算每两次之间的间隔
     intervals = []
@@ -137,6 +151,8 @@ async def get_care_context() -> str | None:
 
 async def seed_initial_records(records: list[str]) -> int:
     """批量写入初始生理期记录。
+
+    仅供测试使用：生产环境的初始记录由数据库迁移 v4 直接写入。
 
     Args:
         records: 日期字符串列表，格式 YYYY-MM-DD

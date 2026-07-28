@@ -16,6 +16,24 @@ def set_http_client(client: httpx.AsyncClient):
     _shared_client = client
 
 
+class _AmapKeyMissing(Exception):
+    """AMAP_API_KEY 未配置或 key 维度错误。
+
+    必须与「真实零结果」语义区分：否则 LLM 无法分辨配置问题与
+    查无结果，会按提示词指引反复换参数空转，最后自信地告诉用户
+    「附近没有咖啡店」——而真相是地图功能根本没开启。
+    """
+
+
+MSG_AMAP_KEY_MISSING = (
+    "小汐的地图功能现在用不了……可能是冷冷还没配置 AMAP_API_KEY，"
+    "或者这个 Key 无效 / 今日调用额度用完了哦。"
+)
+
+# 高德侧 key 维度错误的 infocode：10001 key 不正确 / 10003 日调用量已耗尽
+_KEY_INFOCODES = {"10001", "10003"}
+
+
 def _to_int(v, default: int = 0) -> int:
     """高德字段形态不稳定（str / int / 空 list / None 都见过），统一安全转 int。
 
@@ -34,19 +52,29 @@ def _to_int(v, default: int = 0) -> int:
 
 @with_retry(max_attempts=2, base_delay=0.5)
 async def _amap_request(endpoint: str, params: dict) -> dict:
-    """发起高德地图 API 请求（带重试）。优先使用共享客户端，回退到临时客户端。"""
+    """发起高德地图 API 请求（带重试）。优先使用共享客户端，回退到临时客户端。
+
+    Key 缺失 / key 维度错误抛 _AmapKeyMissing（不在 with_retry 的
+    可重试白名单内，会立即穿透给调用方，不浪费重试次数）。
+    """
     s = get_settings()
+    if not s.amap_api_key:
+        raise _AmapKeyMissing("AMAP_API_KEY 未配置")
     params["key"] = s.amap_api_key
 
     if _shared_client is not None:
         resp = await _shared_client.get(f"https://restapi.amap.com{endpoint}", params=params)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     else:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"https://restapi.amap.com{endpoint}", params=params)
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+
+    if data.get("status") != "1" and str(data.get("infocode", "")) in _KEY_INFOCODES:
+        raise _AmapKeyMissing(f"高德返回 key 维度错误 infocode={data.get('infocode')}")
+    return data
 
 
 @tool
@@ -91,6 +119,8 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
                 result += f"  📏 约 {int(distance)}m"
             result += "\n\n"
         return result
+    except _AmapKeyMissing:
+        return MSG_AMAP_KEY_MISSING
     except Exception as e:
         log_tool_error("search_nearby", e)
         return "呜，小汐去找的时候迷路了……过一会儿再试试好不好？"
@@ -111,6 +141,8 @@ async def geocode_address(address: str) -> str:
             return f"小汐在香港找了找，好像没有「{address}」这个地方……"
         gc = data["geocodes"][0]
         return f"📍 {gc.get('formatted_address', address)}：{gc.get('location', '?')}"
+    except _AmapKeyMissing:
+        return MSG_AMAP_KEY_MISSING
     except Exception as e:
         log_tool_error("geocode_address", e)
         return "小汐定位的时候漂走了……过一会儿再试试好不好？"
@@ -138,6 +170,8 @@ async def fuzzy_search_place(keywords: str, city: str = "香港") -> str:
                 result += f"  🗺️ {poi['location']}"
             result += "\n\n"
         return result
+    except _AmapKeyMissing:
+        return MSG_AMAP_KEY_MISSING
     except Exception as e:
         log_tool_error("fuzzy_search_place", e)
         return "小汐被水母绊了一下……过一会儿再试试好不好？"
@@ -189,6 +223,8 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
                 if d > 100:
                     result += f"  🚶 步行 {d}m\n"
         return result
+    except _AmapKeyMissing:
+        return MSG_AMAP_KEY_MISSING
     except Exception as e:
         log_tool_error("get_transit_route", e)
         return "小汐被红绿灯搞晕了……过一会儿再试试好不好？"
@@ -223,6 +259,8 @@ async def get_cycling_route(origin: str, destination: str, city: str = "香港")
         if d <= 0:
             return "小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？"
         return f"🚲 {d}m，约 {t // 60} 分钟"
+    except _AmapKeyMissing:
+        return MSG_AMAP_KEY_MISSING
     except Exception as e:
         log_tool_error("get_cycling_route", e)
         return "小汐骑着骑着漂走了……过一会儿再试试好不好？"

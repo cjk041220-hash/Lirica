@@ -159,3 +159,57 @@ async def test_heartbeat_refresh_delegates_to_unified_rebuild(monkeypatch):
 
     assert delegated.get("called") is True
     assert delegated["app"] is app
+
+
+# ── update_config 原子性 ──────────────────────────────────────
+
+async def test_update_config_rolls_back_on_rebuild_failure(monkeypatch):
+    """重建失败 → 500 + _runtime_config 回滚旧值（不产生永久性状态漂移）。"""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from api.routes import config as cfg
+
+    original = cfg._runtime_config.copy()
+
+    async def broken_rebuild(app):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cfg, "_rebuild_agent_inner", broken_rebuild)
+
+    fake_request = SimpleNamespace(app=_FakeApp())
+    req = cfg.UpdateConfigRequest(model="deepseek-v4-pro")
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await cfg.update_config(req, fake_request)
+        assert exc_info.value.status_code == 500
+        # 配置完整回滚到提交前（model 不得停留在 pro）
+        assert cfg._runtime_config == original
+    finally:
+        cfg._runtime_config.clear()
+        cfg._runtime_config.update(original)
+
+
+async def test_update_config_validation_failure_does_not_touch_config(monkeypatch):
+    """校验失败（400）不得修改 _runtime_config，也不得触发重建。"""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from api.routes import config as cfg
+
+    original = cfg._runtime_config.copy()
+
+    async def should_not_be_called(app):
+        raise AssertionError("校验失败不应走到重建")
+
+    monkeypatch.setattr(cfg, "rebuild_agent_for_app", should_not_be_called)
+
+    fake_request = SimpleNamespace(app=_FakeApp())
+    # model 非法（400），同请求里还带了一个合法的 temperature
+    req = cfg.UpdateConfigRequest(model="no-such-model", temperature=0.5)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await cfg.update_config(req, fake_request)
+        assert exc_info.value.status_code == 400
+        assert cfg._runtime_config == original  # temperature 不得被写入
+    finally:
+        cfg._runtime_config.clear()
+        cfg._runtime_config.update(original)

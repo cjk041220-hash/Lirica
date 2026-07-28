@@ -23,13 +23,13 @@ export default function MemoriesPanel({ onClose }) {
     const load = tab === 'memories'
       ? apiFetch('/api/memories')
           .then(res => (res.ok ? res.json() : { memories: [] }))
-          .then(data => { if (!cancelled) setMemories(data.memories || data || []) })
+          .then(data => { if (!cancelled) setMemories(Array.isArray(data.memories) ? data.memories : []) })
       : apiFetch('/api/diaries')
           .then(res => (res.ok ? res.json() : { diaries: [] }))
-          .then(data => { if (!cancelled) setDiaries(data.diaries || []) })
+          .then(data => { if (!cancelled) setDiaries(Array.isArray(data.diaries) ? data.diaries : []) })
 
-    Promise.resolve(load)
-      .catch(() => {})
+    load
+      .catch(e => console.warn('[MemoriesPanel] fetch failed:', e))
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
@@ -37,11 +37,19 @@ export default function MemoriesPanel({ onClose }) {
 
   const items = tab === 'memories' ? memories : diaries
 
+  // Esc 关闭（dialog 语义的键盘出口；焦点圈定留待后续完善）
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+        role="dialog" aria-modal="true" aria-label="小汐的记忆"
         style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
 
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
@@ -93,7 +101,7 @@ export default function MemoriesPanel({ onClose }) {
                       <p className="text-[10px] text-ink-tea/25 mb-1">{item.created_at || item.date}</p>
                     )}
                     <p className="text-[13px] text-ink-tea/65 leading-[1.8]">
-                      {item.content || item.text || JSON.stringify(item)}
+                      {item.content || item.text || '(no content)'}
                     </p>
                     {item.category && (
                       <span className="inline-block mt-1.5 text-[10px] text-healing-aqua/80 bg-healing-aqua/8 px-2.5 py-0.5 rounded-full">

@@ -23,13 +23,6 @@ backend/.pytest_cache/
 # Claude Code
 .claude/
 
-# 临时研究文件
-base.py
-prompts.py
-scoring.py
-storage.py
-mem0-research-report.md
-
 # Next.js
 web/.next/
 web/node_modules/
@@ -44,7 +37,6 @@ web/out/
 # OS
 .DS_Store
 Thumbs.db
-main.py
 
 # 前端 E2E 截图（测试产物）
 scripts/e2e/shots/

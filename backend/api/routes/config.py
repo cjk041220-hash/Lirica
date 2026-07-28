@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 from providers.deepseek import get_available_models, create_deepseek_llm
 from agent.graph import build_agent, make_pre_model_hook
 from agent.soul import build_system_prompt
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 router = APIRouter()
 
@@ -53,7 +56,7 @@ def get_runtime_config() -> dict:
 
 def get_current_temperature() -> float:
     """获取当前 temperature。"""
-    intensity = _runtime_config.get("thinking_intensity", "max")
+    intensity = _runtime_config.get("thinking_intensity", "medium")
     preset = _THINKING_PRESETS.get(intensity)
     if preset:
         return preset["temperature"]
@@ -62,7 +65,7 @@ def get_current_temperature() -> float:
 
 def get_current_max_tokens() -> int:
     """获取当前 max_tokens。"""
-    intensity = _runtime_config.get("thinking_intensity", "max")
+    intensity = _runtime_config.get("thinking_intensity", "medium")
     preset = _THINKING_PRESETS.get(intensity)
     if preset:
         return preset["max_tokens"]
@@ -87,6 +90,36 @@ def create_llm_from_runtime_config() -> BaseChatModel:
     )
 
 
+async def _rebuild_agent_inner(app) -> None:
+    """Agent 重建核心逻辑（不含锁）。调用方负责持有 _agent_lock。
+
+    与 rebuild_agent_for_app 拆分是为了让 POST /api/config 的配置
+    变更 + 重建 + 回滚在同一个锁内原子完成，消除 clear()→update() 中间
+    窗口期其他协程读到空 _runtime_config 的竞态。
+    """
+    new_llm = create_llm_from_runtime_config()
+
+    # 刷新 system_prompt（注入最新生命状态）
+    system_prompt = await build_system_prompt()
+
+    # 创建 pre_model_hook（记忆注入）
+    narrative_builder = getattr(app.state, "narrative_builder", None)
+    pre_model_hook = make_pre_model_hook(narrative_builder)
+
+    new_agent = build_agent(
+        new_llm,
+        app.state.tools,
+        system_prompt,
+        app.state.checkpointer,
+        pre_model_hook,
+    )
+
+    # 三者同时更新，保持单一数据源
+    app.state.model = new_llm
+    app.state.system_prompt = system_prompt
+    app.state.agent = new_agent
+
+
 async def rebuild_agent_for_app(app) -> None:
     """统一的 Agent 重建入口 —— 用当前运行时配置重建 LLM 和 Agent。
 
@@ -102,32 +135,7 @@ async def rebuild_agent_for_app(app) -> None:
     进行中的请求持有旧 agent 引用继续完成，新请求拿到新 agent。
     """
     async with _agent_lock:
-        new_llm = create_llm_from_runtime_config()
-
-        # 刷新 system_prompt（注入最新生命状态）
-        system_prompt = await build_system_prompt()
-
-        # 创建 pre_model_hook（记忆注入）
-        narrative_builder = getattr(app.state, "narrative_builder", None)
-        pre_model_hook = make_pre_model_hook(narrative_builder)
-
-        new_agent = build_agent(
-            new_llm,
-            app.state.tools,
-            system_prompt,
-            app.state.checkpointer,
-            pre_model_hook,
-        )
-
-        # 三者同时更新，保持单一数据源
-        app.state.model = new_llm
-        app.state.system_prompt = system_prompt
-        app.state.agent = new_agent
-
-
-async def rebuild_agent(request: Request):
-    """兼容包装：用当前配置重建 LLM 和 Agent。"""
-    await rebuild_agent_for_app(request.app)
+        await _rebuild_agent_inner(app)
 
 
 # ── 请求/响应模型 ──────────────────────────────────────────
@@ -164,32 +172,52 @@ async def get_config():
 
 @router.post("/config", response_model=ConfigResponse)
 async def update_config(req: UpdateConfigRequest, request: Request):
-    """更新运行时配置，重建 Agent 使其生效。"""
-    old_model = _runtime_config["model"]
+    """更新运行时配置，重建 Agent 使其生效。
+
+    原子性：全部校验先在副本上完成（400 不触碰 _runtime_config），
+    发布后重建 Agent；重建失败则回滚到旧配置并返回 500——
+    避免「配置已改、Agent 还是旧的」的永久性状态漂移
+    （此前先改 _runtime_config 再重建，重建抛异常即漂移，
+    且之后每次心跳刷新都会按这份超前配置继续失败）。
+    """
+    # ── 1) 纯校验阶段：在副本上合并请求，任何 400 发生在写入之前 ──
+    new_cfg = _runtime_config.copy()
 
     if req.model is not None:
         valid_ids = [m["id"] for m in get_available_models()]
         if req.model not in valid_ids:
             raise HTTPException(400, f"不支持的模型: {req.model}")
-        _runtime_config["model"] = req.model
+        new_cfg["model"] = req.model
 
     if req.thinking_intensity is not None:
         if req.thinking_intensity not in _THINKING_PRESETS:
             raise HTTPException(400, "思考强度只能是 low / medium / high / max")
-        _runtime_config["thinking_intensity"] = req.thinking_intensity
+        new_cfg["thinking_intensity"] = req.thinking_intensity
         preset = _THINKING_PRESETS[req.thinking_intensity]
-        _runtime_config["temperature"] = preset["temperature"]
-        _runtime_config["max_tokens"] = preset["max_tokens"]
+        new_cfg["temperature"] = preset["temperature"]
+        new_cfg["max_tokens"] = preset["max_tokens"]
 
     if req.temperature is not None:
-        _runtime_config["temperature"] = req.temperature
-        _runtime_config["thinking_intensity"] = "custom"
+        new_cfg["temperature"] = req.temperature
+        new_cfg["thinking_intensity"] = "custom"
 
     if req.max_tokens is not None:
-        _runtime_config["max_tokens"] = req.max_tokens
+        new_cfg["max_tokens"] = req.max_tokens
 
-    # 重建 Agent 使新配置生效
-    await rebuild_agent(request)
+    # ── 2) 发布 + 重建（_agent_lock 内原子执行）；失败 → 回滚旧配置 + 500 ──
+    # 锁内完成 mutation → rebuild → 回滚三步，消除旧版中 _runtime_config.update
+    # 与 rebuild_agent_for_app 之间的窗口：运行时配置已改但 Agent 仍是旧的，
+    # 之后每次心跳刷新都会按超前配置继续失败，造成永久性状态漂移。
+    old_cfg = _runtime_config.copy()
+    async with _agent_lock:
+        _runtime_config.update(new_cfg)
+        try:
+            await _rebuild_agent_inner(request.app)
+        except Exception:
+            _runtime_config.clear()
+            _runtime_config.update(old_cfg)  # clear+update 保持 dict 身份不变
+            log.exception("Agent 重建失败，运行时配置已回滚")
+            raise HTTPException(500, "配置生效失败，已回滚到之前的设置")
 
     cfg = get_runtime_config()
     return ConfigResponse(

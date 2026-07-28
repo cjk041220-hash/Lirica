@@ -11,6 +11,12 @@ import datetime
 
 from langchain_core.tools import tool
 from utils import events as events_mgr
+from utils.errors import log_tool_error
+from utils.timezone import HKT as _HKT
+
+# docstring 向 LLM 声明的事件类型枚举，入库前强制归一，
+# 防止自由文本（「生日」「考试！！」）渲染进系统提示词
+_EVENT_TYPES = {"exam", "trip", "appointment", "health", "general"}
 
 
 @tool
@@ -48,8 +54,14 @@ async def create_event(
             end_date = end.isoformat()
         if severity not in ("high", "normal", "low"):
             severity = "normal"
-        if not event_type:
-            event_type = "general"
+        event_type = (event_type or "").strip().lower() or "general"
+        if event_type not in _EVENT_TYPES:
+            return "呜，事件类型只能是 exam / trip / appointment / health / general 其中之一哦。"
+        # 事件是「未来要惦记的事」：过去日期入库后 list_events 会把它
+        # 当接下来的安排报给冷冷（读侧 get_events_context 虽有过滤，
+        # 但下次心跳归档前仍会被 list_events 看到）
+        if start < datetime.datetime.now(_HKT).date():
+            return "这件事已经过去了呢……小汐没办法回到过去惦记它。已经发生的事，用记忆功能记下来好不好？"
     except (ValueError, TypeError):
         return "呜，日期格式好像不对……要用 YYYY-MM-DD 哦，比如 2026-08-01。"
 
@@ -88,7 +100,8 @@ async def create_event(
         return "\n".join(lines)
 
     except Exception as e:
-        return f"呜，小汐记事情的时候手滑了……（{str(e)[:100]}）"
+        log_tool_error("create_event", e)
+        return "呜，小汐记事情的时候手滑了……过一会儿再记一次好不好？"
 
 
 @tool
@@ -110,4 +123,5 @@ async def list_events() -> str:
             lines.append(f"📅 [{ev['id']}] {ev['title']}（{date_part}）")
         return "\n".join(lines)
     except Exception as e:
-        return f"小汐翻小本本的时候犯迷糊了……（{str(e)[:100]}）"
+        log_tool_error("list_events", e)
+        return "小汐翻小本本的时候犯迷糊了……过一会儿再看看好不好？"
