@@ -23,6 +23,7 @@ from api.middleware import (
     RejectWebSocketMiddleware,
     SecurityHeadersMiddleware,
 )
+from api.middleware.request_id import RequestIdMiddleware
 from database.core import init_db_connection, get_db, close_db_connection, init_db
 from config.settings import get_settings
 from utils.logger import setup_logging, get_logger
@@ -233,9 +234,13 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
-    # 安全响应头放最外层（最后注册 = 头插法最外）：使 401/429/预检/静态
-    # 资源都带头。纯 ASGI 实现，不缓冲响应体，SSE 流式不受影响
+    # 安全响应头：纯 ASGI 实现，不缓冲响应体，SSE 流式不受影响
     app.add_middleware(SecurityHeadersMiddleware)
+    # 请求 ID 放最外层（最后注册 = 头插法最外）：先于一切生成 rid 并在响应头
+    # 回写 X-Request-Id；并兜底真正未捕获的异常 → 统一 500 JSON + rid
+    # （HTTPException 在路由层已转响应、不冒泡到此，故不被误吞；流式中途异常
+    # 仅记日志后交外层处理）。纯 ASGI，不缓冲响应体，SSE 不受影响。
+    app.add_middleware(RequestIdMiddleware)
 
     # REST 路由
     app.include_router(chat_router, prefix="/api")
