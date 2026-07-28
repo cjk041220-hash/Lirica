@@ -1,4 +1,4 @@
-const CACHE_NAME = 'xiaoxi-room-v3'
+const CACHE_NAME = 'xiaoxi-room-v4'
 
 self.addEventListener('install', () => {
   self.skipWaiting()
@@ -6,7 +6,8 @@ self.addEventListener('install', () => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    // 清理旧版本缓存，避免立绘等静态资源长期占用磁盘
+    // 清掉旧版本缓存（v3 等）：既退役手动 bump，也回收旧 /assets/* 孤儿，
+    // 让 v4 接管后立绘/资源从网络重取一份新鲜的
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
     ).then(() => clients.claim())
@@ -14,42 +15,70 @@ self.addEventListener('activate', (event) => {
 })
 
 self.addEventListener('fetch', (event) => {
+  const req = event.request
   // 不缓存 API 请求
-  if (event.request.url.includes('/api/')) return
+  if (req.url.includes('/api/')) return
   // 不缓存 POST 等非 GET 请求
-  if (event.request.method !== 'GET') return
+  if (req.method !== 'GET') return
+
+  const path = new URL(req.url).pathname
 
   // 导航请求（index.html）network-first：发版后用户总拿到最新 HTML，
-  // HTML 引用的带 hash 资源名永远匹配当前构建——根治「发版必须手动
-  // bump CACHE_NAME，否则老用户静默吃旧包」。失败回退缓存兜底离线。
-  if (event.request.mode === 'navigate') {
+  // HTML 引用的带 hash 资源名永远匹配当前构建。失败回退缓存兜底离线。
+  if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
+      fetch(req)
         .then(response => {
           if (response.ok) {
             const clone = response.clone()
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
+            caches.open(CACHE_NAME).then(cache => cache.put(req, clone))
           }
           return response
         })
         .catch(() =>
-          caches.match(event.request).then(cached => cached || caches.match('/'))
+          caches.match(req).then(cached => cached || caches.match('/'))
         )
     )
     return
   }
 
-  // 静态资源（带 hash 的构建产物 / 立绘）保持 cache-first
+  // 不可变构建产物（vite 哈希，内容变则 URL 变）→ cache-first，免无谓回源
+  if (path.startsWith('/assets/')) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(cache =>
+        cache.match(req).then(cached =>
+          cached || fetch(req).then(response => {
+            if (response.ok) {
+              const clone = response.clone()
+              cache.put(req, clone)
+            }
+            return response
+          })
+        )
+      )
+    )
+    return
+  }
+
+  // 可变静态（立绘 / 图标 / manifest 等无哈希资源）→ stale-while-revalidate：
+  // 有缓存先立即返回，同时后台回源并用新内容「原地覆盖」同 URL 旧缓存——
+  // 故立绘更新无需改文件名、无需手动 bump，最迟一次刷新后即对老用户生效。
+  // revalidate 用 event.waitUntil 保活，避免 SW 在回源完成前被回收。
+  const cacheP = caches.open(CACHE_NAME)
+  const netP = fetch(req)
+  event.waitUntil(
+    netP.then(response => {
+      if (response && response.ok) {
+        const clone = response.clone()
+        return cacheP.then(cache => cache.put(req, clone))
+      }
+      return undefined
+    }).catch(() => undefined)
+  )
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      return cached || fetch(event.request).then(response => {
-        if (response.ok) {
-          const clone = response.clone()
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
-        }
-        return response
-      })
-    }).catch(() => caches.match('/'))
+    cacheP.then(cache => cache.match(req)).then(cached =>
+      cached || netP.catch(() => caches.match('/'))
+    )
   )
 })
 
