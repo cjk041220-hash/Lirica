@@ -15,8 +15,9 @@ from utils.errors import log_tool_error
 from utils.timezone import HKT as _HKT
 
 # docstring 向 LLM 声明的事件类型枚举，入库前强制归一，
-# 防止自由文本（「生日」「考试！！」）渲染进系统提示词
-_EVENT_TYPES = {"exam", "trip", "appointment", "health", "general"}
+# 防止自由文本（「生日」「考试！！」）渲染进系统提示词。
+# 与日历面板（api/routes/events.py）共用 manager 层的同一份白名单
+_EVENT_TYPES = set(events_mgr._EVENT_TYPES)
 
 
 @tool
@@ -77,6 +78,13 @@ async def create_event(
         )
 
         if not created:
+            if saved is None:
+                # 撞墓碑（v9）：冷冷删过同标题同日期的事件。尊重删除，
+                # 不偷偷记回来——想恢复请冷冷在日历面板上重新加
+                return (
+                    "咦，这件事冷冷之前让小汐删掉过呢。小汐不偷偷记回来——"
+                    "冷冷想重新记的话，在日历上加一下就好啦。"
+                )
             lines = [f"这件事小汐之前已经记下啦，不用重复记："]
             lines.append(f"  📅 [{saved['id']}] {saved['title']}（{saved['event_date']}）")
             return "\n".join(lines)
@@ -125,3 +133,71 @@ async def list_events() -> str:
     except Exception as e:
         log_tool_error("list_events", e)
         return "小汐翻小本本的时候犯迷糊了……过一会儿再看看好不好？"
+
+
+@tool
+async def update_event(
+    event_id: str,
+    title: str = "",
+    event_date: str = "",
+    event_type: str = "",
+    severity: str = "",
+    memo: str = "",
+) -> str:
+    """修改小本本上记错/变卦的一件事。冷冷说「日期记错了」「改到下周」「不是那天了」时用。
+
+    先用 list_events 确认事件 ID，只传要改的字段，不改的留空。
+    生日 / 相识纪念日这类系统派生的日子改不了（会吃闭门羹）。
+
+    Args:
+        event_id: list_events 输出里方括号中的事件 ID
+        title: 新标题（留空=不改）
+        event_date: 新日期，格式 YYYY-MM-DD（留空=不改）
+        event_type: exam / trip / appointment / health / general（留空=不改）
+        severity: high / normal / low（留空=不改）
+        memo: 新备注（留空=不改）
+    """
+    try:
+        updated = await events_mgr.update_event(
+            event_id,
+            title=title or None,
+            event_date=event_date or None,
+            event_type=event_type or None,
+            severity=severity or None,
+            memo=memo or None,
+        )
+    except ValueError as e:
+        if "readonly" in str(e):
+            return "生日和相识纪念日是从冷冷档案里派生的日子，小汐改不了这个哦……"
+        return f"呜，这样改不了呢：{e}"
+    except Exception as e:
+        log_tool_error("update_event", e)
+        return "呜，小汐改小本本的时候手滑了……过一会儿再跟小汐说一次好不好？"
+    if updated is None:
+        return "这个 ID 的记事没找到呢……先用 list_events 看看最新的小本本好不好？"
+    date_part = updated["event_date"]
+    if updated.get("end_date"):
+        date_part = f"{updated['event_date']} ~ {updated['end_date']}"
+    return f"✏️ 小汐改好啦：[{updated['id']}] {updated['title']}（{date_part}）"
+
+
+@tool
+async def delete_event(event_id: str) -> str:
+    """把小本本上的一条记事划掉。冷冷说「取消了」「不去了」「记错了删掉吧」时用。
+
+    删掉之后小汐不会偷偷记回来——同一件事（同标题同日期）再记会算作恢复。
+    先用 list_events 确认 ID 再删。生日 / 相识纪念日划不掉（系统派生的日子）。
+
+    Args:
+        event_id: list_events 输出里方括号中的事件 ID
+    """
+    try:
+        deleted = await events_mgr.soft_delete_event(event_id)
+    except ValueError:
+        return "生日和相识纪念日划不掉哦——那是从冷冷档案里派生的日子。"
+    except Exception as e:
+        log_tool_error("delete_event", e)
+        return "呜，小汐擦小本本的时候擦花了……过一会儿再跟小汐说一次好不好？"
+    if deleted is None:
+        return "这个 ID 的记事没找到呢……先用 list_events 看看最新的小本本好不好？"
+    return f"🗑️ 小汐把这条划掉啦：{deleted['title']}（{deleted['event_date']}）。不会再记回来的。"

@@ -16,7 +16,7 @@ from tools.memory import (
 )
 from tools.diary import write_diary, read_diary, set_db_conn as set_diary_db_conn
 from tools.tarot import tarot
-from tools.events import create_event, list_events
+from tools.events import create_event, list_events, update_event, delete_event
 
 
 def reset_tool_globals() -> None:
@@ -60,4 +60,6 @@ def get_all_tools() -> list:
         tarot,
         create_event,
         list_events,
+        update_event,
+        delete_event,
     ]

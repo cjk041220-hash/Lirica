@@ -32,7 +32,12 @@ log = get_logger(__name__)
 #     （prune_checkpoints 每 2h 裁剪、30 天清线程）和 memories（LLM
 #     上下文专用）完全解耦：档案仅供历史列表与回看，永远不会被
 #     读进 LLM 上下文（只有 chat.py 写入、sessions.py 读取）
-SCHEMA_VERSION = 8
+# v9: 事件软删墓碑 — dedupe 部分唯一索引谓词从 status='active' 扩为
+#     status IN ('active','deleted')。日历面板的「删除」从此是墓碑：
+#     同 key 重建（LLM 重新提取 / 检测器再生成）会被索引挡下，不再
+#     「删了又偷偷长回来」。archived 行仍不在谓词内——「翻篇了明年
+#     再来」（生日/周年/台风的年度再生成）语义不变
+SCHEMA_VERSION = 9
 
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
@@ -290,12 +295,14 @@ EVENTS_SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_events_status_date
         ON events(status, event_date);
 
-    -- 活跃行 dedupe_key 部分唯一索引：防止检测器重复生成同一事件
+    -- dedupe_key 部分唯一索引：防止检测器重复生成同一事件
     -- （天气 7 日预报每天扫一遍、生日每天扫一遍、LLM 反复提取）；
-    -- 归档行不阻塞明年/下次重新生成。
+    -- 覆盖 active + deleted（v9 墓碑）：用户在日历删掉的事件，
+    -- LLM/检测器用同 key 重建会被挡下（「删了就是删了」）；
+    -- 归档行不在谓词内 → 不阻塞明年/下次重新生成。
     -- 与 utils.events.create_event 的 ON CONFLICT 推断条件必须一致。
     CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe
-        ON events(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'active';
+        ON events(dedupe_key) WHERE dedupe_key IS NOT NULL AND status IN ('active', 'deleted');
 """
 
 
@@ -428,6 +435,33 @@ async def _migrate_v8(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[8] = _migrate_v8
+
+
+# ── v9 迁移：事件软删墓碑 ─────────────────────────────────────
+
+async def _migrate_v9(conn: aiosqlite.Connection) -> None:
+    """v9: dedupe 部分唯一索引谓词扩至 status IN ('active','deleted')。
+
+    背景：日历面板引入软删（status='deleted'）。旧谓词只覆盖 active，
+    被删事件的 dedupe_key 失去约束 → LLM 重新提取 / 检测器再生成会
+    把删掉的事原样建回来（「删了又偷偷长回来」，用户体验上的打架）。
+    扩谓词后墓碑行继续占位挡重建；archived 仍不在谓词内，生日/周年
+    /台风的「明年再来」语义不变（events.py 注释与 test_events 钉死）。
+
+    SQLite 不支持 ALTER INDEX：drop + recreate。幂等——新库走
+    EVENTS_SCHEMA_SQL（已同步新谓词），老库走本迁移，两者终态一致。
+    """
+    await conn.execute("DROP INDEX IF EXISTS idx_events_dedupe")
+    await conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe
+           ON events(dedupe_key)
+           WHERE dedupe_key IS NOT NULL AND status IN ('active', 'deleted')"""
+    )
+    await conn.commit()
+    log.info("迁移 v9 完成：事件 dedupe 索引已覆盖墓碑行（active + deleted）")
+
+
+_migrations[9] = _migrate_v9
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

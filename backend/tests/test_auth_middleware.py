@@ -195,15 +195,20 @@ async def test_push_rate_limited():
 
 
 def _all_mounted_api_paths() -> set[str]:
-    """收集所有挂载到 /api 前缀下的路由路径（与 server.py 的路由器清单一致）。"""
+    """收集所有挂载到 /api 前缀下的路由路径（与 server.py 的路由器清单一致）。
+
+    ⚠️ 新增 router 必须加进本清单——漏加时元测试看不见新路由，
+    漏登记认证会静默绿（本清单与 server.py 的 include_router 手动同步）。
+    """
     from api.routes.chat import router as chat_router
     from api.routes.config import router as config_router
+    from api.routes.events import router as events_router
     from api.routes.push import router as push_router
     from api.routes.sessions import router as sessions_router
     from api.routes.status import router as status_router
 
     paths = set()
-    for router in (chat_router, config_router, push_router, sessions_router, status_router):
+    for router in (chat_router, config_router, events_router, push_router, sessions_router, status_router):
         for route in router.routes:
             paths.add("/api" + route.path)
     return paths

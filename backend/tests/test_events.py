@@ -646,3 +646,159 @@ async def test_memory_echo_event_archives_next_day(events_db):
     await events_db.execute("UPDATE events SET event_date = ?", (yesterday,))
     await events_db.commit()
     assert await ev.archive_expired() == 1
+
+
+# ── 软删墓碑（v9）与日历写面 ─────────────────────────────────
+
+
+async def test_tombstone_blocks_recreate(events_db):
+    """删掉的事件成墓碑：同 key 重建被挡（LLM 重新提取/检测器再生成）。
+
+    v9 的核心承诺——「删了就是删了」，不与归档（翻篇可再生）混淆。
+    """
+    saved, _ = await ev.create_event("期中考试", "exam", "2026-08-01")
+    deleted = await ev.soft_delete_event(saved["id"])
+    assert deleted is not None and deleted["status"] == "active"  # 返回被删前的行
+
+    again, created = await ev.create_event("期中考试", "exam", "2026-08-01")
+    assert again is None and created is False          # 墓碑挡下，三态之 (None, False)
+
+    cursor = await events_db.execute("SELECT COUNT(*), status FROM events GROUP BY status")
+    rows = await cursor.fetchall()
+    assert rows == [(1, "deleted")]                    # 始终只有一行，且是墓碑
+
+
+async def test_tombstone_force_revives_same_id(events_db):
+    """force=True 原 id 复活（日历语义：同标题同日重加 = 反悔删除）。"""
+    saved, _ = await ev.create_event("期中考试", "exam", "2026-08-01", memo="旧备注")
+    await ev.soft_delete_event(saved["id"])
+
+    revived, created = await ev.create_event(
+        "期中考试", "exam", "2026-08-01",
+        source="user", memo="新备注", force=True,
+    )
+    assert created is True
+    assert revived["id"] == saved["id"]                # 原 id 翻回
+    assert revived["status"] == "active"
+    assert revived["source"] == "user"                 # 复活后的来源是新入口
+    assert revived["memo"] == "新备注"                 # 内容覆盖
+
+    cursor = await events_db.execute("SELECT COUNT(*) FROM events")
+    assert (await cursor.fetchone())[0] == 1
+
+
+async def test_soft_delete_not_found(events_db):
+    """删不存在的 id → None，不抛。"""
+    assert await ev.soft_delete_event("nonexistent12345") is None
+
+
+async def test_soft_delete_readonly_raises(events_db):
+    """系统派生的生日/纪念日拒删（人删了也会和下一轮自动生成打架）。"""
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at, dedupe_key) VALUES ('b1', '冷冷的生日', 'birthday', "
+        "'2026-06-03', 'high', 'profile', 'active', '2026-07-25 10:00', "
+        "'profile:birthday:2026-06-03')"
+    )
+    await events_db.commit()
+    with pytest.raises(ValueError):
+        await ev.soft_delete_event("b1")
+
+
+async def test_update_event_fields(events_db):
+    """白名单字段更新；空串显式清空 end_date / memo。"""
+    saved, _ = await ev.create_event(
+        "台北旅行", "trip", "2026-08-10",
+        end_date="2026-08-12", memo="要带护照",
+    )
+    updated = await ev.update_event(
+        saved["id"], title="台北自由行", event_date="2026-08-11",
+        end_date="", memo="",
+    )
+    assert updated["title"] == "台北自由行"
+    assert updated["event_date"] == "2026-08-11"
+    assert updated["end_date"] is None                 # 空串 = 显式清空
+    assert updated["memo"] is None
+
+
+async def test_update_event_keeps_dedupe_key(events_db):
+    """编辑不改写 dedupe_key：key 是事件身份，换了会破坏墓碑不变式。"""
+    saved, _ = await ev.create_event("期中考试", "exam", "2026-08-01")
+    await ev.update_event(saved["id"], title="期末考试", event_date="2026-08-20")
+    cursor = await events_db.execute("SELECT dedupe_key FROM events WHERE id = ?", (saved["id"],))
+    assert (await cursor.fetchone())[0] == "llm:期中考试:2026-08-01"  # 原 key 不动
+
+
+async def test_update_event_readonly_raises(events_db):
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES ('a1', '相识周年的日子', 'anniversary', "
+        "'2026-08-03', 'high', 'profile', 'active', '2026-07-25 10:00')"
+    )
+    await events_db.commit()
+    with pytest.raises(ValueError):
+        await ev.update_event("a1", title="改不动的")
+
+
+async def test_update_event_bad_date_raises(events_db):
+    saved, _ = await ev.create_event("考试", "exam", "2026-08-01")
+    with pytest.raises(ValueError):
+        await ev.update_event(saved["id"], event_date="下周三")
+    with pytest.raises(ValueError):
+        await ev.update_event(saved["id"], end_date="2026-07-01")  # 早于开始
+
+
+async def test_update_event_archived_to_future_revives(events_db):
+    """归档行被改到未来日期 → 自动翻回 active（反悔改期）。"""
+    await _insert_event(events_db, "e-old", "延期的约定", "2026-07-01", status="archived")
+    updated = await ev.update_event("e-old", event_date="2026-09-01")
+    assert updated["status"] == "active"
+
+
+async def test_update_event_not_found(events_db):
+    assert await ev.update_event("nonexistent12345", title="x") is None
+
+
+async def test_calendar_range_filters_types_and_status(events_db):
+    """日历读面：只给冷冷看日程类 + 只读纪念日，含 archived 回看，排除墓碑与内心戏。"""
+    await _insert_event(events_db, "c1", "期末考试", "2026-08-05")                      # general ✓
+    await _insert_event(events_db, "c2", "期中考过了", "2026-07-10", status="archived")  # archived 回看 ✓
+    await _insert_event(events_db, "c3", "删掉的", "2026-08-06", status="deleted")       # 墓碑 ✗
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES "
+        "('c4', '可能有台风', 'typhoon', '2026-08-07', 'high', 'weather', 'active', '2026-07-25 10:00'),"
+        "('c5', '想起旧事', 'memory_echo', '2026-08-07', 'normal', 'memory', 'active', '2026-07-25 10:00'),"
+        "('c6', '冷冷的生日', 'birthday', '2026-08-08', 'high', 'profile', 'active', '2026-07-25 10:00')"
+    )
+    await events_db.commit()
+
+    events = await ev.list_events_for_calendar("2026-08-01", "2026-08-31")
+    got = {e["id"] for e in events}
+    assert got == {"c1", "c6"}                       # 台风与回声是内心戏，不上日历；7 月归档不在范围
+    events_jul = await ev.list_events_for_calendar("2026-07-01", "2026-07-31")
+    assert {e["id"] for e in events_jul} == {"c2"}   # 过往月份可翻看
+
+
+async def test_calendar_range_intersection_multiday(events_db):
+    """多天事件与查询区间相交即出现（跨月旅行在两个月的日历上都在）。"""
+    await _insert_event(events_db, "t1", "台北旅行", "2026-08-30", end_date="2026-09-02")
+    assert {e["id"] for e in await ev.list_events_for_calendar("2026-08-01", "2026-08-31")} == {"t1"}
+    assert {e["id"] for e in await ev.list_events_for_calendar("2026-09-01", "2026-09-30")} == {"t1"}
+    assert await ev.list_events_for_calendar("2026-09-03", "2026-09-30") == []  # 结束后不再出现
+
+
+async def test_find_similar_active_bidirectional(events_db):
+    """标题互含双向命中，跨日期不泄漏。"""
+    await _insert_event(events_db, "s1", "期中考试", "2026-08-01")
+    # 输入是既有标题的子串
+    hit = await ev.find_similar_active("2026-08-01", "期中")
+    assert [e["id"] for e in hit] == ["s1"]
+    # 输入包含既有标题
+    hit2 = await ev.find_similar_active("2026-08-01", "下周三期中考试")
+    assert [e["id"] for e in hit2] == ["s1"]
+    # 不同日期不命中
+    assert await ev.find_similar_active("2026-08-02", "期中") == []
+    # 已删除的不提示
+    await ev.soft_delete_event("s1")
+    assert await ev.find_similar_active("2026-08-01", "期中") == []

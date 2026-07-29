@@ -15,6 +15,7 @@ from memory.manager import MemoryManager
 from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router, create_llm_from_runtime_config
+from api.routes.events import router as events_router
 from api.routes.push import router as push_router
 from api.routes.sessions import router as sessions_router
 from api.routes.status import router as status_router
@@ -245,6 +246,7 @@ def create_app() -> FastAPI:
     # REST 路由
     app.include_router(chat_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
+    app.include_router(events_router, prefix="/api")
     app.include_router(push_router, prefix="/api")
     app.include_router(sessions_router, prefix="/api")
     app.include_router(status_router, prefix="/api")

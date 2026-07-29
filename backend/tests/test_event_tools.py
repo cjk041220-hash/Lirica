@@ -173,3 +173,76 @@ async def test_create_event_rejects_past_date(events_tool_db):
 
     cursor = await events_tool_db.execute("SELECT COUNT(*) FROM events")
     assert (await cursor.fetchone())[0] == 0
+
+
+# ── update_event / delete_event（日历联动）───────────────────
+
+
+async def test_create_event_respects_tombstone(events_tool_db):
+    """联动剧本 A 的 LLM 半边：冷冷删过的事件，小汐不再偷偷记回来。"""
+    from utils import events as ev
+    from tools.events import create_event
+
+    saved, _ = await ev.create_event("期中考试", "exam", "2026-08-01")
+    await ev.soft_delete_event(saved["id"])
+
+    result = await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
+    assert "删掉过" in result                 # 归因文案，不是「没找到」也不是空转
+    assert "日历" in result                   # 指明恢复路径
+
+    cursor = await events_tool_db.execute("SELECT COUNT(*) FROM events")
+    assert (await cursor.fetchone())[0] == 1  # 没有重建
+
+
+async def test_update_event_happy(events_tool_db):
+    from utils import events as ev
+    from tools.events import update_event
+
+    saved, _ = await ev.create_event("爬山", "trip", "2026-08-08")
+    result = await update_event.ainvoke({
+        "event_id": saved["id"], "event_date": "2026-08-15",
+    })
+    assert "改好啦" in result and "2026-08-15" in result
+
+
+async def test_update_event_not_found_and_readonly(events_tool_db):
+    from tools.events import update_event
+
+    assert "没找到" in await update_event.ainvoke({
+        "event_id": "ffffffffffffffff", "title": "x",
+    })
+
+    await events_tool_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES ('b1', '冷冷的生日', 'birthday', '2026-06-03', "
+        "'high', 'profile', 'active', '2026-07-25 10:00')"
+    )
+    await events_tool_db.commit()
+    assert "改不了" in await update_event.ainvoke({"event_id": "b1", "title": "x"})
+
+
+async def test_delete_event_happy(events_tool_db):
+    from utils import events as ev
+    from tools.events import delete_event, list_events
+
+    saved, _ = await ev.create_event("不去了的约", "appointment", "2026-08-20")
+    result = await delete_event.ainvoke({"event_id": saved["id"]})
+    assert "划掉" in result
+
+    # 划掉后 list_events 不再报给 LLM
+    listing = await list_events.ainvoke({})
+    assert "不去了的约" not in listing
+
+
+async def test_delete_event_not_found_and_readonly(events_tool_db):
+    from tools.events import delete_event
+
+    assert "没找到" in await delete_event.ainvoke({"event_id": "ffffffffffffffff"})
+
+    await events_tool_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES ('a1', '相识周年的日子', 'anniversary', "
+        "'2026-08-03', 'high', 'profile', 'active', '2026-07-25 10:00')"
+    )
+    await events_tool_db.commit()
+    assert "划不掉" in await delete_event.ainvoke({"event_id": "a1"})

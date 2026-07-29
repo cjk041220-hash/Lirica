@@ -18,7 +18,7 @@ from utils.security import bearer_token_matches as _token_matches
 # 登记纪律回归测试：tests/test_auth_middleware.py 遍历所有挂载路由，
 # 漏登记会直接被测试拦下（/api/diaries 就曾这样漏过）
 _PROTECTED_PREFIXES = (
-    "/api/chat", "/api/config", "/api/memories", "/api/push",
+    "/api/chat", "/api/config", "/api/events", "/api/memories", "/api/push",
     "/api/status", "/api/diaries", "/api/sessions",
 )
 
@@ -41,6 +41,7 @@ _RATE_LIMITS = {
     # 温度滑杆已做 250ms 前端防抖。10 次/分钟对设置页交互过紧
     # （连点模型+风格+拖温度即可触发 429），30 足够防滥用。
     "/api/config": 30,
+    "/api/events": 30,        # 日历面板：30 次/分钟（打开拉一次 + 聊完重拉 + CRUD）
     "/api/memories": 30,      # 记忆管理：30 次/分钟
     "/api/push": 30,          # 推送订阅/已读：30 次/分钟
     # 状态/日记只读：30 次/分钟。前端只在挂载 + 回前台 + 聊完天时拉取，
