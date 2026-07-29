@@ -67,8 +67,8 @@ docker compose up -d
 >   收紧为 700/600（Linux 生效；Windows 开发机请依赖 NTFS 权限/全盘加密）；
 >   请勿将其置于可被他人读取的位置，也不要提交入 git。
 > - **密钥轮换**：若 `.env` 曾以过宽权限（如 644）存放或被他人读取过，
->   应视为已泄露——请轮换 DeepSeek / 高德 / Tavily 密钥与 VAPID 私钥，
->   并在 Linux 服务器上执行 `chmod 600 backend/config/.env`。
+>   应视为已泄露——请轮换 DeepSeek / 高德 / 谷歌地图 / Tavily 密钥与
+>   VAPID 私钥（五把），并在 Linux 服务器上执行 `chmod 600 backend/config/.env`。
 
 ## API 接口
 
@@ -93,6 +93,10 @@ docker compose up -d
 | `/api/memories/{id}` | DELETE | 删除一条记忆 |
 | `/api/memories/export` | GET | 导出所有记忆（JSON） |
 | `/api/memories/clear` | POST | 清空所有记忆（需 `?confirm=true`，自动备份） |
+| `/api/events` | GET | 日历月范围查询（`?from=&to=`，日程类白名单 + archived 回看） |
+| `/api/events` | POST | 日历创建事件（`source=user`，与 LLM 工具共享去重；409 = 相似提示） |
+| `/api/events/{id}` | POST | 编辑事件（白名单字段；生日/纪念日只读 403） |
+| `/api/events/{id}` | DELETE | 软删事件（置墓碑，挡住 LLM/检测器重建） |
 | `/docs` | GET | Swagger 文档 |
 
 > `/docs` 仅在未设置 `XIAOXI_API_TOKEN` 时开放（设了 token = 生产部署，docs 自动关闭，
@@ -107,18 +111,27 @@ docker compose up -d
 ├── docker-compose.yml              # Docker Compose 编排
 ├── docs/                           # 文档
 │   ├── PROJECT_SOURCE.md           # 完整技术文档
-│   ├── PRODUCT_REPORT_2026-07-26.md  # 全项目检查产品报告（3 轮测试 + 5 路审查 + 修复方案）
+│   ├── CHECKUP_2026-07-29.md       # 多维度全面体检报告（诊断 + 治疗回执）
+│   ├── CHECKUP_2026-07-29_round2.md  # 第二轮复查（5 视角独立取证，治疗 9/9 属实）
+│   ├── PRODUCT_REPORT_2026-07-27.md  # 产品报告（最新一轮）
+│   ├── PRODUCT_REPORT_2026-07-26.md  # 产品报告（3 轮测试 + 5 路审查 + 修复方案）
 │   ├── PRODUCT_AUDIT_2026-07-25.md  # 全项目代码审计报告
+│   ├── RETROSPECTIVE_2026-07-27.md  # 复盘
+│   ├── CHANGELOG.md                # 变更摘要
 │   ├── PROMPT_GUIDE.md             # 提示词指南
-│   └── PRIVACY.md                  # 数据与隐私说明
+│   ├── PRIVACY.md                  # 数据与隐私说明
+│   ├── checkup-2026-07-29/         # 体检截图
+│   ├── mockups/                    # 界面设计稿（日历面板 v2 已验收）
+│   └── superpowers/specs/          # 设计文档（日历 + 地图双引擎）
 │
 ├── scripts/                        # 辅助脚本
 │   ├── gen_assets.py               # 生成 PWA 图标 + 立绘 PNG→WebP 压缩
 │   ├── cleanup_test_residue.py     # 清理测试残留数据
 │   ├── verify_tools.py             # 工具联通性实测
 │   ├── trim_sprites.py             # 立绘预处理
+│   ├── fix_sleeping_sprite.py      # 睡姿立绘定位修正（一次性工具）
 │   └── e2e/
-│       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，17 交互点）
+│       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，29 交互点含日历剧本）
 │       └── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
 │
 ├── backend/
@@ -281,13 +294,20 @@ docker compose up -d
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `DEEPSEEK_API_KEY` | ✅ | DeepSeek API Key |
+| `DEEPSEEK_BASE_URL` | ❌ | 默认 `https://api.deepseek.com/v1` |
 | `DEEPSEEK_MODEL` | ❌ | 默认 `deepseek-v4-flash` |
-| `AMAP_API_KEY` | ❌ | 高德地图 Key（地图/路线功能需要） |
+| `AMAP_API_KEY` | ❌ | 高德地图 Key（内地地图/路线功能需要） |
+| `GOOGLE_MAPS_API_KEY` | ❌ | 谷歌地图 Key（港澳/海外 POI；双引擎自动切换，留空则优雅降级） |
 | `TAVILY_API_KEY` | ❌ | Tavily Key（搜索功能需要） |
 | `XIAOXI_API_TOKEN` | ❌ | API 认证 Token（部署公网时设置） |
+| `XIAOXI_ALLOW_INSECURE` | ❌ | 显式承担「无 token 绑定非回环地址」风险（仅受控内网；默认 false = fail-closed） |
 | `CORS_ORIGINS` | ❌ | 允许的前端来源，逗号分隔 |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | ❌ | Web Push 密钥（不填则推送不可用，前端开关自动灰态） |
+| `VAPID_CLAIM_MAILTO` | ❌ | VAPID 声明联系邮箱（默认占位值即可） |
 | `TRUST_PROXY` | ❌ | 是否在可信反代后信任 X-Forwarded-For（限流 IP 归因） |
+| `LOG_FILE` | ❌ | 日志落盘路径（留空 = 仅 stderr；10MB×7 轮转） |
+| `LOG_LEVEL` | ❌ | 日志级别（默认 INFO） |
+| `BACKUP_SCRUB_SENSITIVE` | ❌ | 备份剔除生理期 + 对话档案（默认 false = 完整备份） |
 
 > **SSE 流协议**（`/api/chat/stream`）：每行 `data: <json>\n\n`，JSON 为 `{"content":"增量"}` / `{"type":"tool_start"|"tool_end",...}` / `{"type":"state","state":"happy"}`，结尾 `data: [DONE]\n\n` 后关流。
 

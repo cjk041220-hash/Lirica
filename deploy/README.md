@@ -3,7 +3,7 @@
 把本服务从「本机 :8000」搬到「域名 + HTTPS」的最小步骤。所有命令在仓库根执行。
 
 ## 0. 上线前安全前置（必读）
-- **确认 Gitee 仓库可见性**：`backend/database/migrations.py` 的 v4 迁移种子含真实生理期日期，已在 git 历史里。若仓库曾/将公开，按已泄露处理（`git filter-repo` 清历史 + 种子改占位日期），并**轮换四把密钥**（DeepSeek / 高德 / Tavily / VAPID 私钥）。VAPID 私钥泄露 = 他人可冒充小汐向你设备推通知。
+- **确认 Gitee 仓库可见性**：`backend/database/migrations.py` 的 v4 迁移种子与 `backend/tests/test_cycle_tracker.py` 含真实生理期日期，已在 git 历史里。若仓库曾/将公开，按已泄露处理（源码占位化 + `git filter-repo` 清历史 + force-push），并**轮换五把密钥**（DeepSeek / 高德 / 谷歌地图 / Tavily / VAPID 私钥）。VAPID 私钥泄露 = 他人可冒充小汐向你设备推通知。
 - 在 `backend/config/.env` 设强 `XIAOXI_API_TOKEN`（`python -c "import secrets;print(secrets.token_hex(32))"`）；或留空交给入口脚本自动生成（见 §1）。
 
 ## 1. 构建并启动容器
@@ -23,6 +23,7 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 
 ## 3. .env 收尾
 - `CORS_ORIGINS=https://你的域名`（精确域名，勿用 `*`）。
+- 可选 `GOOGLE_MAPS_API_KEY`：港澳/海外 POI 搜索（内地自动走高德，双引擎无需其他配置）；留空 = 港澳/海外查询回提示文案，不影响启动。
 - 可选 `BACKUP_SCRUB_SENSITIVE=true`：让应用内置备份剔除生理期 + 对话档案（分享/演示前更安心）。
 
 ## 4. 验证
@@ -33,6 +34,13 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 ## 5. 数据与备份
 - 数据在 named volume `xiaoxi-data`（即 `userdata.db` + `checkpoints.db`）。可 `docker compose down` 不丢数据；要导出：`docker cp xiaoxi:/app/backend/data ./backup`。
 - 应用自身每 2h 用 SQLite Online Backup API 备份到 `data/backups/`（保留 5 份）；如需更长窗口见体检报告 REL-03。
+- **迁移 v9 紧急回退**（仅「回代码不回库」时需要：把带墓碑机制的新代码退回旧版，而库已升到 v9）：
+  ```bash
+  sqlite3 userdata.db "DROP INDEX idx_events_dedupe; \
+    CREATE UNIQUE INDEX idx_events_dedupe ON events(dedupe_key) \
+    WHERE dedupe_key IS NOT NULL AND status = 'active';"
+  ```
+  正常升级/回滚整个镜像无需此步（代码与迁移始终同批上线）。
 
 ## 容器加固说明
 `docker-compose.yml` 已 `cap_drop: [ALL]` + `no-new-privileges`（Python web 无需任何 capability，收敛逃逸面）。资源上限 `mem_limit/cpus` 默认**注释**——请按 `docker stats` 实测 RSS 后填，过低会 OOMKill 致中断，故不替你用拍脑袋的数字。

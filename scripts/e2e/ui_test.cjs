@@ -69,8 +69,8 @@ const apiFails = [];
     });
     sprite.ok && sprite.webp ? ok('角色立绘加载（WebP，naturalWidth>0）') : bad('角色立绘', JSON.stringify(sprite));
 
-    const topBtns = await page.locator('button[aria-label="设置"], button[aria-label="小汐的记忆"], button[aria-label="以往的对话"]').count();
-    topBtns >= 3 ? ok('顶栏入口按钮存在（设置+记忆+历史）') : bad('顶栏按钮', topBtns);
+    const topBtns = await page.locator('button[aria-label="设置"], button[aria-label="小汐的记忆"], button[aria-label="以往的对话"], button[aria-label="小汐的日历"]').count();
+    topBtns >= 4 ? ok('顶栏入口按钮存在（设置+记忆+历史+日历，2+2 分组）') : bad('顶栏按钮', topBtns);
 
     // ── 设置面板 ──
     await page.locator('button[aria-label="设置"]').click();
@@ -259,6 +259,49 @@ const apiFails = [];
       (hReopen > hAfter + 40) ? ok(`反向拖拽展开：${hAfter}px → ${hReopen}px`) : bad('反向拖拽', `${hAfter}->${hReopen}`);
     } else bad('拖拽把手', '无 boundingBox');
     await shot(page, '07-final');
+
+    // ── 日历面板（第四面板：创建 pill / 删除墓碑 / Esc 层级，纯 CRUD 零 LLM）──
+    await page.locator('button[aria-label="小汐的日历"]').click();
+    await page.waitForSelector('[role="dialog"][aria-label="小汐的日历"]', { timeout: 5000 });
+    ok('打开日历面板（dialog 语义 + 焦点圈定挂载）');
+    await shot(page, '08-calendar-open');
+
+    // 切到下个月点 15 日（必为未来日期，避开当月月末越界边角）
+    await page.locator('button[title="下个月"]').click();
+    await page.waitForTimeout(350);
+    const nextMonthNum = await page.evaluate(() => {
+      const t = new Intl.DateTimeFormat('sv', { timeZone: 'Asia/Hong_Kong' }).format(new Date()).slice(0, 10);
+      return (t.slice(5, 7) * 1) % 12 + 1;
+    });
+    await page.locator(`button[aria-label^="${nextMonthNum}月15日"]`).click();
+    await page.waitForSelector('[role="dialog"][aria-label$="的安排"]', { timeout: 3000 });
+    ok('点日期 → 日期详情 sheet 打开');
+
+    // 记一件事 → pill 渲染（POST /api/events 200，source=user）
+    await page.locator('button:has-text("＋ 记一件事")').click();
+    await page.fill('input[placeholder="例如：期中考试"]', 'E2E测试爬山');
+    await page.locator('button:has-text("记好啦 ✨")').click();
+    await page.waitForTimeout(900);
+    (await page.locator('text=E2E测试爬山').count()) >= 1
+      ? ok('日历创建事件 → 详情/格子渲染（一本账 source=user 落库）')
+      : bad('日历创建', '事件未出现');
+    await shot(page, '09-calendar-pill');
+
+    // 删除两次确认 → 墓碑（DELETE 200 → pill 消失）
+    await page.locator('button[title="删除"]').first().click();
+    await page.locator('button[title="删除"]').first().click();
+    await page.waitForTimeout(900);
+    (await page.locator('text=E2E测试爬山').count()) === 0
+      ? ok('删除（两次确认 → 墓碑）→ 事件消失')
+      : bad('日历删除', '事件仍在');
+
+    // Esc 层级：详情 sheet → 面板
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(350);
+    (await page.locator('[role="dialog"][aria-label="小汐的日历"]').count()) === 0
+      ? ok('Esc 两级关闭（详情 → 面板）')
+      : bad('Esc 关闭', '面板仍在');
 
     // ── 健康度 ──
     consoleErrors.length === 0 ? ok('无控制台 / 页面错误') : bad('控制台错误', consoleErrors.slice(0, 4).join(' | '));
