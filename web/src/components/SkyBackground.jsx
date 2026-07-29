@@ -1,5 +1,19 @@
-import { useMemo } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { getTimePeriod } from '../utils/time'
+
+// 距下一个时段切换点（HKT 5/8/17/20 点整）还有多少毫秒。
+// 天空此前没有自己的钟，换时段全靠外部轮询「顺带」重渲染（体检 🟡-5）；
+// memo 化之后父级重渲染被截断，必须自持这个定时器，否则天色永冻
+const PERIOD_BOUNDARIES = [5, 8, 17, 20]
+function msToNextPeriodBoundary() {
+  const now = new Date()
+  const hkt = new Date(now.getTime() + 8 * 3600000)  // HKT = UTC+8，借 UTC 字段读
+  const hour = hkt.getUTCHours()
+  const next = PERIOD_BOUNDARIES.find(b => b > hour) ?? PERIOD_BOUNDARIES[0] + 24
+  const minutesLeft = (next - hour) * 60 - hkt.getUTCMinutes()
+  return Math.max(minutesLeft, 1) * 60000
+    - hkt.getUTCSeconds() * 1000 - hkt.getUTCMilliseconds()
+}
 
 // 四套天色叠层 + 交叉淡入淡出（CSS 不能让 background-image 过渡，故叠层切透明度）。
 // 调色取自然天象的暖冷平衡，避开「近黑+霓虹」「奶油+赭石」等套路。
@@ -146,8 +160,15 @@ function Clouds({ period }) {
   )
 }
 
-export default function SkyBackground() {
+function SkyBackground() {
   const period = getTimePeriod()
+
+  // 时段自持钟：睡到下个切换点醒来一次，再看下下个（每次渲染重排）
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setTimeout(() => setTick(x => x + 1), msToNextPeriodBoundary())
+    return () => clearTimeout(t)
+  })
 
   return (
     <div className="absolute inset-0 z-0">
@@ -174,3 +195,6 @@ export default function SkyBackground() {
     </div>
   )
 }
+
+// memo：无 props，重渲染只由内部时段钟触发（见上）
+export default memo(SkyBackground)

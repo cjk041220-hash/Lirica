@@ -11,6 +11,9 @@
   --color-wood: #D4C5B3;
   --color-wood-light: #E8D5B7;
   --color-wood-border: #C4B5A3;
+  /* 日历三色语义（设计稿 v2 验收色；另一色复用 healing-aqua） */
+  --color-honey: #D9A45B;        /* ✦ 小汐从聊天里记的 */
+  --color-clay-rose: #C9828C;    /* 很重要的事 */
   --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
@@ -112,6 +115,19 @@
    一直把 mx-auto 压成 0，桌面宽屏下 430px 房间列永远贴左，无法居中 */
 @layer base {
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* 键盘用户的焦点环基线（体检点名的焦点不可见）：疗愈绿环，
+     惠及全部面板、格子、按钮与输入框 */
+  :focus-visible { outline: 2px solid var(--color-healing-aqua); outline-offset: 2px; }
+}
+/* 系统「减弱动态效果」→ 所有动画/过渡静止化（体检 🟡-1）：
+   状态切换仍在，只是不再动——前庭障碍用户也能安心住着这个房间 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 html, body, #root { height: 100%; overflow: hidden; }
 

@@ -4,7 +4,9 @@ import ChatPanel from './components/ChatPanel'
 import ConfigPanel from './components/ConfigPanel'
 import MemoriesPanel from './components/MemoriesPanel'
 import SessionsPanel from './components/SessionsPanel'
+import CalendarPanel from './components/CalendarPanel'
 import IconBook from './assets/icons/IconBook'
+import IconCalendar from './assets/icons/IconCalendar'
 import IconHistory from './assets/icons/IconHistory'
 import IconSettings from './assets/icons/IconSettings'
 import { useChat } from './hooks/useChat'
@@ -35,6 +37,7 @@ export default function App() {
   const [showConfig, setShowConfig] = useState(false)
   const [showMemories, setShowMemories] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
+  const [showCalendar, setShowCalendar] = useState(false)
   // 页面打开时即判定深夜——即使立绘状态后续因聊天流改变，
   // 深夜侧初始沉睡的判断基准是"打开页面的那一刻是不是深夜"。
   const [openedAtLateNight] = useState(isLateNight)
@@ -104,8 +107,9 @@ export default function App() {
     <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-warm-paper select-none sm:shadow-[0_24px_90px_-16px_rgba(0,0,0,0.6),0_4px_24px_rgba(0,0,0,0.35)]">
       <RoomScene characterState={displayState} />
 
-      {/* 顶栏控制台：三个入口收进顶部居中的一条磨砂胶囊，
-          细线分隔——奇数个图标居中摆最平衡，也浮在夜空上而非压窗框角 */}
+      {/* 顶栏控制台：四个入口收进顶部居中的一条磨砂胶囊。
+          四图标用 2+2 分组（回望类「对话/记忆」| 打点类「日历/设置」），
+          组间一条细线——偶数图标靠分组线保持胶囊的对称平衡 */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.22)]">
         <button
           onClick={() => setShowSessions(true)}
@@ -114,7 +118,6 @@ export default function App() {
         >
           <IconHistory size={16} />
         </button>
-        <span aria-hidden className="w-px h-3.5 bg-ink-tea/12" />
         <button
           onClick={() => setShowMemories(true)}
           className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
@@ -122,7 +125,14 @@ export default function App() {
         >
           <IconBook size={16} />
         </button>
-        <span aria-hidden className="w-px h-3.5 bg-ink-tea/12" />
+        <span aria-hidden className="w-px h-3.5 bg-ink-tea/15 mx-0.5" />
+        <button
+          onClick={() => setShowCalendar(true)}
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          aria-label="小汐的日历"
+        >
+          <IconCalendar size={16} />
+        </button>
         <button
           onClick={() => setShowConfig(true)}
           className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
@@ -136,6 +146,7 @@ export default function App() {
       {showConfig && <ConfigPanel config={config} push={push} onClose={() => setShowConfig(false)} />}
       {showMemories && <MemoriesPanel onClose={() => setShowMemories(false)} />}
       {showSessions && <SessionsPanel chat={chat} onClose={() => setShowSessions(false)} />}
+      {showCalendar && <CalendarPanel onClose={() => setShowCalendar(false)} lastDoneAt={chat.lastDoneAt} />}
     </div>
   )
 }

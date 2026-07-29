@@ -17,7 +17,13 @@ export function usePush() {
       const res = await apiFetch('/api/push/unread')
       if (!res.ok) return
       const data = await res.json()
-      setUnread(Array.isArray(data.messages) ? data.messages : [])
+      // 函数式更新 + id 浅比较 bail-out：未读没变就不换新引用，
+      // 否则 60s 轮询每次都逼整棵 App 重渲染一次（体检 🟠-4）
+      setUnread(prev => {
+        const next = Array.isArray(data.messages) ? data.messages : []
+        if (next.length === prev.length && next.every((m, i) => m.id === prev[i].id)) return prev
+        return next
+      })
     } catch (e) {
       console.warn('[usePush] fetch unread failed:', e)
     }

@@ -46,6 +46,10 @@ export function useChat() {
   const [messages, setMessages] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [characterState, setCharacterState] = useState('idle')
+  // 每完成一条助手消息就递增的时间戳：日历面板据此「聊完即刷」
+  //（这轮对话里小汐可能记下/改过/删过日程）。sendMessage 是零依赖
+  // useCallback，外部拿不到回调，只能走这种返回值通道
+  const [lastDoneAt, setLastDoneAt] = useState(0)
   const abortRef = useRef(null)
   const happyTimerRef = useRef(null)  // 「刚聊完→开心」的回落定时器
   // 会话 ID：state（供 SessionsPanel 高亮当前会话）+ 镜像 ref
@@ -322,6 +326,7 @@ export function useChat() {
         // 聊成功 → 小汐开心一阵再归于平静；失败 → 难过一阵再归于平静
         clearTimeout(happyTimerRef.current)
         if (succeeded) {
+          setLastDoneAt(Date.now())
           setCharacterState('happy')
           happyTimerRef.current = setTimeout(() => setCharacterState('idle'), 6000)
         } else {
@@ -412,5 +417,6 @@ export function useChat() {
   return {
     messages, isStreaming, characterState, sendMessage, stopStreaming,
     receiveProactive, userMsgCount, sessionId, newSession, switchSession,
+    lastDoneAt,
   }
 }

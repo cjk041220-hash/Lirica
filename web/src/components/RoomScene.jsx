@@ -1,7 +1,12 @@
+import { memo } from 'react'
 import SkyBackground from './SkyBackground'
 import CharacterSprite from './CharacterSprite'
 
-export default function RoomScene({ characterState = 'idle' }) {
+// memo：props 只有 characterState（原始值）。聊天流式期间 App 每个
+// token 都重渲染，不 memo 的话整间房（含 46 颗星 + 立绘 6 个 state）
+// 跟着空转——体检 🟠-3。天空自带时段钟（SkyBackground 内），
+// 被 memo 截断父级重渲染后仍能按时段切换
+function RoomScene({ characterState = 'idle' }) {
   return (
     <div className="absolute inset-0 overflow-hidden">
       <SkyBackground />
@@ -50,3 +55,5 @@ export default function RoomScene({ characterState = 'idle' }) {
     </div>
   )
 }
+
+export default memo(RoomScene)

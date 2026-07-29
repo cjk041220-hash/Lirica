@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, memo } from 'react'
 // 戳一戳文案池单一真相源（E2E 共用 src/poke-lines.json，改一处即可，免双份同步）
 import POKE_LINES from '../poke-lines.json'
 
@@ -24,7 +24,8 @@ const POKE_COOLDOWN_MS = 6000    // 冷却：防连戳刷屏
 const BUBBLE_MS = 2800           // 气泡停留
 const SLEEPY_OVERRIDE_MS = 4000  // 沉睡被戳 → halfawake 的临时覆盖时长
 
-export default function CharacterSprite({ state = 'idle', pokeable = true }) {
+// memo：props 皆原始值；流式聊天逐 token 的 App 重渲染不再穿透进来
+export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', pokeable = true }) {
   const [displayState, setDisplayState] = useState(state)
   const [transitioning, setTransitioning] = useState(false)
   const [bubble, setBubble] = useState(null)           // { id, text }
@@ -169,4 +170,6 @@ export default function CharacterSprite({ state = 'idle', pokeable = true }) {
       </div>
     </div>
   )
-}
+})
+
+export default CharacterSprite
