@@ -526,7 +526,7 @@ async def daily_morning_greeting():
         weather_part = "小汐今天没查到天气信息"
 
     # 今日日程（日历白名单过滤）：早安顺口提今天的事，标了很重要的
-    # 认真说一次。明天的事归 21:00 前夜提醒管，早安不越界抢话。
+    # 认真说一次。明天的事归 23:00 前夜提醒管，早安不越界抢话。
     # 失败只省略本段，不拖累早安（同天气段的降级纪律）
     schedule_part = ""
     try:
@@ -589,7 +589,7 @@ async def daily_morning_greeting():
 
 
 async def daily_evening_reminder():
-    """每日 21:00 HKT 前夜提醒：明天有日程就关心一句，没有就安静。
+    """每日 23:00 HKT 前夜提醒：明天有日程就关心一句，没有就安静。
 
     与主动消息的区别：主动消息是「随兴搭话」（有 4h 间隔 + 概率闸门，
     heartbeat.py:167-193），提醒是「答应过冷冷的惦记」，必须可靠——
@@ -837,11 +837,12 @@ def register_jobs(app=None) -> None:
         replace_existing=True,
         misfire_grace_time=3600,  # 1小时宽容窗口，防止Docker重启错过
     )
-    # 前夜提醒：每日 21:00 HKT（明日有日程才出声；独立于主动消息闸门）
+    # 前夜提醒：每日 23:00 HKT（明日有日程才出声；独立于主动消息闸门。
+    # 冷冷是夜猫子，21 点提醒太早——23 点才是她的「该收尾准备明天了」）
     scheduler.add_job(
         daily_evening_reminder,
         "cron",
-        hour=21,
+        hour=23,
         minute=0,
         timezone="Asia/Hong_Kong",
         id="daily_evening_reminder",
