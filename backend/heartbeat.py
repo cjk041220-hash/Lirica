@@ -525,10 +525,31 @@ async def daily_morning_greeting():
     else:
         weather_part = "小汐今天没查到天气信息"
 
+    # 今日日程（日历白名单过滤）：早安顺口提今天的事，标了很重要的
+    # 认真说一次。明天的事归 21:00 前夜提醒管，早安不越界抢话。
+    # 失败只省略本段，不拖累早安（同天气段的降级纪律）
+    schedule_part = ""
+    try:
+        from utils import events as events_mgr
+        today_iso = now_dt.date().isoformat()
+        todays = await events_mgr.list_events_for_calendar(today_iso, today_iso)
+        if todays:
+            ev_lines = [
+                f"- 「{ev['title']}」" + ("（标了很重要）" if ev.get("severity") == "high" else "")
+                for ev in todays
+            ]
+            schedule_part = (
+                "\n今天冷冷有这些安排：\n" + "\n".join(ev_lines)
+                + "\n在问候里自然提一下就好，重要的事认真说一次，别排队念清单。\n"
+            )
+    except Exception as e:
+        log.warning("早安问候：获取今日日程失败，省略日程段: %s", e)
+
     prompt_text = (
         f"今天是{today}，早上 8 点。\n"
         f"{weekend_part}"
-        f"{weather_part}\n\n"
+        f"{weather_part}\n"
+        f"{schedule_part}\n"
         f"请给冷冷发一条早安问候消息。要求：\n"
         f"1. 包含早安问候\n"
         f"2. 自然地提到天气信息（如果有的话）\n"
@@ -562,6 +583,81 @@ async def daily_morning_greeting():
     await _store_and_push_proactive(content, label="早安消息")
 
     log.info("早安问候任务完成")
+
+
+# ── 前夜提醒 ──────────────────────────────────────────────────
+
+
+async def daily_evening_reminder():
+    """每日 21:00 HKT 前夜提醒：明天有日程就关心一句，没有就安静。
+
+    与主动消息的区别：主动消息是「随兴搭话」（有 4h 间隔 + 概率闸门，
+    heartbeat.py:167-193），提醒是「答应过冷冷的惦记」，必须可靠——
+    因此独立成 cron、不走闸门，像早安/日记一样直走统一流水线。
+
+    只看日历可见的日程类（list_events_for_calendar 白名单）：台风的
+    关心走主动消息事件上下文路径，不双重打扰；记忆回声是当天内心戏，
+    不属于「明天的安排」。
+
+    失败处理：外层整体 try 吞异常——提醒任务宁可静默，不可向调度器
+    抛错，更不可在没日程时骚扰。
+    """
+    from utils import events as events_mgr
+
+    try:
+        tomorrow = (datetime.datetime.now(_HKT).date() + datetime.timedelta(days=1)).isoformat()
+        events = await events_mgr.list_events_for_calendar(tomorrow, tomorrow)
+        if not events:
+            log.info("前夜提醒：明日无日程，静默")
+            return
+
+        from langchain_core.messages import SystemMessage, HumanMessage
+        from agent.soul import BASE_PERSONA
+        from providers.deepseek import create_deepseek_llm
+        from api.routes.config import get_current_model
+
+        lines = []
+        for ev in events:
+            tag = "（冷冷标了很重要）" if ev.get("severity") == "high" else ""
+            memo = f"——补充：{ev['memo']}" if ev.get("memo") else ""
+            lines.append(f"- 「{ev['title']}」{tag}{memo}")
+        schedule_text = "\n".join(lines)
+
+        # 防复读：12 小时内已说过的关心不许再说第二遍
+        # （傍晚的主动消息可能已经提过明天，别车轱辘话）
+        anti_repeat = ""
+        recent = await events_mgr.get_recent_proactive_texts(hours=12, limit=3)
+        if recent:
+            said = "\n".join(f"- 「{t[:60]}」" for t in recent)
+            anti_repeat = f"\n\n你最近 12 小时已经说过这些话，不要重复同样的关心：\n{said}"
+
+        prompt = (
+            f"明天冷冷有这些事：\n{schedule_text}"
+            f"{anti_repeat}\n\n"
+            f"用一两句话，以前一天晚上的口吻轻轻提醒冷冷，像「对啦，明天有……，"
+            f"早点准备/早点休息哦」。自然、简短、不唠叨。"
+            f"标了很重要的事，认真说一次，别轻飘飘带过。"
+        )
+
+        content = ""
+        try:
+            llm = create_deepseek_llm(model=get_current_model(), temperature=1.0, max_tokens=150)
+            response = await llm.ainvoke([
+                SystemMessage(content=BASE_PERSONA),
+                HumanMessage(content=prompt),
+            ])
+            content = response.content.strip()
+        except Exception as e:
+            log.warning("前夜提醒：LLM 生成失败，走固定文案（提醒不丢）: %s", e)
+
+        if len(content) > 150:
+            content = content[:150]
+        if len(content) < 5:
+            content = f"对啦冷冷，明天有「{events[0]['title']}」，别忘了哦~"
+
+        await _store_and_push_proactive(content, label="前夜提醒")
+    except Exception as e:
+        log.error("前夜提醒失败: %s", e)
 
 
 # ── 每晚自动日记 ──────────────────────────────────────────────
@@ -740,6 +836,17 @@ def register_jobs(app=None) -> None:
         id="daily_morning_greeting",
         replace_existing=True,
         misfire_grace_time=3600,  # 1小时宽容窗口，防止Docker重启错过
+    )
+    # 前夜提醒：每日 21:00 HKT（明日有日程才出声；独立于主动消息闸门）
+    scheduler.add_job(
+        daily_evening_reminder,
+        "cron",
+        hour=21,
+        minute=0,
+        timezone="Asia/Hong_Kong",
+        id="daily_evening_reminder",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     # 事件看门狗：每小时归档过期事件 + 检测新事件（启动即跑一次）
     scheduler.add_job(

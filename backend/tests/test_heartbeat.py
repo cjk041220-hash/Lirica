@@ -111,6 +111,7 @@ def test_registered_jobs_are_awaitable():
         jobs = {j.id: j for j in test_scheduler.get_jobs()}
         assert "proactive_check" in jobs, "心跳 job proactive_check 未注册"
         assert "daily_morning_greeting" in jobs, "早安 job daily_morning_greeting 未注册"
+        assert "daily_evening_reminder" in jobs, "前夜提醒 job daily_evening_reminder 未注册"
         assert "event_watchdog" in jobs, "事件看门狗 job event_watchdog 未注册"
         assert "daily_diary" in jobs, "自动日记 job daily_diary 未注册"
         for job_id, job in jobs.items():
