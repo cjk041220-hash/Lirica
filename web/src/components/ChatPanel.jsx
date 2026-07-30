@@ -117,14 +117,14 @@ export default function ChatPanel({ chat, status, displayState }) {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/50' : 'bg-plum/15'}`} />
+        <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/60' : 'bg-blush'}`} />
       </div>
 
       {/* 状态栏：空闲/睡着时显示小汐今日碎碎念（心情 + 今天经历的事） */}
       {!collapsed && (
         <div className="flex items-center gap-2 px-4 pb-2 shrink-0">
           <div className={`w-2 h-2 rounded-full ${characterState === 'sleepy' ? 'bg-plum/25' : 'bg-strawberry animate-pulse-dot'}`} />
-          <span className="text-[11px] text-plum/50 tracking-wide truncate">
+          <span className="font-display text-[12px] text-plum/60 tracking-wide truncate leading-tight">
             {(characterState === 'idle' || characterState === 'sleepy' || characterState === 'halfawake') && status?.daily_event
               ? `${status.mood ? `${status.mood} · ` : ''}${status.daily_event}`
               : (statusTexts[characterState] || '小汐在发呆')}

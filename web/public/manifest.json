@@ -4,8 +4,8 @@
   "description": "小汐住在这里，陪你说说话。",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FCFAF8",
-  "theme_color": "#88B5B5",
+  "background_color": "#FFF6F8",
+  "theme_color": "#F2789F",
   "orientation": "portrait",
   "icons": [
     {

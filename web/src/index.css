@@ -19,11 +19,17 @@
   --color-honey: #E9B44C;        /* ✦ 小汐从聊天里记的 · 星光蜂蜜金 */
   --color-raspberry: #C2477B;    /* 很重要的事 */
   --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
+  /* 展示体：站酷快乐体（Google Fonts，仅 400——禁合成粗体，强调靠字号和颜色）。
+     按 unicode-range 切 woff2 片、浏览器只下载用到字形的片；离线时样式表加载
+     失败则静默回落系统圆体（幼圆/YouYuan/雅黑），不崩不阻塞。正文仍走 --font-sans */
+  --font-display: "ZCOOL KuaiLe", "Yuanti SC", "YouYuan", "PingFang SC", "Microsoft YaHei", ui-rounded, sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-breathe-slow: breathe 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-breathe-slower: breathe 5.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-  --animate-fade-in-up: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* fill 用 backwards 而非 forwards：delay 期间取首帧（防闪现）一样兜住，
+     动画结束后不再霸占 transform——入场后的元素才能响应 .springy 的悬浮位移 */
+  --animate-fade-in-up: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   --animate-pulse-dot: pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-twinkle: twinkle 3.5s ease-in-out infinite;
   --animate-float-soft: floatSoft 6s ease-in-out infinite;
@@ -104,6 +110,24 @@
   0%, 100% { opacity: 0.25; transform: scale(0.6) rotate(0deg); }
   50%      { opacity: 1;    transform: scale(1) rotate(45deg); }
 }
+
+/* ── 少女心：爱心两种动法 ────────────────────────────── */
+/* 漂浮爱心：淡入 → 三段横向摇摆上升 → 窗顶淡出（-108vh 飞出窗外）。
+   只动 transform/opacity（合成器友好）；负延迟由使用方给，首帧即有爱心 */
+@keyframes heartFloat {
+  0%   { opacity: 0; transform: translate(0, 0) rotate(-4deg); }
+  8%   { opacity: 1; }
+  33%  { transform: translate(7px, -36vh) rotate(5deg); }
+  66%  { transform: translate(-6px, -72vh) rotate(-5deg); }
+  92%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(4px, -108vh) rotate(3deg); }
+}
+/* 戳一戳爱心迸发：先原地绽开，再沿各自的 --dx/--dy/--r 飞散消融 */
+@keyframes heartBurst {
+  0%   { opacity: 0; transform: translate(0, 0) scale(0.3) rotate(0deg); }
+  18%  { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.7) rotate(var(--r)); }
+}
 .star-cross {
   position: absolute;
   width: 11px; height: 11px;
@@ -132,6 +156,8 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  /* 爱心是纯动态装饰、不承担状态——减弱动效下整体撤下，而非定格在半空 */
+  .floating-hearts, .heart-burst { display: none; }
 }
 html, body, #root { height: 100%; overflow: hidden; }
 
@@ -139,12 +165,12 @@ body {
   font-family: var(--font-sans);
   color: var(--color-plum);
   /* 桌面宽屏时房间列居中悬浮，四周是夜的底色：
-     暖调深色 + 窗光般的微弱青色/木色晕染，不是死白也不是纯黑 */
-  background-color: #2b2724;
+     梅子夜色 + 窗光般的微弱草莓/蜜桃晕染，不是死白也不是纯黑 */
+  background-color: #241a22;
   background-image:
-    radial-gradient(1100px 720px at 50% 36%, rgba(136, 181, 181, 0.09), transparent 62%),
-    radial-gradient(820px 620px at 50% 108%, rgba(212, 197, 179, 0.10), transparent 66%),
-    linear-gradient(180deg, #332f2b 0%, #292522 100%);
+    radial-gradient(1100px 720px at 50% 36%, rgba(242, 120, 159, 0.10), transparent 62%),
+    radial-gradient(820px 620px at 50% 108%, rgba(255, 201, 163, 0.09), transparent 66%),
+    linear-gradient(180deg, #2e2130 0%, #20161f 100%);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   text-rendering: optimizeLegibility;
@@ -157,7 +183,7 @@ body::before {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(560px 780px at 50% 44%, rgba(136, 181, 181, 0.12), transparent 70%);
+  background: radial-gradient(560px 780px at 50% 44%, rgba(242, 120, 159, 0.12), transparent 70%);
   animation: ambientGlow 9s ease-in-out infinite;
 }
 @keyframes ambientGlow {
@@ -173,23 +199,50 @@ body::before {
 .chat-scroll::-webkit-scrollbar { width: 2.5px; }
 .chat-scroll::-webkit-scrollbar-track { background: transparent; }
 .chat-scroll::-webkit-scrollbar-thumb {
-  background: rgba(92, 84, 77, 0.12);
+  background: rgba(110, 74, 86, 0.14);
   border-radius: 999px;
 }
 .chat-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(92, 84, 77, 0.25);
+  background: rgba(110, 74, 86, 0.28);
 }
 
-/* 毛玻璃面板 — 增加纸质纹理 */
+/* 毛玻璃面板 — 粉色玻璃（聊天面板 / 顶部胶囊 / 戳一戳气泡） */
 .glass-panel {
-  background: rgba(252, 250, 248, 0.55);
+  background: rgba(255, 246, 248, 0.62);
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
-  border-top: 1px solid rgba(255, 255, 255, 0.45);
+  border-top: 1px solid rgba(255, 255, 255, 0.55);
   box-shadow:
-    0 -8px 32px rgba(92, 84, 77, 0.06),
-    0 -2px 8px rgba(92, 84, 77, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    0 -8px 32px rgba(110, 74, 86, 0.06),
+    0 -2px 8px rgba(110, 74, 86, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* 底部面板统一表面：奶油粉底 + 半错波点。此前同款玻璃样式在四个面板里
+   以 inline style 重复了六遍——换肤时一并收编，泄漏和重复一次消灭 */
+.panel-surface, .panel-surface-solid {
+  background-color: rgba(255, 246, 248, 0.96);
+  background-image:
+    radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px),
+    radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px);
+  background-size: 26px 26px;
+  background-position: 0 0, 13px 13px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 -12px 48px rgba(110, 74, 86, 0.12);
+}
+/* 日历内层 sheet 的更实变体（叠在面板上，透出更少） */
+.panel-surface-solid {
+  background-color: rgba(255, 246, 248, 0.98);
+  box-shadow: 0 -10px 40px rgba(110, 74, 86, 0.14);
+}
+/* 顶部丝带：面板顶沿一道草莓↔蜜桃的渐隐彩线 */
+.panel-surface::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 24px; right: 24px; height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(90deg, transparent, #F2789F 20%, #FFC9A3 50%, #F2789F 80%, transparent);
 }
 
 /* 按钮微交互 */
@@ -210,12 +263,19 @@ body::before {
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(136,181,181,0.15) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(242,120,159,0.16) 0%, transparent 70%);
   opacity: 0;
   transition: opacity 0.3s ease;
 }
 .icon-btn:hover::after { opacity: 1; }
 .icon-btn:active { transform: scale(0.9); }
+
+/* 弹跳悬浮：日历日期格、列表行轻抬一下（仅精确指针设备）。
+   依赖 fade-in-up 的 backwards fill——入场动画结束后 transform 已释放 */
+@media (hover: hover) {
+  .springy { transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .springy:hover { transform: translateY(-1px) scale(1.02); }
+}
 
 /* 面板弹出动画 */
 .panel-enter {

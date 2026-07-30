@@ -1,4 +1,4 @@
-const CACHE_NAME = 'xiaoxi-room-v4'
+const CACHE_NAME = 'xiaoxi-room-v5'
 
 self.addEventListener('install', () => {
   self.skipWaiting()

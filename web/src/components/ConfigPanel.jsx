@@ -68,13 +68,12 @@ export default function ConfigPanel({ config, push, onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
+      <div className="panel-surface panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
         ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="设置"
-        style={{ background: 'rgba(252,250,248,0.94)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
+        role="dialog" aria-modal="true" aria-label="设置">
 
         <div className="flex items-center justify-between mb-7">
-          <h2 className="text-[13px] font-medium text-plum/80 tracking-widest uppercase">设置</h2>
+          <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">设置</h2>
           <button onClick={onClose} className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center" aria-label="关闭设置">
             <IconClose size={13} className="text-plum/50" />
           </button>
@@ -84,7 +83,7 @@ export default function ConfigPanel({ config, push, onClose }) {
         <div className="mb-6">
           <label className="text-[11px] text-plum/40 mb-2.5 block tracking-wide">访问令牌</label>
           {needToken && (
-            <p className="text-[11px] text-[#c47a5a] mb-2">小汐收到了 401——服务器启用了认证，填一下令牌就能继续聊啦。</p>
+            <p className="text-[11px] text-[#C2477B] mb-2">小汐收到了 401——服务器启用了认证，填一下令牌就能继续聊啦。</p>
           )}
           <div className="flex gap-2">
             <input
@@ -97,7 +96,7 @@ export default function ConfigPanel({ config, push, onClose }) {
             />
             <button
               onClick={saveToken}
-              className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-strawberry/12 text-strawberry text-[12px] font-medium"
+              className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-strawberry/12 text-raspberry text-[12px] font-medium"
             >
               {tokenSaved ? '已保存' : '保存'}
             </button>
@@ -115,7 +114,7 @@ export default function ConfigPanel({ config, push, onClose }) {
                 onClick={() => updateSetting('model', m.id)}
                 className={`flex-1 py-3 px-4 rounded-2xl text-left transition-all duration-250 ${
                   settings.model === m.id
-                    ? 'bg-strawberry/12 border-[1.5px] border-strawberry/40 shadow-[0_2px_8px_rgba(136,181,181,0.12)]'
+                    ? 'bg-strawberry/12 border-[1.5px] border-strawberry/40 shadow-[0_2px_8px_rgba(242,120,159,0.12)]'
                     : 'bg-plum/3 border-[1.5px] border-transparent'
                 }`}
               >

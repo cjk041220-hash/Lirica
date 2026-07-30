@@ -50,15 +50,14 @@ export default function MemoriesPanel({ onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
         ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="小汐的记忆"
-        style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
+        role="dialog" aria-modal="true" aria-label="小汐的记忆">
 
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
             <IconWhale size={16} className="text-strawberry/70" />
-            <h2 className="text-[13px] font-medium text-plum/80 tracking-wide">小汐的记忆</h2>
+            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">小汐的记忆</h2>
           </div>
           <button onClick={onClose} aria-label="关闭记忆" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
             <IconClose size={13} className="text-plum/50" />
@@ -73,7 +72,7 @@ export default function MemoriesPanel({ onClose }) {
               onClick={() => setTab(t.key)}
               className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ${
                 tab === t.key
-                  ? 'bg-strawberry/15 text-strawberry'
+                  ? 'bg-strawberry/15 text-raspberry'
                   : 'text-plum/35 hover:text-plum/55'
               }`}
             >
@@ -98,7 +97,7 @@ export default function MemoriesPanel({ onClose }) {
           ) : tab === 'memories' ? (
             <div className="space-y-5 pt-2">
               {memories.map((item, i) => (
-                <div key={item.id || i} className="animate-fade-in-up" style={{ animationDelay: `${i * 0.05}s` }}>
+                <div key={item.id || i} className="animate-fade-in-up springy" style={{ animationDelay: `${i * 0.05}s` }}>
                   <div className="border-l-2 border-strawberry/25 pl-3.5 py-0.5">
                     {(item.created_at || item.date) && (
                       <p className="text-[10px] text-plum/25 mb-1">{item.created_at || item.date}</p>
@@ -107,7 +106,7 @@ export default function MemoriesPanel({ onClose }) {
                       {item.content || item.text || '(no content)'}
                     </p>
                     {item.category && (
-                      <span className="inline-block mt-1.5 text-[10px] text-strawberry/80 bg-strawberry/8 px-2.5 py-0.5 rounded-full">
+                      <span className="inline-block mt-1.5 text-[10px] text-raspberry bg-strawberry/8 px-2.5 py-0.5 rounded-full">
                         {item.category}
                       </span>
                     )}
@@ -119,7 +118,7 @@ export default function MemoriesPanel({ onClose }) {
             /* 日记：按日期倒序，保留换行（晚间自动补记与白天手记分段呈现） */
             <div className="space-y-5 pt-2">
               {diaries.map((item, i) => (
-                <div key={item.date || i} className="animate-fade-in-up" style={{ animationDelay: `${i * 0.05}s` }}>
+                <div key={item.date || i} className="animate-fade-in-up springy" style={{ animationDelay: `${i * 0.05}s` }}>
                   <div className="border-l-2 border-blush/50 pl-3.5 py-0.5">
                     <p className="text-[10px] text-plum/25 mb-1">{item.title || item.date}</p>
                     <p className="text-[13px] text-plum/65 leading-[1.8] whitespace-pre-wrap">{item.content}</p>

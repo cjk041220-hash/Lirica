@@ -16,31 +16,33 @@ function msToNextPeriodBoundary() {
 }
 
 // 四套天色叠层 + 交叉淡入淡出（CSS 不能让 background-image 过渡，故叠层切透明度）。
-// 调色取自然天象的暖冷平衡，避开「近黑+霓虹」「奶油+赭石」等套路。
+// 2026-07-30 换肤：四时全部调入粉色系——蜜桃奶盖晨 / 草莓牛奶晴 /
+// 树莓晚霞 / 梅子可可夜。原则：天是粉的，日月星辰保持自然。
+// 相邻时段共享地平线色系（晨↔昏同属蜜桃、夜顶是昏顶的压暗），交叉淡入才连续。
 const SKY = {
-  morning: 'linear-gradient(180deg,#33406e 0%,#6f6f9e 26%,#c98fa6 52%,#f0b89a 76%,#fbe3c2 100%)',
-  day:     'linear-gradient(180deg,#4f93d6 0%,#7fb6e6 34%,#aed6ef 68%,#e3f3fb 100%)',
-  evening: 'linear-gradient(180deg,#241d44 0%,#5d3a63 28%,#b5635f 56%,#e89a63 80%,#f6c585 100%)',
-  night:   'linear-gradient(180deg,#080b1e 0%,#101733 36%,#172247 70%,#22305a 100%)',
+  morning: 'linear-gradient(180deg,#5d5a9c 0%,#9c7fb4 26%,#e69cba 52%,#ffc7ae 76%,#ffe6c9 100%)',
+  day:     'linear-gradient(180deg,#7fa7dd 0%,#a8c2ea 34%,#e7cfe4 68%,#ffeff2 100%)',
+  evening: 'linear-gradient(180deg,#3b2b63 0%,#8d4f86 28%,#d0618f 56%,#ff9f85 80%,#ffc9a3 100%)',
+  night:   'linear-gradient(180deg,#191029 0%,#2c1c44 36%,#45265a 70%,#63305f 100%)',
 }
 
 // 窗下地平线的晕染（日出/日落/月升的光）
 const HORIZON = {
-  morning: 'radial-gradient(120% 50% at 50% 100%, rgba(255,200,140,0.55), transparent 70%)',
-  day:     'radial-gradient(120% 45% at 50% 100%, rgba(255,255,255,0.30), transparent 72%)',
-  evening: 'radial-gradient(130% 55% at 50% 100%, rgba(255,150,80,0.60), transparent 70%)',
-  night:   'radial-gradient(120% 50% at 50% 100%, rgba(120,150,200,0.16), transparent 72%)',
+  morning: 'radial-gradient(120% 50% at 50% 100%, rgba(255,205,170,0.55), transparent 70%)',
+  day:     'radial-gradient(120% 45% at 50% 100%, rgba(255,235,242,0.32), transparent 72%)',
+  evening: 'radial-gradient(130% 55% at 50% 100%, rgba(255,150,120,0.58), transparent 70%)',
+  night:   'radial-gradient(120% 50% at 50% 100%, rgba(200,120,170,0.16), transparent 72%)',
 }
 
 const STAR_OP  = { night: 1, evening: 0.55, morning: 0.22, day: 0 }
 const MOON_OP  = { night: 1, evening: 0.7, morning: 0.28, day: 0 }
 const SUN_OP   = { day: 1, morning: 0.92, evening: 0.95, night: 0 }
-// 云底色 + 浓度：白天白、晨昏暖、夜里是被月照亮的淡蓝灰
+// 云底色 + 浓度：白天近白、晨起染粉、黄昏玫红、夜里是被月照亮的淡藕紫
 const CLOUD    = {
-  day:     { c: '255,255,255', o: 0.85 },
-  morning: { c: '255,236,224', o: 0.7 },
-  evening: { c: '255,206,176', o: 0.6 },
-  night:   { c: '150,170,210', o: 0.16 },
+  day:     { c: '255,250,252', o: 0.85 },
+  morning: { c: '255,228,232', o: 0.7 },
+  evening: { c: '255,190,196', o: 0.6 },
+  night:   { c: '190,150,205', o: 0.16 },
 }
 // 天体在窗内的位置（按时段，构图不同）
 const MOON_POS = {
@@ -64,19 +66,19 @@ function Moon({ period }) {
     <div className="absolute z-[2] pointer-events-none transition-opacity duration-[2000ms]"
       style={{ ...pos, opacity: MOON_OP[period] }}>
       <div className="relative w-14 h-14">
-        {/* 月冕 */}
+        {/* 月冕（暖奶油光，压住粉夜的冷） */}
         <div className="absolute -inset-[70%] rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(255,255,235,0.40), rgba(255,255,235,0.08) 45%, transparent 70%)', animation: 'moonPulse 8s ease-in-out infinite' }} />
+          style={{ background: 'radial-gradient(circle, rgba(255,244,224,0.40), rgba(255,244,224,0.08) 45%, transparent 70%)', animation: 'moonPulse 8s ease-in-out infinite' }} />
         {/* 月盘 */}
         <div className="absolute inset-0 rounded-full"
           style={{
-            background: 'radial-gradient(circle at 36% 32%, #fffef6 0%, #f3f2e6 42%, #d7d8c8 74%, #b9bba9 100%)',
-            boxShadow: '0 0 16px 3px rgba(255,255,235,0.30), inset -3px -4px 8px rgba(120,120,100,0.30)',
+            background: 'radial-gradient(circle at 36% 32%, #fffdf6 0%, #f7eedb 42%, #e3d3b8 74%, #cbb594 100%)',
+            boxShadow: '0 0 16px 3px rgba(255,244,224,0.30), inset -3px -4px 8px rgba(140,115,85,0.30)',
           }}>
           {/* 环形山 */}
-          <span className="absolute rounded-full" style={{ left: '30%', top: '28%', width: '18%', height: '18%', background: 'rgba(150,150,128,0.28)' }} />
-          <span className="absolute rounded-full" style={{ left: '56%', top: '52%', width: '13%', height: '13%', background: 'rgba(150,150,128,0.22)' }} />
-          <span className="absolute rounded-full" style={{ left: '44%', top: '64%', width: '9%', height: '9%', background: 'rgba(150,150,128,0.20)' }} />
+          <span className="absolute rounded-full" style={{ left: '30%', top: '28%', width: '18%', height: '18%', background: 'rgba(160,135,100,0.28)' }} />
+          <span className="absolute rounded-full" style={{ left: '56%', top: '52%', width: '13%', height: '13%', background: 'rgba(160,135,100,0.22)' }} />
+          <span className="absolute rounded-full" style={{ left: '44%', top: '64%', width: '9%', height: '9%', background: 'rgba(160,135,100,0.20)' }} />
         </div>
       </div>
     </div>
@@ -88,7 +90,7 @@ function Sun({ period }) {
   const warm = period !== 'day'
   const disc = warm
     ? 'radial-gradient(circle at 42% 40%, #fff3da 0%, #ffd28a 52%, #ff9d52 100%)'
-    : 'radial-gradient(circle at 42% 40%, #fffaf0 0%, #ffe9a6 55%, #ffcf63 100%)'
+    : 'radial-gradient(circle at 42% 40%, #fffaf0 0%, #ffe9a6 55%, #f0bd55 100%)'
   const glow = warm ? 'rgba(255,176,110,0.55)' : 'rgba(255,236,170,0.55)'
   return (
     <div className="absolute z-[2] pointer-events-none transition-opacity duration-[2000ms]"
@@ -191,7 +193,7 @@ function SkyBackground() {
       {/* 窗顶漏下的一缕天光 + 整体暗角，把天空坐进窗框 */}
       <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/8 to-transparent pointer-events-none z-[4]" />
       <div className="absolute inset-0 pointer-events-none z-[4]"
-        style={{ boxShadow: 'inset 0 0 70px rgba(8,11,30,0.18)' }} />
+        style={{ boxShadow: 'inset 0 0 70px rgba(60,25,60,0.16)' }} />
     </div>
   )
 }

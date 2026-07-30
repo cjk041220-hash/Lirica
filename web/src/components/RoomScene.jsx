@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import SkyBackground from './SkyBackground'
 import CharacterSprite from './CharacterSprite'
+import FloatingHearts from './FloatingHearts'
 
 // memo：props 只有 characterState（原始值）。聊天流式期间 App 每个
 // token 都重渲染，不 memo 的话整间房（含 46 颗星 + 立绘 6 个 state）
@@ -11,28 +12,45 @@ function RoomScene({ characterState = 'idle' }) {
     <div className="absolute inset-0 overflow-hidden">
       <SkyBackground />
 
-      {/* Z-10: 房间框架 */}
-      <div className="absolute inset-0 z-10 pointer-events-none">
-        {/* 左窗框 */}
-        <div className="absolute left-0 top-0 bottom-[30%] w-[18px] bg-gradient-to-r from-peach to-peach/80 shadow-[inset_-2px_0_4px_rgba(0,0,0,0.06)]" />
-        {/* 右窗框 */}
-        <div className="absolute right-0 top-0 bottom-[30%] w-[18px] bg-gradient-to-l from-peach to-peach/80 shadow-[inset_2px_0_4px_rgba(0,0,0,0.06)]" />
-        {/* 上窗框 */}
-        <div className="absolute top-0 left-0 right-0 h-[18px] bg-gradient-to-b from-peach to-peach/80 shadow-[inset_0_-2px_4px_rgba(0,0,0,0.06)]" />
-        {/* 窗框内边高光 */}
-        <div className="absolute left-[18px] top-[18px] right-[18px] bottom-[30%] border border-white/10 rounded-b-sm" />
+      {/* Z-5: 漂浮爱心（天空之上、窗框之下） */}
+      <FloatingHearts />
 
-        {/* 木地板 */}
-        <div className="absolute bottom-0 left-0 right-0 h-[30%] bg-gradient-to-b from-peach-light via-peach-light/95 to-peach" />
+      {/* Z-10: 房间框架——蜜桃橙太抢，大面积改用更柔的奶粉色系 */}
+      <div className="absolute inset-0 z-10 pointer-events-none">
+        {/* 左窗框（粉刷浅粉木） */}
+        <div className="absolute left-0 top-0 bottom-[30%] w-[18px] bg-gradient-to-r from-[#FFE9F0] to-[#F8D3E0] shadow-[inset_-2px_0_4px_rgba(110,74,86,0.06)]" />
+        {/* 右窗框 */}
+        <div className="absolute right-0 top-0 bottom-[30%] w-[18px] bg-gradient-to-l from-[#FFE9F0] to-[#F8D3E0] shadow-[inset_2px_0_4px_rgba(110,74,86,0.06)]" />
+        {/* 上窗框 */}
+        <div className="absolute top-0 left-0 right-0 h-[18px] bg-gradient-to-b from-[#FFE9F0] to-[#F8D3E0] shadow-[inset_0_-2px_4px_rgba(110,74,86,0.06)]" />
+        {/* 窗框内边高光 */}
+        <div className="absolute left-[18px] top-[18px] right-[18px] bottom-[30%] border border-white/30 rounded-b-sm" />
+
+        {/* 牛奶粉地板 */}
+        <div className="absolute bottom-0 left-0 right-0 h-[30%] bg-gradient-to-b from-[#FFF0F4] via-[#FBDFE9] to-[#F3C6D6]" />
         {/* 地板纹理线 */}
         <div className="absolute bottom-[20%] left-0 right-0 h-px bg-blush/30" />
         <div className="absolute bottom-[10%] left-0 right-0 h-px bg-blush/20" />
         {/* 地板与墙分隔线 */}
-        <div className="absolute bottom-[30%] left-0 right-0 h-[2px] bg-blush/60 shadow-[0_1px_3px_rgba(0,0,0,0.05)]" />
+        <div className="absolute bottom-[30%] left-0 right-0 h-[2px] bg-blush/60 shadow-[0_1px_3px_rgba(110,74,86,0.05)]" />
+
+        {/* 窗光在地板上的一汪蜜桃暖斑（静态，不抢立绘） */}
+        <div className="absolute bottom-[5%] left-1/2 -translate-x-1/2 w-[72%] h-[18%] rounded-[50%]"
+          style={{ background: 'radial-gradient(ellipse, rgba(255,201,163,0.22) 0%, transparent 70%)' }} />
 
         {/* 环境光 — 窗户透进来的柔光 */}
         <div className="absolute top-[18px] left-[18px] right-[18px] h-[40%] bg-gradient-to-b from-white/5 to-transparent" />
       </div>
+
+      {/* Z-12: 两粒蜂蜜金亮星，错相呼吸（复用天空的 sparkle 关键帧） */}
+      <span aria-hidden className="absolute z-[12] pointer-events-none"
+        style={{ top: '24%', left: '27%', width: 9, height: 9, borderRadius: '50%',
+          background: 'linear-gradient(transparent 42%, rgba(233,180,76,0.9) 50%, transparent 58%), linear-gradient(90deg, transparent 42%, rgba(233,180,76,0.9) 50%, transparent 58%)',
+          animation: 'sparkle 4.2s ease-in-out infinite' }} />
+      <span aria-hidden className="absolute z-[12] pointer-events-none"
+        style={{ top: '40%', right: '24%', width: 7, height: 7, borderRadius: '50%',
+          background: 'linear-gradient(transparent 42%, rgba(233,180,76,0.8) 50%, transparent 58%), linear-gradient(90deg, transparent 42%, rgba(233,180,76,0.8) 50%, transparent 58%)',
+          animation: 'sparkle 5.6s ease-in-out infinite', animationDelay: '1.4s' }} />
 
       {/* Z-20: 小汐 */}
       <CharacterSprite state={characterState} />
@@ -51,7 +69,7 @@ function RoomScene({ characterState = 'idle' }) {
 
       {/* 整体暗角 */}
       <div className="absolute inset-0 z-[15] pointer-events-none"
-        style={{ boxShadow: 'inset 0 0 60px rgba(92,84,77,0.04)' }} />
+        style={{ boxShadow: 'inset 0 0 60px rgba(110,74,86,0.05)' }} />
     </div>
   )
 }

@@ -104,13 +104,13 @@ export default function App() {
   }, [unread, receiveProactive, markRead])
 
   return (
-    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-cream select-none sm:shadow-[0_24px_90px_-16px_rgba(0,0,0,0.6),0_4px_24px_rgba(0,0,0,0.35)]">
+    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-cream select-none sm:shadow-[0_24px_90px_-16px_rgba(110,74,86,0.6),0_4px_24px_rgba(110,74,86,0.35)]">
       <RoomScene characterState={displayState} />
 
       {/* 顶栏控制台：四个入口收进顶部居中的一条磨砂胶囊。
           四图标用 2+2 分组（回望类「对话/记忆」| 打点类「日历/设置」），
           组间一条细线——偶数图标靠分组线保持胶囊的对称平衡 */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.22)]">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(110,74,86,0.22)]">
         <button
           onClick={() => setShowSessions(true)}
           className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-plum/5 hover:text-plum/80"

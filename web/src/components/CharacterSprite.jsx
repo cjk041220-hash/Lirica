@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react'
 // 戳一戳文案池单一真相源（E2E 共用 src/poke-lines.json，改一处即可，免双份同步）
 import POKE_LINES from '../poke-lines.json'
+import Heart from './Heart'
+
+// 戳一戳爱心迸发的配色轮换（草莓/树莓/蜜桃）
+const BURST_COLORS = ['text-strawberry', 'text-raspberry', 'text-peach']
 
 const spriteMap = {
   idle: '/sprites/idle.webp',
@@ -29,6 +33,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
   const [displayState, setDisplayState] = useState(state)
   const [transitioning, setTransitioning] = useState(false)
   const [bubble, setBubble] = useState(null)           // { id, text }
+  const [burst, setBurst] = useState([])               // 戳一戳爱心迸发（自清理）
   const [pokeOverride, setPokeOverride] = useState(null) // 深夜戳醒的临时立绘
   const [wiggle, setWiggle] = useState(false)          // 冷却中的轻晃反馈
   const [broken, setBroken] = useState(false)          // 立绘加载失败 → 回退 idle
@@ -79,6 +84,21 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
     clearTimeout(bubbleTimerRef.current)
     bubbleTimerRef.current = setTimeout(() => setBubble(null), BUBBLE_MS)
 
+    // 爱心迸发：6 颗小心心在头周绽开飞散（已被 6s 冷却限流，onAnimationEnd 自清理）。
+    // 减弱动态效果的用户直接不生成（CSS 侧还有 .heart-burst{display:none} 双保险）
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setBurst(Array.from({ length: 6 }, (_, i) => ({
+        id: now + i,
+        left: 30 + Math.random() * 40,             // 30–70%
+        top: 18 + Math.random() * 8,               // 18–26%（头周）
+        size: 9 + Math.random() * 7,               // 9–16px
+        dx: (Math.random() - 0.5) * 72,            // -36..36px
+        dy: -(46 + Math.random() * 26),            // -46..-72px
+        r: (Math.random() - 0.5) * 40,             // ±20°
+        color: BURST_COLORS[i % BURST_COLORS.length],
+      })))
+    }
+
     // 深夜沉睡被戳 → 睡眼惺忪一会儿再睡回去
     if (effective === 'sleepy') {
       setPokeOverride('halfawake')
@@ -95,22 +115,44 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
 
   return (
     <div className={`absolute z-20 left-1/2 -translate-x-1/2 ${lying ? 'bottom-[36%] w-[72%]' : 'bottom-[8%]'}`}>
-      {/* 身下光晕：站姿是脚下一汪，睡姿是蜷身下一片更宽的浅光 */}
+      {/* 身下光晕：站姿是脚下一汪，睡姿是蜷身下一片更宽的浅光。
+          透明度类保持原值（20/25/12/15）——只换色相，粉色不压立绘原画 */}
       <div
         className={`absolute left-1/2 -translate-x-1/2 rounded-[50%] pointer-events-none ${lying ? 'bottom-[2%] w-[96%] h-[20%] opacity-20' : 'bottom-0 w-[92%] h-[14%] opacity-25'}`}
-        style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.5) 0%, transparent 70%)' }}
+        style={{ background: 'radial-gradient(ellipse, rgba(242,120,159,0.5) 0%, transparent 70%)' }}
       />
       {/* 身后柔光（站姿）/ 蜷身暖晕（睡姿） */}
       {lying ? (
         <div
           className="absolute left-1/2 top-[34%] -translate-x-1/2 -translate-y-1/2 w-[112%] h-[58%] rounded-full opacity-12 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 62%)' }}
+          style={{ background: 'radial-gradient(ellipse, rgba(242,120,159,0.6) 0%, transparent 62%)' }}
         />
       ) : (
         <div
           className="absolute left-1/2 top-[35%] -translate-x-1/2 -translate-y-1/2 w-[130%] h-[75%] rounded-full opacity-15 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse, rgba(136,181,181,0.6) 0%, transparent 60%)' }}
+          style={{ background: 'radial-gradient(ellipse, rgba(242,120,159,0.6) 0%, transparent 60%)' }}
         />
+      )}
+
+      {/* 戳一戳爱心迸发（animationend 冒泡到容器统一清空） */}
+      {burst.length > 0 && (
+        <div className="absolute inset-0 z-30 pointer-events-none" onAnimationEnd={() => setBurst([])}>
+          {burst.map(h => (
+            <span
+              key={h.id}
+              className={`heart-burst absolute ${h.color}`}
+              style={{
+                left: `${h.left}%`, top: `${h.top}%`,
+                '--dx': `${h.dx.toFixed(1)}px`,
+                '--dy': `${h.dy.toFixed(1)}px`,
+                '--r': `${h.r.toFixed(1)}deg`,
+                animation: 'heartBurst 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+              }}
+            >
+              <Heart size={h.size} />
+            </span>
+          ))}
+        </div>
       )}
 
       {/* 戳一戳气泡（pointer-events-none：不挡任何操作） */}
@@ -157,7 +199,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
             transitioning ? 'opacity-0 scale-[0.99]' : 'opacity-100 scale-100'
           }`}
           style={{
-            filter: 'drop-shadow(0 8px 20px rgba(92,84,77,0.12)) drop-shadow(0 2px 6px rgba(136,181,181,0.15))',
+            filter: 'drop-shadow(0 8px 20px rgba(110,74,86,0.12)) drop-shadow(0 2px 6px rgba(242,120,159,0.15))',
             // 站姿脚部渐隐融入地板；睡姿整身在底部，不能再做底部渐隐
             ...(lying ? {} : {
               maskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',

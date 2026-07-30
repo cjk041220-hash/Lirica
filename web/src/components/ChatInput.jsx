@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import IconSend from '../assets/icons/IconSend'
+import Heart from './Heart'
 import IconStop from '../assets/icons/IconStop'
 
 const MAX_LEN = 2000  // 与后端 _MAX_MESSAGE_LENGTH 一致，物理阻断超长输入（否则 422 + 通用错误文案）
@@ -33,7 +33,7 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
       )}
       <div className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
         focused
-          ? 'bg-white/70 shadow-[0_2px_12px_rgba(136,181,181,0.1)]'
+          ? 'bg-white/70 shadow-[0_2px_12px_rgba(242,120,159,0.14)]'
           : 'bg-white/40'
       } border border-white/50`}>
         <input
@@ -63,12 +63,12 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
             disabled={!text.trim()}
             className={`btn-press w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm transition-all duration-300 ${
               text.trim()
-                ? 'bg-strawberry text-white shadow-[0_2px_8px_rgba(136,181,181,0.3)]'
+                ? 'bg-gradient-to-br from-strawberry to-raspberry text-white shadow-[0_2px_10px_rgba(194,71,123,0.35)]'
                 : 'bg-plum/8 text-plum/20'
             }`}
             aria-label="发送"
           >
-            <IconSend size={15} />
+            <Heart size={15} />
           </button>
         )}
       </div>

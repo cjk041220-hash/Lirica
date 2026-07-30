@@ -23,26 +23,27 @@ else:  # Linux
     FONT_BOLD = "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"
     FONT_REG = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
 
-AQUA = (136, 181, 181)       # healing-aqua #88B5B5
-AQUA_DEEP = (122, 165, 165)
-PAPER = (252, 250, 248)      # warm-paper #FCFAF8
+STRAWBERRY = (242, 120, 159)  # strawberry #F2789F
+RASPBERRY = (194, 71, 123)    # raspberry  #C2477B
+CREAM = (255, 246, 248)       # cream      #FFF6F8
+HONEY = (233, 180, 76)        # honey      #E9B44C
 
 
 def make_icon(size: int, out: Path):
-    """圆角水色底 + 白色'汐'字。"""
+    """圆角草莓粉底（草莓→树莓）+ 奶油'汐'字 + 右上蜂蜜金四芒星。"""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
     radius = int(size * 0.23)
-    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=AQUA)
+    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=STRAWBERRY)
 
-    # 底部一点深色渐变感（简单叠加一个半透明深色圆角矩形下半部）
+    # 底部树莓渐变感（简单叠加一个半透明深色圆角矩形下半部）
     shade = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shade)
     sd.rounded_rectangle(
         [0, int(size * 0.55), size - 1, size - 1],
         radius=radius,
-        fill=AQUA_DEEP + (70,),
+        fill=RASPBERRY + (90,),
     )
     img = Image.alpha_composite(img, shade)
     d = ImageDraw.Draw(img)
@@ -53,9 +54,18 @@ def make_icon(size: int, out: Path):
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (size - tw) / 2 - bbox[0]
     y = (size - th) / 2 - bbox[1] - size * 0.015
-    # 柔和阴影
-    d.text((x + size * 0.008, y + size * 0.012), text, font=font, fill=(70, 90, 90, 90))
-    d.text((x, y), text, font=font, fill=PAPER)
+    # 柔和阴影（梅子色）
+    d.text((x + size * 0.008, y + size * 0.012), text, font=font, fill=(110, 74, 86, 90))
+    d.text((x, y), text, font=font, fill=CREAM)
+
+    # 右上蜂蜜金四芒星（8 点多边形：四尖端 + 四细腰）
+    cx, cy, r = size * 0.80, size * 0.20, size * 0.075
+    w = r * 0.22
+    star = [
+        (cx, cy - r), (cx + w, cy - w), (cx + r, cy), (cx + w, cy + w),
+        (cx, cy + r), (cx - w, cy + w), (cx - r, cy), (cx - w, cy - w),
+    ]
+    d.polygon(star, fill=HONEY)
 
     img.save(out, "PNG")
     print(f"[icon] {out.name}  {out.stat().st_size // 1024} KB")

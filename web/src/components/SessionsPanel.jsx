@@ -76,15 +76,14 @@ export default function SessionsPanel({ chat, onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
         ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="以往的对话"
-        style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
+        role="dialog" aria-modal="true" aria-label="以往的对话">
 
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
             <IconHistory size={16} className="text-strawberry/70" />
-            <h2 className="text-[13px] font-medium text-plum/80 tracking-wide">以往的对话</h2>
+            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">以往的对话</h2>
           </div>
           <button onClick={onClose} aria-label="关闭对话列表" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
             <IconClose size={13} className="text-plum/50" />
@@ -95,7 +94,7 @@ export default function SessionsPanel({ chat, onClose }) {
         <div className="px-5 pb-2.5">
           <button
             onClick={() => { chat.newSession(); onClose() }}
-            className="btn-press text-[11px] px-3 py-1 rounded-full bg-strawberry/15 text-strawberry"
+            className="btn-press text-[11px] px-3 py-1 rounded-full bg-strawberry/15 text-raspberry"
           >
             ＋ 开一段新聊天
           </button>
@@ -130,7 +129,7 @@ export default function SessionsPanel({ chat, onClose }) {
                         openSession(s)
                       }
                     }}
-                    className={`animate-fade-in-up w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
+                    className={`animate-fade-in-up springy w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
                       isCurrent ? 'bg-strawberry/10 ring-1 ring-strawberry/40' : 'hover:bg-plum/5'
                     }`}
                     style={{ animationDelay: `${i * 0.03}s` }}
@@ -140,7 +139,7 @@ export default function SessionsPanel({ chat, onClose }) {
                         {s.title || '(没有标题)'}
                       </p>
                       {isCurrent && (
-                        <span className="shrink-0 text-[9px] text-strawberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
+                        <span className="shrink-0 text-[9px] text-raspberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
                           现在
                         </span>
                       )}

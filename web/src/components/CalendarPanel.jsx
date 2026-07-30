@@ -168,16 +168,15 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-enter relative w-full max-h-[88%] rounded-t-[24px] flex flex-col"
+      <div className="panel-surface panel-enter relative w-full max-h-[88%] rounded-t-[24px] flex flex-col"
         ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="小汐的日历"
-        style={{ background: 'rgba(252,250,248,0.95)', backdropFilter: 'blur(20px)', boxShadow: '0 -12px 48px rgba(92,84,77,0.1)' }}>
+        role="dialog" aria-modal="true" aria-label="小汐的日历">
 
         {/* 头部 */}
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
             <IconCalendar size={16} className="text-strawberry/70" />
-            <h2 className="text-[13px] font-medium text-plum/80 tracking-wide">小汐的日历</h2>
+            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">小汐的日历</h2>
           </div>
           <button onClick={onClose} aria-label="关闭日历" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
             <IconClose size={13} className="text-plum/50" />
@@ -189,15 +188,15 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
           <button onClick={() => shiftMonth(-1)} aria-label="上个月" title="上个月"
             className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">‹</button>
           <div className="flex items-baseline gap-1.5 min-w-[7.5rem] justify-center">
-            <span className="text-[20px] font-bold text-plum/85" style={{ fontFamily: 'var(--font-serif, "Noto Serif SC", "Songti SC", serif)' }}>
+            <span className="font-display text-[20px] text-plum/85 leading-tight">
               {CN_MONTHS[month.m - 1]}
             </span>
-            <span className="text-[11px] font-semibold text-honey tracking-[0.2em]">{month.y}</span>
+            <span className="text-[11px] font-semibold text-raspberry tracking-[0.2em]">{month.y}</span>
           </div>
           <button onClick={() => shiftMonth(1)} aria-label="下个月" title="下个月"
             className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">›</button>
           <button onClick={() => { const t = hktTodayISO(); setMonth({ y: t.slice(0, 4) * 1, m: t.slice(5, 7) * 1 }) }}
-            className="btn-press text-[11px] px-2.5 py-1 rounded-full bg-strawberry/15 text-strawberry">今天</button>
+            className="btn-press text-[11px] px-2.5 py-1 rounded-full bg-strawberry/15 text-raspberry">今天</button>
         </div>
 
         {/* 网格 */}
@@ -222,16 +221,16 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                     key={c.iso}
                     onClick={() => setSelectedDay(c.iso)}
                     aria-label={`${month.m}月${c.day}日${items.length ? `，${items.length}件事` : ''}`}
-                    className={`animate-fade-in-up relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
+                    className={`animate-fade-in-up springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
                       ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}
                       ${isToday ? 'bg-honey/10' : ''}
                       ${isSel ? 'bg-strawberry/10 border-strawberry/50' : 'border-transparent hover:bg-plum/5'}
                       ${c.iso < today && !isToday ? 'opacity-55' : ''}`}
                     style={{ animationDelay: `${i * 0.012}s` }}
                   >
-                    <span className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-honey' : 'text-plum/60'}`}>
+                    <span className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-raspberry' : 'text-plum/60'}`}>
                       {c.day}
-                      {isToday && <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(217,164,91,0.9)]" />}
+                      {isToday && <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(233,180,76,0.9)]" />}
                     </span>
                     {items.slice(0, 2).map(({ ev, first }, j) => (
                       <div key={ev.id + j}
@@ -257,12 +256,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {selectedDay && !formOpen && (
           <div className="absolute inset-0 z-[5] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => setSelectedDay(null)} />
-            <div className="panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
-              role="dialog" aria-modal="true" aria-label={`${selectedDay} 的安排`}
-              style={{ background: 'rgba(252,250,248,0.98)', backdropFilter: 'blur(20px)', boxShadow: '0 -10px 40px rgba(92,84,77,0.14)' }}>
-              <div className="w-9 h-1 rounded-full bg-peach mx-auto mb-3" />
+            <div className="panel-surface-solid panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+              role="dialog" aria-modal="true" aria-label={`${selectedDay} 的安排`}>
+              <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
               <div className="flex items-baseline gap-2 mb-3">
-                <h3 className="text-[16px] font-bold text-plum/85">
+                <h3 className="font-display text-[16px] text-plum/85 leading-tight">
                   {selectedDay.slice(5, 7) * 1}月{selectedDay.slice(8, 10) * 1}日
                 </h3>
                 <span className="text-[11px] text-plum/40">
@@ -272,14 +270,14 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
               {dayEvents.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-blush bg-peach-light/20 px-4 py-6 text-center text-[12px] leading-8 text-plum/55">
-                  这一天还空着，<b className="text-strawberry">要不要和小汐约点什么？</b>
+                  这一天还空着，<b className="text-raspberry">要不要和小汐约点什么？</b>
                 </div>
               ) : dayEvents.map(ev => {
                 const readonly = READONLY_TYPES.has(ev.event_type)
                 return (
-                  <div key={ev.id} className="flex items-center gap-2.5 rounded-2xl bg-[#F6EFE5] border border-peach-light px-3.5 py-3 mb-2">
+                  <div key={ev.id} className="flex items-center gap-2.5 rounded-2xl bg-[#FFF0F4] border border-peach-light px-3.5 py-3 mb-2">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      ev.severity === 'high' ? 'bg-raspberry' : ev.source === 'user' ? 'bg-strawberry' : 'bg-honey shadow-[0_0_6px_rgba(217,164,91,0.5)]'}`} />
+                      ev.severity === 'high' ? 'bg-raspberry' : ev.source === 'user' ? 'bg-strawberry' : 'bg-honey shadow-[0_0_6px_rgba(233,180,76,0.5)]'}`} />
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-semibold text-plum/85 truncate">
                         {isXiaoxiNoted(ev) ? '✦ ' : ''}{ev.title}
@@ -313,8 +311,8 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 )
               })}
               <button onClick={() => openForm(null)}
-                className="btn-press mt-2 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
-                style={{ background: 'linear-gradient(135deg,#93BEBE,#77A8A8)' }}>
+                className="btn-press mt-2 w-full py-3 rounded-2xl font-display text-[13px] tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(194,71,123,0.32)]"
+                style={{ background: 'linear-gradient(135deg,#F2789F,#C2477B)' }}>
                 ＋ 记一件事
               </button>
             </div>
@@ -325,18 +323,17 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {formOpen && (
           <div className="absolute inset-0 z-[6] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => { setFormOpen(false); setEditing(null); setSimilar(null) }} />
-            <div className="panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
-              role="dialog" aria-modal="true" aria-label={editing ? '修改这件事' : '记一件事'}
-              style={{ background: 'rgba(252,250,248,0.98)', backdropFilter: 'blur(20px)', boxShadow: '0 -10px 40px rgba(92,84,77,0.14)' }}>
-              <div className="w-9 h-1 rounded-full bg-peach mx-auto mb-3" />
-              <h3 className="text-[16px] font-bold text-plum/85 mb-1">{editing ? '改一件事' : '记一件事'}</h3>
+            <div className="panel-surface-solid panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+              role="dialog" aria-modal="true" aria-label={editing ? '修改这件事' : '记一件事'}>
+              <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
+              <h3 className="font-display text-[16px] text-plum/85 leading-tight mb-1">{editing ? '改一件事' : '记一件事'}</h3>
               <p className="text-[10.5px] text-plum/40 mb-4">{editing ? '改给小汐，也改给自己' : '记给小汐 · 也记给自己'}</p>
 
               <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mb-1.5">什么事</label>
               <input type="text" value={form.title} maxLength={60}
                 onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                 placeholder="例如：期中考试"
-                className="w-full rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
 
               {!editing && (
                 <>
@@ -351,7 +348,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                   <button key={k} onClick={() => setForm(f => ({ ...f, event_type: k }))}
                     className={`btn-press px-3.5 py-1.5 rounded-full text-[11.5px] border transition-colors ${
                       form.event_type === k
-                        ? 'bg-strawberry/20 border-strawberry text-strawberry font-bold'
+                        ? 'bg-strawberry/15 border-strawberry text-raspberry font-bold'
                         : 'border-blush text-plum/55'}`}>
                     {v}
                   </button>
@@ -363,7 +360,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                   <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">回来的日子（可选）</label>
                   <input type="date" value={form.end_date} min={editing ? editing.event_date : selectedDay}
                     onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
-                    className="w-full rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                    className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
                 </>
               )}
 
@@ -371,7 +368,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
               <div className="flex gap-2">
                 <button onClick={() => setForm(f => ({ ...f, severity: 'normal' }))}
                   className={`btn-press px-3.5 py-1.5 rounded-full text-[11.5px] border ${
-                    form.severity === 'normal' ? 'bg-strawberry/20 border-strawberry text-strawberry font-bold' : 'border-blush text-plum/55'}`}>
+                    form.severity === 'normal' ? 'bg-strawberry/15 border-strawberry text-raspberry font-bold' : 'border-blush text-plum/55'}`}>
                   普通
                 </button>
                 <button onClick={() => setForm(f => ({ ...f, severity: 'high' }))}
@@ -385,7 +382,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
               <textarea value={form.memo} maxLength={300}
                 onChange={e => setForm(f => ({ ...f, memo: e.target.value }))}
                 placeholder="例如：考完想去吃顿好的"
-                className="w-full h-14 resize-none rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                className="w-full h-14 resize-none rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
 
               {/* 相似合并提示：后端 409 → 给冷冷选择，而不是静默并存两条 */}
               {similar && (
@@ -393,7 +390,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                   已经有件很像的：<b>「{similar.title}」</b>（{similar.event_date}），还要记吗？
                   <div className="flex gap-2 mt-1.5">
                     <button onClick={() => handleSave(true)}
-                      className="btn-press px-3 py-1 rounded-full bg-honey/20 text-[#8a6420] text-[11px] font-bold">还是要记</button>
+                      className="btn-press px-3 py-1 rounded-full bg-honey/20 text-[#946312] text-[11px] font-bold">还是要记</button>
                     <button onClick={() => { setSimilar(null); setFormOpen(false) }}
                       className="btn-press px-3 py-1 rounded-full bg-plum/5 text-plum/55 text-[11px]">算了</button>
                   </div>
@@ -401,8 +398,8 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
               )}
 
               <button onClick={() => handleSave(false)}
-                className="btn-press mt-4 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
-                style={{ background: 'linear-gradient(135deg,#93BEBE,#77A8A8)' }}>
+                className="btn-press mt-4 w-full py-3 rounded-2xl font-display text-[13px] tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(194,71,123,0.32)]"
+                style={{ background: 'linear-gradient(135deg,#F2789F,#C2477B)' }}>
                 {editing ? '改好啦 ✨' : '记好啦 ✨'}
               </button>
             </div>
@@ -412,7 +409,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {/* toast */}
         {toast && (
           <div className="absolute left-1/2 bottom-24 z-[9] -translate-x-1/2 animate-fade-in-up whitespace-nowrap
-            rounded-full bg-plum/90 text-peach-light px-5 py-2.5 text-[12px] tracking-wide shadow-[0_10px_30px_rgba(66,60,54,0.4)]">
+            rounded-full bg-plum/90 text-peach-light px-5 py-2.5 text-[12px] tracking-wide shadow-[0_10px_30px_rgba(110,74,86,0.4)]">
             {toast}
           </div>
         )}
