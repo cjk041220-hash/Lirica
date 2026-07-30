@@ -117,14 +117,14 @@ export default function ChatPanel({ chat, status, displayState }) {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-healing-aqua/50' : 'bg-ink-tea/15'}`} />
+        <div className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/50' : 'bg-plum/15'}`} />
       </div>
 
       {/* 状态栏：空闲/睡着时显示小汐今日碎碎念（心情 + 今天经历的事） */}
       {!collapsed && (
         <div className="flex items-center gap-2 px-4 pb-2 shrink-0">
-          <div className={`w-2 h-2 rounded-full ${characterState === 'sleepy' ? 'bg-ink-tea/25' : 'bg-healing-aqua animate-pulse-dot'}`} />
-          <span className="text-[11px] text-ink-tea/50 tracking-wide truncate">
+          <div className={`w-2 h-2 rounded-full ${characterState === 'sleepy' ? 'bg-plum/25' : 'bg-strawberry animate-pulse-dot'}`} />
+          <span className="text-[11px] text-plum/50 tracking-wide truncate">
             {(characterState === 'idle' || characterState === 'sleepy' || characterState === 'halfawake') && status?.daily_event
               ? `${status.mood ? `${status.mood} · ` : ''}${status.daily_event}`
               : (statusTexts[characterState] || '小汐在发呆')}
@@ -137,7 +137,7 @@ export default function ChatPanel({ chat, status, displayState }) {
         <div ref={listRef} onScroll={handleScroll} role="log" aria-live="polite" className="flex-1 overflow-y-auto px-4 py-2 chat-scroll min-h-0">
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
-              <p className="text-sm text-ink-tea/40">你回来啦。小汐在看窗外的云。</p>
+              <p className="text-sm text-plum/40">你回来啦。小汐在看窗外的云。</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -146,9 +146,9 @@ export default function ChatPanel({ chat, status, displayState }) {
               ))}
               {isStreaming && (
                 <div className="flex items-center gap-1 pl-4">
-                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" style={{ animationDelay: '0.2s' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-ink-tea/30 animate-pulse-dot" style={{ animationDelay: '0.4s' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-plum/30 animate-pulse-dot" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-plum/30 animate-pulse-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-plum/30 animate-pulse-dot" style={{ animationDelay: '0.4s' }} />
                 </div>
               )}
             </div>

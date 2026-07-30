@@ -104,7 +104,7 @@ export default function App() {
   }, [unread, receiveProactive, markRead])
 
   return (
-    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-warm-paper select-none sm:shadow-[0_24px_90px_-16px_rgba(0,0,0,0.6),0_4px_24px_rgba(0,0,0,0.35)]">
+    <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-cream select-none sm:shadow-[0_24px_90px_-16px_rgba(0,0,0,0.6),0_4px_24px_rgba(0,0,0,0.35)]">
       <RoomScene characterState={displayState} />
 
       {/* 顶栏控制台：四个入口收进顶部居中的一条磨砂胶囊。
@@ -113,29 +113,29 @@ export default function App() {
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(0,0,0,0.22)]">
         <button
           onClick={() => setShowSessions(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-plum/5 hover:text-plum/80"
           aria-label="以往的对话"
         >
           <IconHistory size={16} />
         </button>
         <button
           onClick={() => setShowMemories(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-plum/5 hover:text-plum/80"
           aria-label="小汐的记忆"
         >
           <IconBook size={16} />
         </button>
-        <span aria-hidden className="w-px h-3.5 bg-ink-tea/15 mx-0.5" />
+        <span aria-hidden className="w-px h-3.5 bg-plum/15 mx-0.5" />
         <button
           onClick={() => setShowCalendar(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-plum/5 hover:text-plum/80"
           aria-label="小汐的日历"
         >
           <IconCalendar size={16} />
         </button>
         <button
           onClick={() => setShowConfig(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-ink-tea/55 transition-colors hover:bg-ink-tea/5 hover:text-ink-tea/80"
+          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-plum/5 hover:text-plum/80"
           aria-label="设置"
         >
           <IconSettings size={16} />

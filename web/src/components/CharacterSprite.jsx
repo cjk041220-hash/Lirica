@@ -118,7 +118,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
         <div
           key={bubble.id}
           data-testid="poke-bubble"
-          className="absolute top-[12%] left-1/2 z-30 pointer-events-none glass-panel px-3.5 py-1.5 text-sm text-ink-tea/80 whitespace-nowrap animate-bubble-pop"
+          className="absolute top-[12%] left-1/2 z-30 pointer-events-none glass-panel px-3.5 py-1.5 text-sm text-plum/80 whitespace-nowrap animate-bubble-pop"
         >
           {bubble.text}
         </div>

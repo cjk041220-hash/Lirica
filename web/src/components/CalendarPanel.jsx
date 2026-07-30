@@ -48,9 +48,9 @@ function expandByDay(events, cells) {
 
 // pill 三色语义：✦琥珀=小汐记的 / 疗愈绿=冷冷记的 / 陶土玫瑰=很重要
 function pillClasses(ev) {
-  if (ev.severity === 'high') return 'bg-clay-rose/15 border-clay-rose text-ink-tea/85'
-  if (ev.source === 'user') return 'bg-healing-aqua/15 border-healing-aqua text-ink-tea/85'
-  return 'bg-honey/20 border-honey text-ink-tea/85'   // llm / profile
+  if (ev.severity === 'high') return 'bg-raspberry/15 border-raspberry text-plum/85'
+  if (ev.source === 'user') return 'bg-strawberry/15 border-strawberry text-plum/85'
+  return 'bg-honey/20 border-honey text-plum/85'   // llm / profile
 }
 const isXiaoxiNoted = ev => ev.source === 'llm' || ev.source === 'profile'
 const sourceLabel = ev =>
@@ -166,7 +166,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
   return (
     <div className="absolute inset-0 z-[100] flex items-end">
-      <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
+      <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full max-h-[88%] rounded-t-[24px] flex flex-col"
         ref={dialogRef} tabIndex={-1}
@@ -176,40 +176,40 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {/* 头部 */}
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
-            <IconCalendar size={16} className="text-healing-aqua/70" />
-            <h2 className="text-[13px] font-medium text-ink-tea/80 tracking-wide">小汐的日历</h2>
+            <IconCalendar size={16} className="text-strawberry/70" />
+            <h2 className="text-[13px] font-medium text-plum/80 tracking-wide">小汐的日历</h2>
           </div>
-          <button onClick={onClose} aria-label="关闭日历" className="btn-press w-7 h-7 rounded-full bg-ink-tea/5 flex items-center justify-center">
-            <IconClose size={13} className="text-ink-tea/50" />
+          <button onClick={onClose} aria-label="关闭日历" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
+            <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
 
         {/* 月份栏 */}
         <div key={monthKey} className="animate-fade-in-up flex items-center justify-center gap-3 px-5 py-2">
           <button onClick={() => shiftMonth(-1)} aria-label="上个月" title="上个月"
-            className="btn-press w-7 h-7 rounded-full bg-ink-tea/5 text-ink-tea/55 text-[15px] leading-none">‹</button>
+            className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">‹</button>
           <div className="flex items-baseline gap-1.5 min-w-[7.5rem] justify-center">
-            <span className="text-[20px] font-bold text-ink-tea/85" style={{ fontFamily: 'var(--font-serif, "Noto Serif SC", "Songti SC", serif)' }}>
+            <span className="text-[20px] font-bold text-plum/85" style={{ fontFamily: 'var(--font-serif, "Noto Serif SC", "Songti SC", serif)' }}>
               {CN_MONTHS[month.m - 1]}
             </span>
             <span className="text-[11px] font-semibold text-honey tracking-[0.2em]">{month.y}</span>
           </div>
           <button onClick={() => shiftMonth(1)} aria-label="下个月" title="下个月"
-            className="btn-press w-7 h-7 rounded-full bg-ink-tea/5 text-ink-tea/55 text-[15px] leading-none">›</button>
+            className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">›</button>
           <button onClick={() => { const t = hktTodayISO(); setMonth({ y: t.slice(0, 4) * 1, m: t.slice(5, 7) * 1 }) }}
-            className="btn-press text-[11px] px-2.5 py-1 rounded-full bg-healing-aqua/15 text-healing-aqua">今天</button>
+            className="btn-press text-[11px] px-2.5 py-1 rounded-full bg-strawberry/15 text-strawberry">今天</button>
         </div>
 
         {/* 网格 */}
         <div className="flex-1 overflow-y-auto px-3 pb-2 chat-scroll">
           <div className="grid grid-cols-7 px-1 pb-1">
             {WEEKDAYS.map(w => (
-              <span key={w} className="text-center text-[10px] text-ink-tea/35 font-medium">{w}</span>
+              <span key={w} className="text-center text-[10px] text-plum/35 font-medium">{w}</span>
             ))}
           </div>
           {loading ? (
             <div className="flex items-center justify-center h-48">
-              <div className="w-6 h-6 border-2 border-healing-aqua/20 border-t-healing-aqua/60 rounded-full animate-spin" />
+              <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
             </div>
           ) : (
             <div key={monthKey} className="grid grid-cols-7 grid-rows-6 gap-1 auto-rows-fr" style={{ minHeight: '300px' }}>
@@ -225,11 +225,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                     className={`animate-fade-in-up relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
                       ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}
                       ${isToday ? 'bg-honey/10' : ''}
-                      ${isSel ? 'bg-healing-aqua/10 border-healing-aqua/50' : 'border-transparent hover:bg-ink-tea/5'}
+                      ${isSel ? 'bg-strawberry/10 border-strawberry/50' : 'border-transparent hover:bg-plum/5'}
                       ${c.iso < today && !isToday ? 'opacity-55' : ''}`}
                     style={{ animationDelay: `${i * 0.012}s` }}
                   >
-                    <span className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-honey' : 'text-ink-tea/60'}`}>
+                    <span className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-honey' : 'text-plum/60'}`}>
                       {c.day}
                       {isToday && <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(217,164,91,0.9)]" />}
                     </span>
@@ -239,72 +239,72 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                         {isXiaoxiNoted(ev) && first ? '✦ ' : ''}{first ? ev.title : '·'}
                       </div>
                     ))}
-                    {items.length > 2 && <div className="text-[8px] text-ink-tea/35 pl-0.5">＋{items.length - 2}</div>}
+                    {items.length > 2 && <div className="text-[8px] text-plum/35 pl-0.5">＋{items.length - 2}</div>}
                   </button>
                 )
               })}
             </div>
           )}
           {/* 图例 */}
-          <div className="flex justify-center gap-4 py-2 text-[10px] text-ink-tea/40">
+          <div className="flex justify-center gap-4 py-2 text-[10px] text-plum/40">
             <span><b className="text-honey">✦</b> 小汐记的</span>
-            <span><b className="text-healing-aqua">▎</b> 冷冷记的</span>
-            <span><b className="text-clay-rose">▎</b> 很重要</span>
+            <span><b className="text-strawberry">▎</b> 冷冷记的</span>
+            <span><b className="text-raspberry">▎</b> 很重要</span>
           </div>
         </div>
 
         {/* ── 日期详情 sheet ── */}
         {selectedDay && !formOpen && (
           <div className="absolute inset-0 z-[5] flex items-end rounded-t-[24px] overflow-hidden">
-            <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={() => setSelectedDay(null)} />
+            <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => setSelectedDay(null)} />
             <div className="panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
               role="dialog" aria-modal="true" aria-label={`${selectedDay} 的安排`}
               style={{ background: 'rgba(252,250,248,0.98)', backdropFilter: 'blur(20px)', boxShadow: '0 -10px 40px rgba(92,84,77,0.14)' }}>
-              <div className="w-9 h-1 rounded-full bg-wood mx-auto mb-3" />
+              <div className="w-9 h-1 rounded-full bg-peach mx-auto mb-3" />
               <div className="flex items-baseline gap-2 mb-3">
-                <h3 className="text-[16px] font-bold text-ink-tea/85">
+                <h3 className="text-[16px] font-bold text-plum/85">
                   {selectedDay.slice(5, 7) * 1}月{selectedDay.slice(8, 10) * 1}日
                 </h3>
-                <span className="text-[11px] text-ink-tea/40">
+                <span className="text-[11px] text-plum/40">
                   周{WEEKDAYS[(new Date(selectedDay + 'T00:00:00Z').getUTCDay() + 6) % 7]}
                 </span>
               </div>
 
               {dayEvents.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-wood-border bg-wood-light/20 px-4 py-6 text-center text-[12px] leading-8 text-ink-tea/55">
-                  这一天还空着，<b className="text-healing-aqua">要不要和小汐约点什么？</b>
+                <div className="rounded-2xl border border-dashed border-blush bg-peach-light/20 px-4 py-6 text-center text-[12px] leading-8 text-plum/55">
+                  这一天还空着，<b className="text-strawberry">要不要和小汐约点什么？</b>
                 </div>
               ) : dayEvents.map(ev => {
                 const readonly = READONLY_TYPES.has(ev.event_type)
                 return (
-                  <div key={ev.id} className="flex items-center gap-2.5 rounded-2xl bg-[#F6EFE5] border border-wood-light px-3.5 py-3 mb-2">
+                  <div key={ev.id} className="flex items-center gap-2.5 rounded-2xl bg-[#F6EFE5] border border-peach-light px-3.5 py-3 mb-2">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      ev.severity === 'high' ? 'bg-clay-rose' : ev.source === 'user' ? 'bg-healing-aqua' : 'bg-honey shadow-[0_0_6px_rgba(217,164,91,0.5)]'}`} />
+                      ev.severity === 'high' ? 'bg-raspberry' : ev.source === 'user' ? 'bg-strawberry' : 'bg-honey shadow-[0_0_6px_rgba(217,164,91,0.5)]'}`} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold text-ink-tea/85 truncate">
+                      <p className="text-[13px] font-semibold text-plum/85 truncate">
                         {isXiaoxiNoted(ev) ? '✦ ' : ''}{ev.title}
                       </p>
-                      <p className="text-[10.5px] text-ink-tea/40">
+                      <p className="text-[10.5px] text-plum/40">
                         {sourceLabel(ev)}
                         {ev.end_date ? ` · ${ev.event_date.slice(5)} ~ ${ev.end_date.slice(5)}` : ''}
                         {ev.memo ? ` · ${ev.memo}` : ''}
                       </p>
                     </div>
                     {ev.severity === 'high' && (
-                      <span className="shrink-0 text-[9.5px] text-clay-rose border border-clay-rose/50 rounded-full px-2 py-0.5">很重要</span>
+                      <span className="shrink-0 text-[9.5px] text-raspberry border border-raspberry/50 rounded-full px-2 py-0.5">很重要</span>
                     )}
                     {readonly ? (
-                      <span className="shrink-0 text-[9.5px] text-ink-tea/40 border border-wood-border rounded-full px-2 py-0.5">只读</span>
+                      <span className="shrink-0 text-[9.5px] text-plum/40 border border-blush rounded-full px-2 py-0.5">只读</span>
                     ) : (
                       <>
                         <button aria-label={`编辑${ev.title}`} title="编辑" onClick={() => openForm(ev)}
-                          className="btn-press shrink-0 w-7 h-7 rounded-lg bg-warm-paper border border-wood-light text-ink-tea/55 text-[12px]">✎</button>
+                          className="btn-press shrink-0 w-7 h-7 rounded-lg bg-cream border border-peach-light text-plum/55 text-[12px]">✎</button>
                         <button aria-label={confirmDelId === ev.id ? '再点一次确认删除' : `删除${ev.title}`} title="删除"
                           onClick={() => handleDelete(ev)}
                           className={`btn-press shrink-0 w-7 h-7 rounded-lg border text-[11px] ${
                             confirmDelId === ev.id
-                              ? 'bg-clay-rose/15 border-clay-rose/50 text-clay-rose text-[9px]'
-                              : 'bg-warm-paper border-wood-light text-ink-tea/55'}`}>
+                              ? 'bg-raspberry/15 border-raspberry/50 text-raspberry text-[9px]'
+                              : 'bg-cream border-peach-light text-plum/55'}`}>
                           {confirmDelId === ev.id ? '确认?' : '✕'}
                         </button>
                       </>
@@ -313,7 +313,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 )
               })}
               <button onClick={() => openForm(null)}
-                className="btn-press mt-2 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-warm-paper shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
+                className="btn-press mt-2 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
                 style={{ background: 'linear-gradient(135deg,#93BEBE,#77A8A8)' }}>
                 ＋ 记一件事
               </button>
@@ -324,35 +324,35 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {/* ── 记 / 改事件 sheet ── */}
         {formOpen && (
           <div className="absolute inset-0 z-[6] flex items-end rounded-t-[24px] overflow-hidden">
-            <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={() => { setFormOpen(false); setEditing(null); setSimilar(null) }} />
+            <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => { setFormOpen(false); setEditing(null); setSimilar(null) }} />
             <div className="panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
               role="dialog" aria-modal="true" aria-label={editing ? '修改这件事' : '记一件事'}
               style={{ background: 'rgba(252,250,248,0.98)', backdropFilter: 'blur(20px)', boxShadow: '0 -10px 40px rgba(92,84,77,0.14)' }}>
-              <div className="w-9 h-1 rounded-full bg-wood mx-auto mb-3" />
-              <h3 className="text-[16px] font-bold text-ink-tea/85 mb-1">{editing ? '改一件事' : '记一件事'}</h3>
-              <p className="text-[10.5px] text-ink-tea/40 mb-4">{editing ? '改给小汐，也改给自己' : '记给小汐 · 也记给自己'}</p>
+              <div className="w-9 h-1 rounded-full bg-peach mx-auto mb-3" />
+              <h3 className="text-[16px] font-bold text-plum/85 mb-1">{editing ? '改一件事' : '记一件事'}</h3>
+              <p className="text-[10.5px] text-plum/40 mb-4">{editing ? '改给小汐，也改给自己' : '记给小汐 · 也记给自己'}</p>
 
-              <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mb-1.5">什么事</label>
+              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mb-1.5">什么事</label>
               <input type="text" value={form.title} maxLength={60}
                 onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                 placeholder="例如：期中考试"
-                className="w-full rounded-xl bg-[#FBF6EF] border border-wood-border px-3.5 py-2.5 text-[13px] text-ink-tea/85 outline-none focus:border-healing-aqua" />
+                className="w-full rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
 
               {!editing && (
                 <>
-                  <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mt-4 mb-1.5">日期</label>
-                  <div className="rounded-xl bg-wood-light/25 border border-wood-light px-3.5 py-2.5 text-[13px] text-ink-tea/70">{selectedDay}</div>
+                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">日期</label>
+                  <div className="rounded-xl bg-peach-light/25 border border-peach-light px-3.5 py-2.5 text-[13px] text-plum/70">{selectedDay}</div>
                 </>
               )}
 
-              <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mt-4 mb-1.5">类型</label>
+              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">类型</label>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(TYPE_LABELS).map(([k, v]) => (
                   <button key={k} onClick={() => setForm(f => ({ ...f, event_type: k }))}
                     className={`btn-press px-3.5 py-1.5 rounded-full text-[11.5px] border transition-colors ${
                       form.event_type === k
-                        ? 'bg-healing-aqua/20 border-healing-aqua text-healing-aqua font-bold'
-                        : 'border-wood-border text-ink-tea/55'}`}>
+                        ? 'bg-strawberry/20 border-strawberry text-strawberry font-bold'
+                        : 'border-blush text-plum/55'}`}>
                     {v}
                   </button>
                 ))}
@@ -360,48 +360,48 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
               {form.event_type === 'trip' && (
                 <>
-                  <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mt-4 mb-1.5">回来的日子（可选）</label>
+                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">回来的日子（可选）</label>
                   <input type="date" value={form.end_date} min={editing ? editing.event_date : selectedDay}
                     onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
-                    className="w-full rounded-xl bg-[#FBF6EF] border border-wood-border px-3.5 py-2.5 text-[13px] text-ink-tea/85 outline-none focus:border-healing-aqua" />
+                    className="w-full rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
                 </>
               )}
 
-              <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mt-4 mb-1.5">重要性</label>
+              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">重要性</label>
               <div className="flex gap-2">
                 <button onClick={() => setForm(f => ({ ...f, severity: 'normal' }))}
                   className={`btn-press px-3.5 py-1.5 rounded-full text-[11.5px] border ${
-                    form.severity === 'normal' ? 'bg-healing-aqua/20 border-healing-aqua text-healing-aqua font-bold' : 'border-wood-border text-ink-tea/55'}`}>
+                    form.severity === 'normal' ? 'bg-strawberry/20 border-strawberry text-strawberry font-bold' : 'border-blush text-plum/55'}`}>
                   普通
                 </button>
                 <button onClick={() => setForm(f => ({ ...f, severity: 'high' }))}
                   className={`btn-press px-3.5 py-1.5 rounded-full text-[11.5px] border ${
-                    form.severity === 'high' ? 'bg-clay-rose/15 border-clay-rose text-clay-rose font-bold' : 'border-wood-border text-ink-tea/55'}`}>
+                    form.severity === 'high' ? 'bg-raspberry/15 border-raspberry text-raspberry font-bold' : 'border-blush text-plum/55'}`}>
                   很重要
                 </button>
               </div>
 
-              <label className="block text-[10px] font-semibold text-ink-tea/45 tracking-[0.24em] mt-4 mb-1.5">备注（可选）</label>
+              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">备注（可选）</label>
               <textarea value={form.memo} maxLength={300}
                 onChange={e => setForm(f => ({ ...f, memo: e.target.value }))}
                 placeholder="例如：考完想去吃顿好的"
-                className="w-full h-14 resize-none rounded-xl bg-[#FBF6EF] border border-wood-border px-3.5 py-2.5 text-[13px] text-ink-tea/85 outline-none focus:border-healing-aqua" />
+                className="w-full h-14 resize-none rounded-xl bg-[#FBF6EF] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
 
               {/* 相似合并提示：后端 409 → 给冷冷选择，而不是静默并存两条 */}
               {similar && (
-                <div className="mt-3 rounded-xl bg-honey/10 border border-honey/40 px-3.5 py-2.5 text-[11.5px] text-ink-tea/70 leading-6">
+                <div className="mt-3 rounded-xl bg-honey/10 border border-honey/40 px-3.5 py-2.5 text-[11.5px] text-plum/70 leading-6">
                   已经有件很像的：<b>「{similar.title}」</b>（{similar.event_date}），还要记吗？
                   <div className="flex gap-2 mt-1.5">
                     <button onClick={() => handleSave(true)}
                       className="btn-press px-3 py-1 rounded-full bg-honey/20 text-[#8a6420] text-[11px] font-bold">还是要记</button>
                     <button onClick={() => { setSimilar(null); setFormOpen(false) }}
-                      className="btn-press px-3 py-1 rounded-full bg-ink-tea/5 text-ink-tea/55 text-[11px]">算了</button>
+                      className="btn-press px-3 py-1 rounded-full bg-plum/5 text-plum/55 text-[11px]">算了</button>
                   </div>
                 </div>
               )}
 
               <button onClick={() => handleSave(false)}
-                className="btn-press mt-4 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-warm-paper shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
+                className="btn-press mt-4 w-full py-3 rounded-2xl text-[13px] font-bold tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(119,168,168,0.35)]"
                 style={{ background: 'linear-gradient(135deg,#93BEBE,#77A8A8)' }}>
                 {editing ? '改好啦 ✨' : '记好啦 ✨'}
               </button>
@@ -412,7 +412,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {/* toast */}
         {toast && (
           <div className="absolute left-1/2 bottom-24 z-[9] -translate-x-1/2 animate-fade-in-up whitespace-nowrap
-            rounded-full bg-ink-tea/90 text-wood-light px-5 py-2.5 text-[12px] tracking-wide shadow-[0_10px_30px_rgba(66,60,54,0.4)]">
+            rounded-full bg-plum/90 text-peach-light px-5 py-2.5 text-[12px] tracking-wide shadow-[0_10px_30px_rgba(66,60,54,0.4)]">
             {toast}
           </div>
         )}

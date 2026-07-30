@@ -74,7 +74,7 @@ export default function SessionsPanel({ chat, onClose }) {
 
   return (
     <div className="absolute inset-0 z-[100] flex items-end">
-      <div className="absolute inset-0 bg-ink-tea/15 overlay-enter" onClick={onClose} />
+      <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
       <div className="panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
         ref={dialogRef} tabIndex={-1}
@@ -83,11 +83,11 @@ export default function SessionsPanel({ chat, onClose }) {
 
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
-            <IconHistory size={16} className="text-healing-aqua/70" />
-            <h2 className="text-[13px] font-medium text-ink-tea/80 tracking-wide">以往的对话</h2>
+            <IconHistory size={16} className="text-strawberry/70" />
+            <h2 className="text-[13px] font-medium text-plum/80 tracking-wide">以往的对话</h2>
           </div>
-          <button onClick={onClose} aria-label="关闭对话列表" className="btn-press w-7 h-7 rounded-full bg-ink-tea/5 flex items-center justify-center">
-            <IconClose size={13} className="text-ink-tea/50" />
+          <button onClick={onClose} aria-label="关闭对话列表" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
+            <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
 
@@ -95,7 +95,7 @@ export default function SessionsPanel({ chat, onClose }) {
         <div className="px-5 pb-2.5">
           <button
             onClick={() => { chat.newSession(); onClose() }}
-            className="btn-press text-[11px] px-3 py-1 rounded-full bg-healing-aqua/15 text-healing-aqua"
+            className="btn-press text-[11px] px-3 py-1 rounded-full bg-strawberry/15 text-strawberry"
           >
             ＋ 开一段新聊天
           </button>
@@ -104,13 +104,13 @@ export default function SessionsPanel({ chat, onClose }) {
         <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll">
           {loading ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
-              <div className="w-6 h-6 border-2 border-healing-aqua/20 border-t-healing-aqua/60 rounded-full animate-spin" />
-              <span className="text-[11px] text-ink-tea/30">正在翻找以前的对话……</span>
+              <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
+              <span className="text-[11px] text-plum/30">正在翻找以前的对话……</span>
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
-              <IconWhale size={28} className="text-ink-tea/10" />
-              <span className="text-[12px] text-ink-tea/30">还没有对话呢，去和小汐聊聊吧。</span>
+              <IconWhale size={28} className="text-plum/10" />
+              <span className="text-[12px] text-plum/30">还没有对话呢，去和小汐聊聊吧。</span>
             </div>
           ) : (
             <div className="space-y-2 pt-1">
@@ -131,34 +131,34 @@ export default function SessionsPanel({ chat, onClose }) {
                       }
                     }}
                     className={`animate-fade-in-up w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
-                      isCurrent ? 'bg-healing-aqua/10 ring-1 ring-healing-aqua/40' : 'hover:bg-ink-tea/5'
+                      isCurrent ? 'bg-strawberry/10 ring-1 ring-strawberry/40' : 'hover:bg-plum/5'
                     }`}
                     style={{ animationDelay: `${i * 0.03}s` }}
                   >
                     <div className="flex items-center gap-2">
-                      <p className="flex-1 truncate text-[13px] font-medium text-ink-tea/75">
+                      <p className="flex-1 truncate text-[13px] font-medium text-plum/75">
                         {s.title || '(没有标题)'}
                       </p>
                       {isCurrent && (
-                        <span className="shrink-0 text-[9px] text-healing-aqua bg-healing-aqua/10 px-1.5 py-0.5 rounded-full">
+                        <span className="shrink-0 text-[9px] text-strawberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
                           现在
                         </span>
                       )}
-                      <span className="shrink-0 text-[10px] text-ink-tea/30">{fmtTime(s.updated_at)}</span>
+                      <span className="shrink-0 text-[10px] text-plum/30">{fmtTime(s.updated_at)}</span>
                       <button
                         aria-label={confirmId === s.id ? '再点一次确认删除' : '删除这段对话'}
                         onClick={(e) => handleDelete(e, s.id)}
                         className={`btn-press shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors ${
                           confirmId === s.id
                             ? 'bg-red-400/15 text-red-500 text-[9px]'
-                            : 'text-ink-tea/20 hover:text-ink-tea/50 hover:bg-ink-tea/5'
+                            : 'text-plum/20 hover:text-plum/50 hover:bg-plum/5'
                         }`}
                       >
                         {confirmId === s.id ? '确认?' : <IconClose size={10} />}
                       </button>
                     </div>
                     {s.preview && (
-                      <p className="mt-0.5 truncate text-[11px] text-ink-tea/40">{s.preview}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-plum/40">{s.preview}</p>
                     )}
                   </div>
                 )

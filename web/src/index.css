@@ -4,16 +4,20 @@
    拖拽把手自有 touch-none（更高优先级）覆盖，不受影响 */
 * { touch-action: manipulation; }
 
+/* 「奶甜草莓粉」色板（2026-07-30 全面换肤，小汐自己点的粉色少女心）：
+   对比度纪律——plum/cream ≈6.9:1 可作正文；strawberry/cream ≈3.2:1 只配
+   大字号/图标/边框/色块；<12px 的彩色文字一律用 raspberry（≈5.6:1）；
+   白字只出现在 strawberry→raspberry 渐变或 plum 底上 */
 @theme {
-  --color-warm-paper: #FCFAF8;
-  --color-ink-tea: #5C544D;
-  --color-healing-aqua: #88B5B5;
-  --color-wood: #D4C5B3;
-  --color-wood-light: #E8D5B7;
-  --color-wood-border: #C4B5A3;
-  /* 日历三色语义（设计稿 v2 验收色；另一色复用 healing-aqua） */
-  --color-honey: #D9A45B;        /* ✦ 小汐从聊天里记的 */
-  --color-clay-rose: #C9828C;    /* 很重要的事 */
+  --color-cream: #FFF6F8;        /* 底色·奶油粉白 */
+  --color-plum: #6E4A56;         /* 文字·梅子可可 */
+  --color-strawberry: #F2789F;   /* 主色·草莓粉 */
+  --color-peach: #FFC9A3;        /* 辅色·蜜桃橙（仅点缀，不铺大面） */
+  --color-peach-light: #FFE7D6;  /* 蜜桃奶 */
+  --color-blush: #F3C3D6;        /* 浅粉描边 */
+  /* 日历三色语义：蜂蜜金=小汐记的 / 草莓粉=冷冷记的 / 树莓=很重要 */
+  --color-honey: #E9B44C;        /* ✦ 小汐从聊天里记的 · 星光蜂蜜金 */
+  --color-raspberry: #C2477B;    /* 很重要的事 */
   --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
@@ -115,9 +119,9 @@
    一直把 mx-auto 压成 0，桌面宽屏下 430px 房间列永远贴左，无法居中 */
 @layer base {
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  /* 键盘用户的焦点环基线（体检点名的焦点不可见）：疗愈绿环，
+  /* 键盘用户的焦点环基线（体检点名的焦点不可见）：草莓粉环，
      惠及全部面板、格子、按钮与输入框 */
-  :focus-visible { outline: 2px solid var(--color-healing-aqua); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--color-strawberry); outline-offset: 2px; }
 }
 /* 系统「减弱动态效果」→ 所有动画/过渡静止化（体检 🟡-1）：
    状态切换仍在，只是不再动——前庭障碍用户也能安心住着这个房间 */
@@ -133,7 +137,7 @@ html, body, #root { height: 100%; overflow: hidden; }
 
 body {
   font-family: var(--font-sans);
-  color: var(--color-ink-tea);
+  color: var(--color-plum);
   /* 桌面宽屏时房间列居中悬浮，四周是夜的底色：
      暖调深色 + 窗光般的微弱青色/木色晕染，不是死白也不是纯黑 */
   background-color: #2b2724;

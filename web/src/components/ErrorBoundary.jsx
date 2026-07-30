@@ -21,13 +21,13 @@ export default class ErrorBoundary extends Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-warm-paper text-ink-tea p-8 text-center">
+        <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-cream text-plum p-8 text-center">
           <div className="text-5xl">🐋</div>
           <p className="text-base">呜……小汐晕倒了。</p>
-          <p className="text-sm text-ink-tea/50">刷新一下页面再试试好不好？</p>
+          <p className="text-sm text-plum/50">刷新一下页面再试试好不好？</p>
           <button
             onClick={() => window.location.reload()}
-            className="mt-2 px-5 py-2 rounded-full bg-healing-aqua text-white text-sm shadow-sm"
+            className="mt-2 px-5 py-2 rounded-full bg-strawberry text-white text-sm shadow-sm"
           >
             刷新页面
           </button>

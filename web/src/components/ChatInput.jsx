@@ -27,7 +27,7 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
   return (
     <div className="px-4 pb-3 pt-1.5 shrink-0">
       {text.length >= MAX_LEN - 100 && (
-        <div className="text-right text-[10px] text-ink-tea/40 pb-0.5 pr-2">
+        <div className="text-right text-[10px] text-plum/40 pb-0.5 pr-2">
           {text.length}/{MAX_LEN}
         </div>
       )}
@@ -46,13 +46,13 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           placeholder="和小汐说说话……"
-          className="flex-1 bg-transparent text-[15px] text-ink-tea placeholder:text-ink-tea/25 outline-none leading-relaxed"
+          className="flex-1 bg-transparent text-[15px] text-plum placeholder:text-plum/25 outline-none leading-relaxed"
         />
 
         {isStreaming ? (
           <button
             onClick={onStop}
-            className="btn-press w-9 h-9 rounded-full bg-ink-tea/80 flex items-center justify-center shrink-0 shadow-sm"
+            className="btn-press w-9 h-9 rounded-full bg-plum/80 flex items-center justify-center shrink-0 shadow-sm"
             aria-label="停止"
           >
             <IconStop size={14} className="text-white" />
@@ -63,8 +63,8 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
             disabled={!text.trim()}
             className={`btn-press w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm transition-all duration-300 ${
               text.trim()
-                ? 'bg-healing-aqua text-white shadow-[0_2px_8px_rgba(136,181,181,0.3)]'
-                : 'bg-ink-tea/8 text-ink-tea/20'
+                ? 'bg-strawberry text-white shadow-[0_2px_8px_rgba(136,181,181,0.3)]'
+                : 'bg-plum/8 text-plum/20'
             }`}
             aria-label="发送"
           >
