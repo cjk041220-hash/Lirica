@@ -212,7 +212,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
             </div>
           ) : (
             <div key={monthKey} className="grid grid-cols-7 grid-rows-6 gap-1 auto-rows-fr" style={{ minHeight: '300px' }}>
-              {cells.map((c, i) => {
+              {cells.map((c) => {
                 const items = byDay[c.iso] || []
                 const isToday = c.iso === today
                 const isSel = c.iso === selectedDay
@@ -221,12 +221,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                     key={c.iso}
                     onClick={() => setSelectedDay(c.iso)}
                     aria-label={`${month.m}月${c.day}日${items.length ? `，${items.length}件事` : ''}`}
-                    className={`animate-fade-in-up springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
+                    className={`springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
                       ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}
                       ${isToday ? 'bg-honey/10' : ''}
                       ${isSel ? 'bg-strawberry/10 border-strawberry/50' : 'border-transparent hover:bg-plum/5'}
                       ${c.iso < today && !isToday ? 'opacity-55' : ''}`}
-                    style={{ animationDelay: `${i * 0.012}s` }}
                   >
                     <span className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-raspberry' : 'text-plum/60'}`}>
                       {c.day}

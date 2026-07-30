@@ -111,16 +111,17 @@
   50%      { opacity: 1;    transform: scale(1) rotate(45deg); }
 }
 
-/* ── 少女心：爱心两种动法 ────────────────────────────── */
-/* 漂浮爱心：淡入 → 三段横向摇摆上升 → 窗顶淡出（-108vh 飞出窗外）。
-   只动 transform/opacity（合成器友好）；负延迟由使用方给，首帧即有爱心 */
-@keyframes heartFloat {
-  0%   { opacity: 0; transform: translate(0, 0) rotate(-4deg); }
+/* ── 少女心：漂浮微粒 + 戳一戳爱心迸发 ───────────────── */
+/* 漂浮圆点（ambient-motes）：淡入 → 三段横向摇摆上升 → 窗顶淡出。
+   只动 transform/opacity（合成器友好）；负延迟由使用方给，首帧即有微粒。
+   2026-07-30 由漂浮爱心改为安静的圆点——常驻爱心太抢眼，圆点更像浮尘/微光 */
+@keyframes floatUp {
+  0%   { opacity: 0; transform: translate(0, 0); }
   8%   { opacity: 1; }
-  33%  { transform: translate(7px, -36vh) rotate(5deg); }
-  66%  { transform: translate(-6px, -72vh) rotate(-5deg); }
+  33%  { transform: translate(7px, -36vh); }
+  66%  { transform: translate(-6px, -72vh); }
   92%  { opacity: 1; }
-  100% { opacity: 0; transform: translate(4px, -108vh) rotate(3deg); }
+  100% { opacity: 0; transform: translate(4px, -108vh); }
 }
 /* 戳一戳爱心迸发：先原地绽开，再沿各自的 --dx/--dy/--r 飞散消融 */
 @keyframes heartBurst {
@@ -156,8 +157,8 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  /* 爱心是纯动态装饰、不承担状态——减弱动效下整体撤下，而非定格在半空 */
-  .floating-hearts, .heart-burst { display: none; }
+  /* 漂浮微粒与戳一戳爱心是纯动态装饰、不承担状态——减弱动效下整体撤下，而非定格在半空 */
+  .ambient-motes, .heart-burst { display: none; }
 }
 html, body, #root { height: 100%; overflow: hidden; }
 
@@ -219,21 +220,22 @@ body::before {
 }
 
 /* 底部面板统一表面：奶油粉底 + 半错波点。此前同款玻璃样式在四个面板里
-   以 inline style 重复了六遍——换肤时一并收编，泄漏和重复一次消灭 */
+   以 inline style 重复了六遍——换肤时一并收编，泄漏和重复一次消灭。
+   注意：这里故意不用 backdrop-filter。面板已 97–99% 不透明，模糊几乎看不见，
+   而开着它会让浏览器在面板弹出时把背后整页重新光栅化喂给模糊——表现为主页面
+   「自上而下刷一下」的扫掠感（用户报的观感问题）。去掉模糊=去掉扫掠+更省合成 */
 .panel-surface, .panel-surface-solid {
-  background-color: rgba(255, 246, 248, 0.96);
+  background-color: rgba(255, 246, 248, 0.97);
   background-image:
     radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px),
     radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px);
   background-size: 26px 26px;
   background-position: 0 0, 13px 13px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 -12px 48px rgba(110, 74, 86, 0.12);
 }
 /* 日历内层 sheet 的更实变体（叠在面板上，透出更少） */
 .panel-surface-solid {
-  background-color: rgba(255, 246, 248, 0.98);
+  background-color: rgba(255, 246, 248, 0.99);
   box-shadow: 0 -10px 40px rgba(110, 74, 86, 0.14);
 }
 /* 顶部丝带：面板顶沿一道草莓↔蜜桃的渐隐彩线 */

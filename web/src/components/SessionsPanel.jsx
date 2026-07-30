@@ -113,7 +113,7 @@ export default function SessionsPanel({ chat, onClose }) {
             </div>
           ) : (
             <div className="space-y-2 pt-1">
-              {sessions.map((s, i) => {
+              {sessions.map((s) => {
                 const isCurrent = s.id === chat.sessionId
                 return (
                   // 行容器用 div role="button"（不用 <button>）——HTML 规范
@@ -129,10 +129,9 @@ export default function SessionsPanel({ chat, onClose }) {
                         openSession(s)
                       }
                     }}
-                    className={`animate-fade-in-up springy w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
+                    className={`springy w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
                       isCurrent ? 'bg-strawberry/10 ring-1 ring-strawberry/40' : 'hover:bg-plum/5'
                     }`}
-                    style={{ animationDelay: `${i * 0.03}s` }}
                   >
                     <div className="flex items-center gap-2">
                       <p className="flex-1 truncate text-[13px] font-medium text-plum/75">

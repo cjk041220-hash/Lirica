@@ -97,7 +97,7 @@ export default function MemoriesPanel({ onClose }) {
           ) : tab === 'memories' ? (
             <div className="space-y-5 pt-2">
               {memories.map((item, i) => (
-                <div key={item.id || i} className="animate-fade-in-up springy" style={{ animationDelay: `${i * 0.05}s` }}>
+                <div key={item.id || i} className="springy">
                   <div className="border-l-2 border-strawberry/25 pl-3.5 py-0.5">
                     {(item.created_at || item.date) && (
                       <p className="text-[10px] text-plum/25 mb-1">{item.created_at || item.date}</p>
@@ -118,7 +118,7 @@ export default function MemoriesPanel({ onClose }) {
             /* 日记：按日期倒序，保留换行（晚间自动补记与白天手记分段呈现） */
             <div className="space-y-5 pt-2">
               {diaries.map((item, i) => (
-                <div key={item.date || i} className="animate-fade-in-up springy" style={{ animationDelay: `${i * 0.05}s` }}>
+                <div key={item.date || i} className="springy">
                   <div className="border-l-2 border-blush/50 pl-3.5 py-0.5">
                     <p className="text-[10px] text-plum/25 mb-1">{item.title || item.date}</p>
                     <p className="text-[13px] text-plum/65 leading-[1.8] whitespace-pre-wrap">{item.content}</p>

@@ -91,9 +91,9 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
         id: now + i,
         left: 30 + Math.random() * 40,             // 30–70%
         top: 18 + Math.random() * 8,               // 18–26%（头周）
-        size: 9 + Math.random() * 7,               // 9–16px
-        dx: (Math.random() - 0.5) * 72,            // -36..36px
-        dy: -(46 + Math.random() * 26),            // -46..-72px
+        size: 7 + Math.random() * 5,               // 7–12px（小巧，不喧宾夺主）
+        dx: (Math.random() - 0.5) * 56,            // -28..28px（收一点，留在她身边）
+        dy: -(34 + Math.random() * 22),            // -34..-56px
         r: (Math.random() - 0.5) * 40,             // ±20°
         color: BURST_COLORS[i % BURST_COLORS.length],
       })))
