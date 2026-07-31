@@ -134,7 +134,8 @@ async def _refresh_agent(app):
 
 
 async def _periodic_maintenance():
-    """定期维护：裁剪 checkpoint + 备份数据库 + 记忆分层衰减。
+    """定期维护：裁剪 checkpoint + 备份数据库 + 记忆分层衰减 +
+    记忆后台提取 + 记忆健康检查。
 
     随心跳每 2 小时执行一次，对单用户应用频率足够。
     """
@@ -157,6 +158,23 @@ async def _periodic_maintenance():
         await run_status_decay()
     except Exception as e:
         log.error("记忆分层衰减失败：%s", e)
+
+    # 记忆后台提取（2026-08-01 架构评审 D1/D2）：会话后异步提炼新
+    # 事实，兜底纯 agentic 写路径（实盘曾 31 条消息零触发）。无新消息
+    # 时纯读近零开销；内部已记日志，这里只管与前段隔离
+    try:
+        from memory.extract import extract_new_memories
+        await extract_new_memories()
+    except Exception as e:
+        log.error("记忆后台提取失败：%s", e)
+
+    # 记忆健康检查（D3）：有对话却零记忆 / 长期无写入时告警（24h 节流，
+    # 防 12 条/天的刷屏）。空库也打 INFO 遥测
+    try:
+        from memory.extract import check_and_report_memory_health
+        await check_and_report_memory_health()
+    except Exception as e:
+        log.error("记忆健康检查失败：%s", e)
 
 
 # ── 主动消息系统 ──────────────────────────────────────────────

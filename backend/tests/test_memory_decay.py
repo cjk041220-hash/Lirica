@@ -164,11 +164,15 @@ async def test_periodic_maintenance_decay_isolated():
 
     with patch("database.core.prune_checkpoints", new=AsyncMock()) as prune, \
          patch("database.core.backup_database", new=AsyncMock()) as backup, \
-         patch("memory.manager.run_status_decay", new=AsyncMock(side_effect=RuntimeError("boom"))):
+         patch("memory.manager.run_status_decay", new=AsyncMock(side_effect=RuntimeError("boom"))), \
+         patch("memory.extract.extract_new_memories", new=AsyncMock()) as extract_new, \
+         patch("memory.extract.check_and_report_memory_health", new=AsyncMock()) as health:
         await heartbeat._periodic_maintenance()  # 不抛
 
     prune.assert_awaited_once()
     backup.assert_awaited_once()
+    extract_new.assert_awaited_once()   # 提取段独立于衰减段，照常执行
+    health.assert_awaited_once()
 
 
 async def test_periodic_maintenance_runs_decay():
@@ -178,7 +182,9 @@ async def test_periodic_maintenance_runs_decay():
     with patch("database.core.prune_checkpoints", new=AsyncMock()), \
          patch("database.core.backup_database", new=AsyncMock()), \
          patch("memory.manager.run_status_decay", new=AsyncMock(
-             return_value={"promoted": 0, "archived": 0})) as decay:
+             return_value={"promoted": 0, "archived": 0})) as decay, \
+         patch("memory.extract.extract_new_memories", new=AsyncMock()), \
+         patch("memory.extract.check_and_report_memory_health", new=AsyncMock()):
         await heartbeat._periodic_maintenance()
 
     decay.assert_awaited_once()

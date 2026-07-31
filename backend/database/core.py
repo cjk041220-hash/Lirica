@@ -120,7 +120,10 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             created_at      TEXT NOT NULL,
             last_used_at    TEXT,
             access_count    INTEGER DEFAULT 0,
-            status          TEXT DEFAULT 'active'
+            status          TEXT DEFAULT 'active',
+            updated_at      TEXT,
+            source          TEXT,
+            prev_content    TEXT
         );
 
         CREATE TABLE IF NOT EXISTS diaries (
@@ -165,6 +168,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
+        MEMORY_EXTRACT_STATE_SQL,
     )
     # life_state 表（v7：含 first_met_on）：老库由迁移补列，新库由共享
     # DDL 常量建立，与 migrations / conftest 三处永不漂移
@@ -185,6 +189,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.executescript(EVENTS_SCHEMA_SQL)
     # chat_sessions / chat_messages（迁移 v8）：同共享 DDL 常量模式
     await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
+    # memory_extract_state（迁移 v11）：后台提取水位线 + 健康检查节流
+    await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针

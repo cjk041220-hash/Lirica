@@ -45,6 +45,20 @@ def _parse_time(t: str | None) -> datetime.datetime:
         return datetime.datetime(2000, 1, 1, tzinfo=_HKT)
 
 
+# 单条记忆内容长度上限（字符）。narrative 注入展示上限是 200 字，
+# 库里留 500 的余量（LLM 手滑写长文时截断保底，不拒绝——对话中不能
+# 卡死写入）。截断带 log，便于发现 LLM 长文倾向（2026-08-01 评审 D4）。
+_MAX_CONTENT_LEN = 500
+
+
+def _cap_content(content: str, context: str) -> str:
+    """截断超长记忆内容（500 字），超限部分替换为省略号并记日志。"""
+    if len(content) > _MAX_CONTENT_LEN:
+        log.warning("记忆内容超长截断（%s）：%d → %d 字", context, len(content), _MAX_CONTENT_LEN)
+        return content[:_MAX_CONTENT_LEN] + "……"
+    return content
+
+
 def _char_bigrams(text: str) -> set[str]:
     """字符 2-gram 集合（去空白）。中文短文本的话题指纹，无需分词。"""
     t = "".join((text or "").split())
@@ -119,11 +133,16 @@ class MemoryManager:
         self,
         category: str,
         content: str,
+        source: str | None = None,
     ) -> dict:
         """添加一条记忆（原子去重）。返回实际生效的记忆条目。
 
         去重规则：同一 category 下已有完全相同的 content（活跃行）时，
-        不重复添加，只刷新 created_at 和 last_used_at。
+        不重复添加，只刷新 created_at 和 last_used_at（以及 updated_at，
+        v12 语义：再次想起也视为一次内容刷新；source 保留首次来源）。
+
+        source（v12）：来源追踪——后台提取传 ``chat:{session_id}``，
+        agentic remember 不传（NULL）。「小汐为什么记得这个」可追溯。
 
         去重由数据库层的唯一部分索引 (category, content)
         WHERE status IN ('active', 'core')
@@ -138,18 +157,21 @@ class MemoryManager:
         content = (content or "").strip()
         if not content:
             raise ValueError("content 不能为空")
+        content = _cap_content(content, "add")
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
         await self._db.execute(
             """INSERT INTO memories
-               (id, content, category, created_at, last_used_at, access_count, status)
-               VALUES (?, ?, ?, ?, ?, 0, 'active')
+               (id, content, category, created_at, last_used_at, access_count,
+                status, updated_at, source)
+               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?)
                ON CONFLICT(category, content) WHERE status IN ('active', 'core')
                DO UPDATE SET
                    created_at = excluded.created_at,
-                   last_used_at = excluded.last_used_at""",
-            (mem_id, content, category, now, now),
+                   last_used_at = excluded.last_used_at,
+                   updated_at = excluded.updated_at""",
+            (mem_id, content, category, now, now, now, source),
         )
         await self._db.commit()
 
@@ -164,11 +186,33 @@ class MemoryManager:
         return rows_to_dicts(cursor, [row])[0]
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
-        """覆盖一条记忆的内容，刷新时间戳。返回是否成功。"""
+        """覆盖一条记忆的内容，保留首次时间、记录修改时间与旧文本。
+
+        v12 语义（评审 D5）：created_at 是「第一次记住」的时间，覆盖
+        只刷 updated_at——否则时间衰减被重置，被纠正的旧记忆反而
+        变成「新记忆」；旧文本存进 prev_content（单层快照），矛盾
+        纠正后仍可回看旧说法。
+        """
+        new_content = _cap_content((new_content or "").strip(), "update_content")
+        if not new_content:
+            return False
+        # 先读旧文本（同一事务内完成：取旧值 → 覆盖），
+        # 找不到目标行直接返回 False（不写空快照）
+        cursor = await self._db.execute(
+            "SELECT content FROM memories WHERE id = ? AND status IN ('active', 'core')",
+            (memory_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        old_content = row[0]
+
         now = _now()
         cursor = await self._db.execute(
-            "UPDATE memories SET content = ?, created_at = ?, last_used_at = ? WHERE id = ? AND status IN ('active', 'core')",
-            (new_content, now, now, memory_id),
+            """UPDATE memories
+               SET content = ?, updated_at = ?, prev_content = ?, last_used_at = ?
+               WHERE id = ? AND status IN ('active', 'core')""",
+            (new_content, now, old_content, now, memory_id),
         )
         await self._db.commit()
         return cursor.rowcount > 0
@@ -217,10 +261,17 @@ class MemoryManager:
         log.info("记忆备份已保存：%s", backup_path)
         return backup_path
 
-    async def export_json(self) -> str:
-        """导出所有活跃记忆为 JSON 字符串（用于下载）。"""
+    async def export_json(self, include_archived: bool = False) -> str:
+        """导出记忆为 JSON 字符串（用于下载）。
+
+        include_archived=False 时只含活跃+core（默认导出语义）；
+        True 时连同冷藏的 archived 一并导出（D8：冷库可回看——
+        否则「冷藏」对用户就是永久丢失）。
+        """
+        status_filter = "IN ('active', 'core')" if not include_archived \
+            else "IN ('active', 'core', 'archived')"
         cursor = await self._db.execute(
-            "SELECT * FROM memories WHERE status IN ('active', 'core') ORDER BY created_at DESC"
+            f"SELECT * FROM memories WHERE status {status_filter} ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
         mems = rows_to_dicts(cursor, rows)
@@ -387,10 +438,16 @@ class MemoryManager:
         row = await cursor.fetchone()
         return row[0] if row else 0
 
-    async def all(self) -> list[dict]:
-        """返回全部活跃记忆列表。"""
+    async def all(self, include_archived: bool = False) -> list[dict]:
+        """返回全部活跃记忆列表。
+
+        include_archived=True 时含冷藏的 archived（面板回看用），
+        与 export_json 的语义一致。
+        """
+        status_filter = "IN ('active', 'core')" if not include_archived \
+            else "IN ('active', 'core', 'archived')"
         cursor = await self._db.execute(
-            "SELECT * FROM memories WHERE status IN ('active', 'core') ORDER BY created_at DESC"
+            f"SELECT * FROM memories WHERE status {status_filter} ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
         return rows_to_dicts(cursor, rows)
@@ -453,6 +510,44 @@ class MemoryManager:
             log.info("记忆分层衰减：晋升 %d 条 core / 归档 %d 条", promoted, archived)
         return {"promoted": promoted, "archived": archived}
 
+    async def check_memory_health(self) -> dict:
+        """记忆系统健康指标（纯只读，无副作用、不写日志）。
+
+        实盘教训（2026-08-01 评审 D3）：写入完全依赖 LLM 自觉调用工具，
+        曾出现「31 条真实对话、0 条记忆」跑一周无人察觉。本方法产出
+        abnormal 信号，由调用方（memory/extract.py 的
+        check_and_report_memory_health）负责节流告警：
+        - 有相当对话量（>= _HEALTH_MIN_CHATS）却零记忆 → 写路径异常；
+        - 距上次写入超过 _HEALTH_WARN_DAYS 天 → 记忆已停滞。
+        """
+        cursor = await self._db.execute(
+            "SELECT COUNT(*), MAX(created_at) FROM memories WHERE status IN ('active', 'core')"
+        )
+        row = await cursor.fetchone()
+        count, newest = (row[0], row[1]) if row else (0, None)
+
+        now = datetime.datetime.now(_HKT)
+        days_since_write = None
+        if newest:
+            days_since_write = max(0.0, (now - _parse_time(newest)).total_seconds() / 86400)
+
+        chats = 0
+        if count == 0:
+            # 只在零记忆时才查对话量（异常信号所需的唯一场景）
+            cursor = await self._db.execute("SELECT COUNT(*) FROM chat_messages")
+            chats = (await cursor.fetchone())[0]
+
+        abnormal = (
+            (count == 0 and chats >= _HEALTH_MIN_CHATS)
+            or (days_since_write is not None and days_since_write >= _HEALTH_WARN_DAYS)
+        )
+        return {
+            "active_count": count,
+            "days_since_write": days_since_write,
+            "chat_count": chats,
+            "abnormal": abnormal,
+        }
+
 
 # ── 分层衰减阈值 ──────────────────────────────────────────────
 # 晋升 core：被主动想起 ≥5 次且存在 ≥30 天——经月反复用到的才算
@@ -462,6 +557,13 @@ _CORE_MIN_ACCESSES = 5
 _CORE_MIN_AGE_DAYS = 30
 _ARCHIVE_MAX_ACCESSES = 1
 _ARCHIVE_MIN_AGE_DAYS = 90
+
+
+# ── 记忆健康检查阈值 ─────────────────────────────────────────────
+# 有 ≥10 条对话消息却零记忆 → 写路径疑似失灵；距上次写入 ≥7 天 → 停滞。
+# 阈值偏保守（宁可错报一次，不可再静默一周）。
+_HEALTH_MIN_CHATS = 10
+_HEALTH_WARN_DAYS = 7
 
 
 async def run_status_decay() -> dict:

@@ -15,7 +15,8 @@ async def tmp_db(tmp_path):
             id TEXT PRIMARY KEY, content TEXT NOT NULL,
             category TEXT DEFAULT '其他', created_at TEXT NOT NULL,
             last_used_at TEXT, access_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active',
+            updated_at TEXT, source TEXT, prev_content TEXT
         );
         CREATE TABLE IF NOT EXISTS diaries (
             date TEXT PRIMARY KEY, title TEXT, content TEXT
@@ -43,11 +44,13 @@ async def tmp_db(tmp_path):
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
+        MEMORY_EXTRACT_STATE_SQL,
     )
     await conn.executescript(LIFE_STATE_SCHEMA_SQL)
     await conn.executescript(EVENTS_SCHEMA_SQL)
     await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     await conn.executescript(MEMORIES_INDEX_SQL)
+    await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致）
     from datetime import datetime
     from utils.timezone import HKT as _HKT

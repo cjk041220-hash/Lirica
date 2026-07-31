@@ -42,7 +42,19 @@ log = get_logger(__name__)
 #     记忆）/ archived（冷藏遗忘）两个新取值；core 必须与 active 一样
 #     参与去重，否则同内容会出现 active+core 双行。archived 不在谓词
 #     内——忘了的事重提时 add() 开始新生命周期
-SCHEMA_VERSION = 10
+# v11: 记忆后台提取状态 — memory_extract_state 单行表（id=1 固定）：
+#     last_message_id 水位线（已处理到的 chat_messages.id，后台提取
+#     断点，跨重启持久）+ health_warned_at（健康检查 24h 告警节流）。
+#     解决实盘「纯 agentic 写路径零触发、0 记忆跑一周无告警」的教训
+#     （2026-08-01 架构评审 D1/D2/D3）
+# v12: 记忆溯源与覆盖留痕 — memories 新增三列：
+#     updated_at —— 最近一次内容被修改的时间；时间衰减仍按 created_at
+#       （第一次记住的时间），覆盖不再把旧记忆重置成「新」；
+#     source —— 来源追踪（后台提取传 chat:{session_id}，agentic
+#       remember 为 NULL）：「小汐为什么记得这个」可追溯（D6）；
+#     prev_content —— 覆盖前的旧文本（单层快照）：矛盾纠正后能回看
+#       旧说法（D5 的轻量版本，不做完整版本链）。
+SCHEMA_VERSION = 12
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -503,6 +515,65 @@ async def _migrate_v10(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[10] = _migrate_v10
+
+
+# ── v11 迁移：记忆后台提取状态 ────────────────────────────────
+
+# 状态表完整 DDL。迁移 / 全新安装（init_db）/ 测试夹具三处共享此常量，
+# 保证 schema 永不漂移（同 EVENTS_SCHEMA_SQL 模式）。
+# 单行表（id=1 固定，CHECK 约束）：任何时刻只有一行，UPSERT 更新。
+MEMORY_EXTRACT_STATE_SQL = """
+    CREATE TABLE IF NOT EXISTS memory_extract_state (
+        id               INTEGER PRIMARY KEY CHECK (id = 1),
+        last_message_id  INTEGER NOT NULL DEFAULT 0,
+        last_run_at      TEXT,
+        health_warned_at TEXT
+    );
+"""
+
+
+async def _migrate_v11(conn: aiosqlite.Connection) -> None:
+    """v11: 记忆后台提取状态表 — 水位线 + 健康检查节流。
+
+    纯增量建表，幂等。背景（2026-08-01 架构评审 D1/D2/D3）：
+    - 主对话的记忆写入纯 agentic（LLM 自觉调 remember），实盘 31 条
+      消息零触发 → 引入对话后异步提取通道，需要水位线断点；
+    - 0 记忆跑一周无告警 → 健康检查需要告警节流时间戳。
+    两者合并为一张单行状态表，跨重启持久。
+    """
+    await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
+    await conn.commit()
+    log.info("迁移 v11 完成：memory_extract_state 状态表已建立")
+
+
+_migrations[11] = _migrate_v11
+
+
+# ── v12 迁移：记忆溯源与覆盖留痕 ─────────────────────────────
+
+async def _migrate_v12(conn: aiosqlite.Connection) -> None:
+    """v12: memories 新增 updated_at / source / prev_content 三列。
+
+    ALTER TABLE ADD COLUMN 逐列守卫（幂等——PRAGMA table_info 已存在
+    则跳过）。v1 时代曾有过一个死字段 source（v2 迁移时删除），v12
+    以新语义加回：来源追踪与 v1 的 source 无继承关系，旧值早已随
+    v2 重建表丢弃，无数据衔接问题（test_init_db_upgrade 钉死全链路）。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    columns = {row[1] for row in await cursor.fetchall()}
+
+    if "updated_at" not in columns:
+        await conn.execute("ALTER TABLE memories ADD COLUMN updated_at TEXT")
+    if "source" not in columns:
+        await conn.execute("ALTER TABLE memories ADD COLUMN source TEXT")
+    if "prev_content" not in columns:
+        await conn.execute("ALTER TABLE memories ADD COLUMN prev_content TEXT")
+
+    await conn.commit()
+    log.info("迁移 v12 完成：memories 新增 updated_at / source / prev_content")
+
+
+_migrations[12] = _migrate_v12
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
