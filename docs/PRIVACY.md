@@ -14,6 +14,7 @@
 | `life_state` | 低 | 当前心情与日常事件 |
 | `proactive_messages` | 低 | 主动消息历史（早安、随机搭话、关心） |
 | **`cycle_records`** | **高** | **生理期记录与备注** |
+| `events` | 低→中 | 小汐惦记的事（台风/考试/约定/纪念日）。其中由生理期推算派生的「身体的日子」（`source='cycle'`）只存预测日、不存原始记录日期，敏感度随 `cycle_records` |
 | `push_subscriptions` | 中 | 浏览器推送订阅凭证（endpoint + 密钥） |
 
 > **GPS 坐标不落库**：前端上传的坐标只存在进程内存（`location_store`，
@@ -48,9 +49,11 @@
 BACKUP_SCRUB_SENSITIVE=true
 ```
 
-开启后每份新备份生成时会剔除 `cycle_records` 与对话档案
-（`chat_sessions` / `chat_messages`）——生理期和聊天记录都不进备份。
-代价：无法从备份恢复这些表。已存在的旧备份不受影响，需手动删除。
+开启后每份新备份生成时会剔除 `cycle_records`、由它推算派生的日历事件
+（`events` 中 `source='cycle'` 的「身体的日子」）与对话档案
+（`chat_sessions` / `chat_messages`）——生理期（含日历上的推算日子）
+和聊天记录都不进备份；冷冷在日历上亲手记的其他事件不受影响。
+代价：无法从备份恢复这些数据。已存在的旧备份不受影响，需手动删除。
 
 ## 三、分享/演示/送人之前
 
