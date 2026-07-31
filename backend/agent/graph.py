@@ -74,16 +74,23 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
                 conversation = conversation[trim_end:]
 
         # ── ② 记忆检索 ────────────────────────────────────────
-        # 话题条件召回：取最近一条 human 消息作 query，让叙事的相关路
-        # 优先浮现与当前话题字面重叠的记忆。跳过 ToolMessage；多模态
-        # （list 型 content）取空串，自动降级为纯时近/热度召回。
+        # 话题条件召回：取最近 1~2 条 human 消息拼接作 query，让叙事的
+        # 相关路优先浮现与当前话题字面重叠的记忆。两条的原因（D10）：
+        # 单条时「就是那个……」「上次说的那件事」这类回指会丢失话题
+        # 语义——上一条 human 消息里的实词（店名/地名/人名）才是
+        # 真正的钩子。跳过 ToolMessage；多模态（list 型 content）取
+        # 空串，自动降级为纯时近/热度召回。
         query = ""
+        recent_humans: list[str] = []
         for m in reversed(conversation):
             if getattr(m, "type", "") == "human" and isinstance(
                 getattr(m, "content", ""), str
             ):
-                query = m.content
-                break
+                recent_humans.append(m.content)
+                if len(recent_humans) >= 2:
+                    break
+        if recent_humans:
+            query = "\n".join(reversed(recent_humans))
 
         memory_text = ""
         if narrative_builder is not None:

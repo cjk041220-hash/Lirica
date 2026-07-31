@@ -1,4 +1,4 @@
-"""pre_model_hook 话题提取测试（B1）：query 取自最近一条 human 消息。"""
+"""pre_model_hook 话题提取测试：query 取最近 human 消息（D10：最多两条拼接）。"""
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.graph import make_pre_model_hook
@@ -16,17 +16,33 @@ class _StubBuilder:
         return ""
 
 
-async def test_hook_passes_last_human_as_query():
+async def test_hook_passes_last_two_humans_as_query():
+    """D10：最近 1~2 条 human 消息拼接为 query——「就是那个……」类回指
+    依赖上一条消息里的实词（店名/地名/人名）找回话题。"""
     builder = _StubBuilder()
     hook = make_pre_model_hook(builder)
     state = {"messages": [
-        HumanMessage(content="第一句话"),
-        AIMessage(content="小汐的回复"),
+        HumanMessage(content="周末想再去吃那家炸鸡"),
+        AIMessage(content="是哪家呀？"),
+        HumanMessage(content="就是上次说的那家"),
+        AIMessage(content="哦哦，好呀"),
+        HumanMessage(content="对啦，周日有空吗？"),
+    ]}
+    await hook(state)
+    assert builder.seen["query"] == "就是上次说的那家\n对啦，周日有空吗？"
+    assert builder.seen["max_items"] == 5
+
+
+async def test_hook_single_human_keeps_query():
+    """只有一条 human 消息时 query 就是它（退化为 B1 原语义）。"""
+    builder = _StubBuilder()
+    hook = make_pre_model_hook(builder)
+    state = {"messages": [
+        AIMessage(content="在的"),
         HumanMessage(content="最近又想吃火锅了"),
     ]}
     await hook(state)
     assert builder.seen["query"] == "最近又想吃火锅了"
-    assert builder.seen["max_items"] == 5
 
 
 async def test_hook_skips_tool_and_ai_messages():

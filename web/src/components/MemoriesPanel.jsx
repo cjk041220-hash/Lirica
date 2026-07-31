@@ -13,17 +13,19 @@ export default function MemoriesPanel({ onClose }) {
   const [tab, setTab] = useState('memories')
   const [memories, setMemories] = useState([])
   const [diaries, setDiaries] = useState([])
+  const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
   const dialogRef = useFocusTrap()
 
-  // 切换 tab 时按需拉取（apiFetch 带 token，裸 fetch 在配置了
-  // XIAOXI_API_TOKEN 的部署下会 401 静默成空列表）
+  // 切换 tab / 归档开关时按需拉取（apiFetch 带 token，裸 fetch 在配置了
+  // XIAOXI_API_TOKEN 的部署下会 401 静默成空列表）。
+  // include_archived=1 时连冷藏记忆一起回看（D8：冷库可读，不是永久丢失）
   useEffect(() => {
     let cancelled = false
     setLoading(true)
 
     const load = tab === 'memories'
-      ? apiFetch('/api/memories')
+      ? apiFetch(showArchived ? '/api/memories?include_archived=1' : '/api/memories')
           .then(res => (res.ok ? res.json() : { memories: [] }))
           .then(data => { if (!cancelled) setMemories(Array.isArray(data.memories) ? data.memories : []) })
       : apiFetch('/api/diaries')
@@ -35,7 +37,7 @@ export default function MemoriesPanel({ onClose }) {
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
-  }, [tab])
+  }, [tab, showArchived])
 
   const items = tab === 'memories' ? memories : diaries
 
@@ -79,6 +81,19 @@ export default function MemoriesPanel({ onClose }) {
               {t.label}
             </button>
           ))}
+          {tab === 'memories' && (
+            <button
+              onClick={() => setShowArchived(v => !v)}
+              aria-pressed={showArchived}
+              className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ml-auto ${
+                showArchived
+                  ? 'bg-plum/10 text-plum/60'
+                  : 'text-plum/25 hover:text-plum/45'
+              }`}
+            >
+              已归档 {showArchived ? '✓' : ''}
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll">
@@ -108,6 +123,11 @@ export default function MemoriesPanel({ onClose }) {
                     {item.category && (
                       <span className="inline-block mt-1.5 text-[10px] text-raspberry bg-strawberry/8 px-2.5 py-0.5 rounded-full">
                         {item.category}
+                      </span>
+                    )}
+                    {item.status === 'archived' && (
+                      <span className="inline-block mt-1.5 text-[10px] text-plum/40 bg-plum/5 px-2.5 py-0.5 rounded-full">
+                        已归档
                       </span>
                     )}
                   </div>

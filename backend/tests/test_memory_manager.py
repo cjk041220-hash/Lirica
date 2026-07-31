@@ -83,13 +83,65 @@ async def test_update_content_nonexistent(memory_mgr):
 
 
 async def test_update_content_refreshes_timestamp(memory_mgr):
-    """update_content() 刷新 created_at 和 last_used_at。"""
+    """update_content() 保留 created_at，只刷 updated_at（v12：覆盖不重置时间衰减）。"""
     mem = await memory_mgr.add("喜好", "爱吃火锅")
     old_created = mem["created_at"]
     result = await memory_mgr.update_content(mem["id"], "不爱吃火锅了")
     assert result is True
     updated = (await memory_mgr.all())[0]
-    assert updated["created_at"] >= old_created
+    assert updated["created_at"] == old_created          # 首次记住的时间不动
+    assert updated["updated_at"] is not None
+    assert updated["updated_at"] >= old_created          # 修改时间已刷新
+
+
+async def test_update_content_saves_prev_content(memory_mgr):
+    """v12 覆盖留痕：旧文本存 prev_content，纠正后可回看旧说法。"""
+    mem = await memory_mgr.add("喜好", "爱吃火锅")
+    await memory_mgr.update_content(mem["id"], "不爱吃火锅了")
+    updated = (await memory_mgr.all())[0]
+    assert updated["prev_content"] == "爱吃火锅"
+
+
+async def test_add_stores_source(memory_mgr):
+    """v12 来源追踪：add(source=...) 落库，读回可追溯。"""
+    mem = await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-abc123")
+    assert mem["source"] == "chat:s-abc123"
+
+
+async def test_add_dedup_keeps_original_source(memory_mgr):
+    """v12：去重刷新（同内容再次 add）保留首次来源，不覆盖成新来源。"""
+    first = await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-first")
+    await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-second")
+    refreshed = await memory_mgr.all()
+    assert len(refreshed) == 1
+    assert refreshed[0]["source"] == "chat:s-first"
+
+
+async def test_export_json_include_archived(memory_mgr, tmp_db):
+    """D8：export_json(include_archived=True) 才含冷藏记忆。"""
+    mem = await memory_mgr.add("喜好", "爱吃火锅")
+    await tmp_db.execute(
+        "UPDATE memories SET status = 'archived' WHERE id = ?", (mem["id"],)
+    )
+    await tmp_db.commit()
+
+    active_only = json.loads(await memory_mgr.export_json())
+    assert len(active_only["memories"]) == 0
+    with_archived = json.loads(await memory_mgr.export_json(include_archived=True))
+    assert len(with_archived["memories"]) == 1
+    assert with_archived["memories"][0]["status"] == "archived"
+
+
+async def test_all_include_archived(memory_mgr, tmp_db):
+    """D8：all(include_archived=True) 面板回看冷库。"""
+    mem = await memory_mgr.add("喜好", "爱吃火锅")
+    await tmp_db.execute(
+        "UPDATE memories SET status = 'archived' WHERE id = ?", (mem["id"],)
+    )
+    await tmp_db.commit()
+
+    assert len(await memory_mgr.all()) == 0
+    assert len(await memory_mgr.all(include_archived=True)) == 1
 
 
 # ── 查询 ──────────────────────────────────────────────────────
@@ -500,3 +552,49 @@ async def test_old_memories_read_only(memory_mgr, tmp_db):
     await memory_mgr.old_memories(min_age_days=90, limit=5)
     after = await snapshot()
     assert before == after
+
+
+# ── 千条级冒烟（D9：记忆量级扩展未验证的补课） ──────────────
+
+
+async def test_recall_at_scale_1000(memory_mgr, tmp_db):
+    """千条记忆下 recall 功能正确（候选池全表评分路径，单用户量级上限）。
+
+    设计纪律：不做严格计时断言（零 flaky 纪律）——钉死功能正确性：
+    命中话题、limit 生效、计数正确。这条路径在 1000 行下毫秒级，
+    若未来量级再涨，由 embedding 语义检索方案接手（评审 P2）。
+    """
+    now = "2026-07-01 10:00"
+    rows = [
+        (f"m{i:04d}", f"流水账第 {i} 条", "日常", now) for i in range(999)
+    ]
+    rows.append(("mtopic", "冷冷喜欢喝椰青水", "冷冷喜欢的", now))
+    await tmp_db.executemany(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES (?, ?, ?, ?, 'active')",
+        rows,
+    )
+    await tmp_db.commit()
+    assert await memory_mgr.count() == 1000
+
+    # 全表召回（不带 category）：话题命中浮到最前
+    hit = await memory_mgr.recall(limit=5, query="喝椰青水")
+    assert len(hit) == 5
+    assert hit[0]["content"] == "冷冷喜欢喝椰青水"
+
+    # 类别筛选：候选池被 LIKE 预筛，仍能命中
+    cat = await memory_mgr.recall(category="冷冷喜欢的", limit=5)
+    assert len(cat) == 1
+    assert cat[0]["content"] == "冷冷喜欢喝椰青水"
+
+    # 被动读取：千条级不刷热度（前面两次非被动 recall 已把 mtopic 刷到 2，
+    # 被动调用前后必须逐位相等——只比被动这一段）
+    cursor = await tmp_db.execute(
+        "SELECT access_count FROM memories WHERE id = 'mtopic'"
+    )
+    before = (await cursor.fetchone())[0]
+    await memory_mgr.recall(limit=3, passive=True)
+    cursor = await tmp_db.execute(
+        "SELECT access_count FROM memories WHERE id = 'mtopic'"
+    )
+    assert (await cursor.fetchone())[0] == before

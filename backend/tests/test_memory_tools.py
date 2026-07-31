@@ -128,3 +128,86 @@ async def test_recall_empty_returns_friendly_text(injected_mgr):
 
     result = await recall.ainvoke({})
     assert "还没有记住" in result
+
+
+# ── 工具层 update / delete / list / export（D9：零测试缺口补齐）──
+
+
+async def test_update_memory_overwrites(injected_mgr):
+    """update_memory 工具：按 ID 覆盖内容，返回成功文案。"""
+    from tools.memory import remember, update_memory
+
+    saved = await remember.ainvoke({"category": "冷冷喜欢的", "content": "爱喝奶茶不加糖"})
+    # remember 返回文案里带 ID（[id] 十六位），从库中取真实 id 更稳
+    mem = (await injected_mgr.all())[0]
+
+    result = await update_memory.ainvoke({"memory_id": mem["id"], "new_content": "以前爱喝奶茶，最近控糖喝得少了"})
+    assert "更新" in result
+    assert (await injected_mgr.all())[0]["content"] == "以前爱喝奶茶，最近控糖喝得少了"
+
+
+async def test_update_memory_nonexistent_id(injected_mgr):
+    """update_memory 工具：ID 不存在 → 友好提示，不抛异常。"""
+    from tools.memory import update_memory
+
+    result = await update_memory.ainvoke({"memory_id": "deadbeef00000000", "new_content": "新内容"})
+    assert "没有找到" in result
+
+
+async def test_delete_memory_tool(injected_mgr):
+    """delete_memory 工具：删除指定记忆。"""
+    from tools.memory import delete_memory, remember
+
+    await remember.ainvoke({"category": "其他", "content": "要删掉的记忆"})
+    mem = (await injected_mgr.all())[0]
+
+    result = await delete_memory.ainvoke({"memory_id": mem["id"]})
+    assert "放回海里" in result
+    assert await injected_mgr.count() == 0
+
+
+async def test_delete_memory_nonexistent(injected_mgr):
+    """delete_memory 工具：ID 不存在 → 友好提示。"""
+    from tools.memory import delete_memory
+
+    result = await delete_memory.ainvoke({"memory_id": "deadbeef00000000"})
+    assert "没有找到" in result
+
+
+async def test_list_memories_tool(injected_mgr):
+    """list_memories 工具：类别统计展示。"""
+    from tools.memory import list_memories, remember
+
+    await remember.ainvoke({"category": "冷冷喜欢的", "content": "芒果"})
+    await remember.ainvoke({"category": "冷冷喜欢的", "content": "奶茶"})
+    await remember.ainvoke({"category": "重要的事", "content": "下周三有考试"})
+
+    result = await list_memories.ainvoke({})
+    assert "冷冷喜欢的" in result and "2 条" in result
+    assert "重要的事" in result and "1 条" in result
+
+
+async def test_export_memories_tool(injected_mgr):
+    """export_memories 工具：列出全部记忆摘要。"""
+    from tools.memory import export_memories, remember
+
+    await remember.ainvoke({"category": "去过的地方", "content": "去过台北"})
+    result = await export_memories.ainvoke({})
+    assert "去过台北" in result
+    assert "1 件事" in result
+
+
+async def test_tools_manager_not_injected_graceful(injected_mgr):
+    """工具未注入 manager 时全部返回友好降级文案（不崩）。"""
+    from tools import memory as mem_tools
+    from tools.memory import delete_memory, export_memories, list_memories, update_memory
+
+    original = mem_tools._memory_manager
+    mem_tools._memory_manager = None
+    try:
+        assert "记忆盒子" in await update_memory.ainvoke({"memory_id": "x", "new_content": "y"})
+        assert "记忆盒子" in await delete_memory.ainvoke({"memory_id": "x"})
+        assert "记忆盒子" in await list_memories.ainvoke({})
+        assert "记忆盒子" in await export_memories.ainvoke({})
+    finally:
+        mem_tools._memory_manager = original

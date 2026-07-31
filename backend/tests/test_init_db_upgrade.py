@@ -59,7 +59,9 @@ async def test_init_db_upgrades_legacy_v1_database(tmp_path):
         assert "status" in columns
         assert "created_at" in columns
         assert "access_count" in columns
-        assert "source" not in columns  # 旧死字段已移除
+        assert "source" in columns  # v12 以新语义加回（来源追踪，与 v1 死字段无继承）
+        assert "updated_at" in columns  # v12 覆盖留痕
+        assert "prev_content" in columns  # v12 覆盖留痕
         assert "time" not in columns
 
         # 2. 旧数据完整保留，time 已映射为 created_at
@@ -82,7 +84,7 @@ async def test_init_db_upgrades_legacy_v1_database(tmp_path):
 
         # 4. 迁移版本已登记，重复执行幂等
         cursor = await conn.execute("SELECT MAX(version) FROM schema_version")
-        assert (await cursor.fetchone())[0] >= 4
+        assert (await cursor.fetchone())[0] >= 12
 
         await init_db(conn)  # 第二次执行不应报错
     finally:

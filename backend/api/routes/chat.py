@@ -185,6 +185,15 @@ async def chat(req: ChatRequest, request: Request):
                         reply = content
                         break
 
+            # 工具调用遥测（每轮打点，见 _log_tool_telemetry）
+            tool_names = [
+                tc.get("name", "")
+                for m in messages
+                if getattr(m, "type", None) == "ai" and getattr(m, "tool_calls", None)
+                for tc in m.tool_calls
+            ]
+            _log_tool_telemetry(sid, tool_names)
+
             # 对话档案：助手回复落库（空回复会被 record 侧跳过）
             await chat_archive.record_assistant_message(sid, reply)
 
@@ -225,6 +234,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     # 正常收尾 / 流内异常时归档用户实际看到的那份文本；客户端硬断开
     #（任务被取消）是尽力归档——flush 可能被第二次取消打断
     chunks: list[str] = []
+    # 工具调用遥测累积器（on_tool_start 时登记，收尾统一打点）
+    stream_tools: list[str] = []
 
     async def generate():
         # 同 session 串行化：async with 保证锁在异常 / 取消时安全释放，
@@ -260,6 +271,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
                         elif kind == "on_tool_start":
                             name = event.get("name", "unknown")
+                            stream_tools.append(name)
                             # 只下发工具名，不回传完整入参（含坐标/搜索词等，
                             # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
                             yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
@@ -275,6 +287,8 @@ async def chat_stream(req: ChatRequest, request: Request):
                     # record_* 自身吞异常；唯一未覆盖的是 flush 期间任务
                     # 被再次取消（客户端硬断开的尽力归档缺口，罕见，接受）
                     await chat_archive.record_assistant_message(sid, "".join(chunks))
+                    # 工具调用遥测（每轮打点，见 _log_tool_telemetry）
+                    _log_tool_telemetry(sid, stream_tools)
 
         except asyncio.CancelledError:
             # 客户端断开连接时 ASGI 服务器会取消此任务
@@ -336,6 +350,20 @@ async def health(request: Request):
         "tools": [t.name for t in tools],
         "memory_count": memory_count,
     }
+
+
+def _log_tool_telemetry(sid: str, tool_names: list[str]) -> None:
+    """工具调用遥测：每轮对话打点实际调用的工具。
+
+    2026-08-01 取证（checkpoints.db）：68 条 human 消息里 search_nearby /
+    get_weather 等调用了 18 次，而 remember 0 次——模型并不懒于调用
+    工具，只是不主动写记忆。有了每轮打点，prompt 改造前后可量化对比
+    「写路径有效性」，也顺带监控工具链路是否健康。
+    """
+    names = [n for n in tool_names if n]
+    if names:
+        log.info("telemetry: session_tools=[%s] n=%d (sid=%s)",
+                 ",".join(names), len(names), sid)
 
 
 # ── 会话历史（陪伴连续性）────────────────────────────────────
@@ -403,12 +431,15 @@ async def delete_memory(memory_id: str, request: Request):
 
 
 @router.get("/memories/export")
-async def export_memories(request: Request):
-    """导出所有记忆为 JSON。"""
+async def export_memories(
+    request: Request,
+    include_archived: bool = Query(False, description="是否包含已归档（冷藏）记忆"),
+):
+    """导出记忆为 JSON。include_archived=true 时含冷藏记忆（D8：冷库可回看）。"""
     mem = getattr(request.app.state, "memory_manager", None)
     if mem is None:
         raise HTTPException(503, "记忆系统未就绪")
-    data = await mem.export_json()
+    data = await mem.export_json(include_archived=include_archived)
     return JSONResponse(
         content=json.loads(data),
         headers={"Content-Disposition": "attachment; filename=xiaoxi_memories.json"},
@@ -440,10 +471,13 @@ async def clear_memories(
 
 
 @router.get("/memories")
-async def list_all_memories(request: Request):
-    """获取所有记忆列表。"""
+async def list_all_memories(
+    request: Request,
+    include_archived: bool = Query(False, description="是否包含已归档（冷藏）记忆"),
+):
+    """获取记忆列表。include_archived=true 时含冷藏记忆（面板「已归档」标签页）。"""
     mem = getattr(request.app.state, "memory_manager", None)
     if mem is None:
         raise HTTPException(503, "记忆系统未就绪")
-    memories = await mem.all()
+    memories = await mem.all(include_archived=include_archived)
     return {"memories": memories, "count": len(memories)}
