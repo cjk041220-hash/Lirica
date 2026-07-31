@@ -3,9 +3,10 @@
 登记未来要发生的事（台风、考试、生日、重要约定），让小汐会记得、
 会围绕它关心冷冷，事情过去了就自然翻篇（自动归档）。
 
-五个事件来源：
+六个事件来源：
 - weather  —— 心跳检测 Open-Meteo 7 日预报（台风/暴雨/雷暴）
 - profile  —— 档案派生纪念日（冷冷的生日倒计时）
+- cycle    —— 生理期预测派生（cycle_records 推算的日子，日历可见）
 - llm      —— 对话中冷冷提到未来计划，LLM 调 create_event 工具
 - memory   —— 记忆回声（翻小本本忽然想起的旧事，仅聊天可见）
 - user     —— 冷冷在日历面板上亲手登记（api/routes/events.py）
@@ -59,6 +60,7 @@ _SOURCE_NOTES = {
     "llm": "冷冷自己提到的",
     "weather": "天气预报检测到的",
     "profile": "冷冷档案里的日子",
+    "cycle": "小汐按日子推算的",
     "memory": "很久以前记下的",
     "user": "冷冷在日历上记的",
 }
@@ -509,6 +511,74 @@ async def detect_anniversary_events() -> int:
         )
         return 1 if created else 0
     return 0
+
+
+# ── 检测器：生理期预测（cycle_records 派生）────────────────────
+
+_CYCLE_LOOKAHEAD_DAYS = 7  # 提前 7 天上日历（齐生日 look-ahead）
+_CYCLE_TAIL_DAYS = 2       # 预测日后保留 2 天（关心窗口，随后 archive_expired 自动翻篇）
+
+# PII 纪律：memo 只写「怎么关心」，绝不插值任何原始记录日期 /
+# avg_cycle —— events 表是新的持久化面，而备份脱敏（BACKUP_SCRUB_SENSITIVE）
+# 只剔 cycle_records，原始日期不能在事件层留痕。
+_CYCLE_EVENT_MEMO = (
+    "按记录推算，这可能是冷冷身体不舒服的日子（她痛经很厉害，有时会昏迷）。"
+    "预测日前后两天，自然关心一下她身体怎么样就好；"
+    "不要说'你生理期到了'，不要倒数，不要反复提。"
+)
+
+
+async def detect_cycle_events() -> int:
+    """从 cycle_records 的预测日派生 health 事件（日历上可见的「身体的日子」）。
+
+    - 创建窗口：-_CYCLE_TAIL_DAYS <= 距预测天数 <= _CYCLE_LOOKAHEAD_DAYS；
+      end_date = 预测日 + 2，archive_expired 第 4 天自动翻篇。
+    - 漂移清理：对话修正记录后预测日会变，旧的未来事件归档释放
+      （archived 不在 v9 dedupe 索引谓词内 → 预测漂回该日可再生成；
+      不用 deleted 墓碑——漂移不是冷冷否决这件事）。进行中的事件
+      （event_date <= today）不撤，保住当下关心。
+    - records < 2（stats 为 None）：不创建，但仍归档全部未来 cycle 事件
+      ——记录被删到不足两条时预测已失效，滞留事件必须撤。
+    - 纯漂移（0 新建 + N 归档）也计入返回值，触发看门狗刷新提示词。
+
+    Returns:
+        新建条数 + 漂移归档条数。
+    """
+    from utils import cycle_tracker  # 局部 import：检测器区其他函数同款跨层复用
+
+    stats = await cycle_tracker.get_cycle_stats()
+    current_key = f"cycle:{stats['next_predicted']}" if stats else ""
+
+    # 漂移清理：未来的、不再是当前预测的 cycle 事件 → 归档
+    conn = await get_db()
+    cursor = await conn.execute(
+        """UPDATE events SET status = 'archived'
+           WHERE source = 'cycle' AND status = 'active'
+             AND event_date > ? AND COALESCE(dedupe_key, '') != ?""",
+        (_today().isoformat(), current_key),
+    )
+    await conn.commit()
+    archived = cursor.rowcount
+
+    if stats is None:
+        return archived
+
+    days_ahead = stats["days_until_next"]
+    if not (-_CYCLE_TAIL_DAYS <= days_ahead <= _CYCLE_LOOKAHEAD_DAYS):
+        return archived
+
+    end = _parse_date(stats["next_predicted"]) + timedelta(days=_CYCLE_TAIL_DAYS)
+    _, created = await create_event(
+        "身体的日子",
+        "health",
+        stats["next_predicted"],
+        end_date=end.isoformat(),
+        severity="normal",
+        source="cycle",
+        memo=_CYCLE_EVENT_MEMO,
+        dedupe_key=current_key,
+    )
+    return archived + (1 if created else 0)
 
 
 # ── 检测器：天气预报 ──────────────────────────────────────────

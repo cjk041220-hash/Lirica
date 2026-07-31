@@ -802,3 +802,149 @@ async def test_find_similar_active_bidirectional(events_db):
     # 已删除的不提示
     await ev.soft_delete_event("s1")
     assert await ev.find_similar_active("2026-08-01", "期中") == []
+
+
+# ── 检测器：生理期预测派生 ────────────────────────────────────
+#
+# 日期全部相对今天构造（_date_offset）：检测器与 get_cycle_stats
+# 共用真实时钟，不 patch 时间也能保持确定性。
+# 基准场景 A：记录 [-85, -55, -25] → 间隔 30/30 → 平均 30
+#            → 预测 = today+5（落在 -2..7 创建窗口内）
+
+
+@pytest.fixture
+async def cycle_events_db(tmp_db):
+    """检测器跨模块消费：tmp_db 同时接到 utils.events 与
+    utils.cycle_tracker 的 get_db 上（后者经 detect_cycle_events 调
+    get_cycle_stats 读 cycle_records）。"""
+    with patch("utils.events.get_db", return_value=tmp_db), \
+         patch("utils.cycle_tracker.get_db", return_value=tmp_db):
+        yield tmp_db
+
+
+async def _seed_cycle_records(db, offsets):
+    for off in offsets:
+        await db.execute(
+            "INSERT OR IGNORE INTO cycle_records (start_date, note) VALUES (?, '')",
+            (_date_offset(off),),
+        )
+    await db.commit()
+
+
+async def _cycle_events(db):
+    cursor = await db.execute(
+        "SELECT * FROM events WHERE source = 'cycle' ORDER BY event_date"
+    )
+    from database.core import rows_to_dicts
+    return rows_to_dicts(cursor, await cursor.fetchall())
+
+
+async def test_detect_cycle_events_insufficient_records(cycle_events_db):
+    """记录不足 2 条：不创建事件，返回 0。"""
+    await _seed_cycle_records(cycle_events_db, [-25])
+    assert await ev.detect_cycle_events() == 0
+    assert await _cycle_events(cycle_events_db) == []
+
+
+async def test_detect_cycle_events_creates_in_window(cycle_events_db):
+    """预测在窗口内：创建 health/cycle 事件，字段齐备，memo 不泄漏原始日期。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    predicted = _date_offset(5)
+
+    assert await ev.detect_cycle_events() == 1
+
+    rows = await _cycle_events(cycle_events_db)
+    assert len(rows) == 1
+    e = rows[0]
+    assert e["title"] == "身体的日子"
+    assert e["event_type"] == "health"        # 日历可见白名单内，零前端改动
+    assert e["source"] == "cycle"
+    assert e["severity"] == "normal"
+    assert e["status"] == "active"
+    assert e["event_date"] == predicted
+    assert e["end_date"] == _date_offset(7)   # 预测 +2，archive_expired 第 4 天翻篇
+    assert e["dedupe_key"] == f"cycle:{predicted}"
+    assert "痛经" in e["memo"]
+    # PII 回归：memo 绝不引述任何原始记录日期
+    for off in (-85, -55, -25):
+        assert _date_offset(off) not in e["memo"]
+
+
+async def test_detect_cycle_events_out_of_window(cycle_events_db):
+    """预测太远（today+25）：不创建。"""
+    await _seed_cycle_records(cycle_events_db, [-65, -35, -5])
+    assert await ev.detect_cycle_events() == 0
+    assert await _cycle_events(cycle_events_db) == []
+
+
+async def test_detect_cycle_events_idempotent(cycle_events_db):
+    """同预测重跑：dedupe 挡住，第二次返回 0、只有一行。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    assert await ev.detect_cycle_events() == 1
+    assert await ev.detect_cycle_events() == 0
+    assert len(await _cycle_events(cycle_events_db)) == 1
+
+
+async def test_detect_cycle_events_drift_archives_and_recreates(cycle_events_db):
+    """对话修正导致预测漂移：旧未来事件归档、新事件创建，返回 2。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    old_predicted = _date_offset(5)
+    await ev.detect_cycle_events()
+
+    # 补一条 today-20 的记录：间隔 30/30/5 → 平均 22 → 预测漂到 today+2
+    await _seed_cycle_records(cycle_events_db, [-20])
+    assert await ev.detect_cycle_events() == 2
+
+    rows = await _cycle_events(cycle_events_db)
+    by_status = {r["dedupe_key"]: r["status"] for r in rows}
+    assert by_status[f"cycle:{old_predicted}"] == "archived"
+    assert by_status[f"cycle:{_date_offset(2)}"] == "active"
+
+
+async def test_detect_cycle_events_drift_back_regenerates(cycle_events_db):
+    """预测漂回旧日期时能重新生成——归档（非墓碑）释放 dedupe 槽位。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    old_predicted = _date_offset(5)
+    await ev.detect_cycle_events()
+
+    await _seed_cycle_records(cycle_events_db, [-20])        # 漂到 today+2
+    await ev.detect_cycle_events()
+    await cycle_events_db.execute(
+        "DELETE FROM cycle_records WHERE start_date = ?", (_date_offset(-20),)
+    )
+    await cycle_events_db.commit()                           # 漂回 today+5
+
+    # 返回值 2 = 漂移归档 today+2 一条 + 重建 today+5 一条
+    assert await ev.detect_cycle_events() == 2
+    rows = await _cycle_events(cycle_events_db)
+    statuses = {(r["dedupe_key"], r["status"]) for r in rows}
+    assert (f"cycle:{old_predicted}", "active") in statuses   # 原槽位重新激活
+    assert (f"cycle:{_date_offset(2)}", "archived") in statuses
+
+
+async def test_detect_cycle_events_records_drop_below_two_archives(cycle_events_db):
+    """记录被删到不足 2 条：预测失效，滞留的未来事件仍被归档。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    await ev.detect_cycle_events()
+
+    await cycle_events_db.execute(
+        "DELETE FROM cycle_records WHERE start_date IN (?, ?)",
+        (_date_offset(-85), _date_offset(-55)),
+    )
+    await cycle_events_db.commit()
+    assert await ev.detect_cycle_events() == 1  # 纯归档，也计入返回值触发刷新
+    assert all(r["status"] == "archived" for r in await _cycle_events(cycle_events_db))
+
+
+async def test_detect_cycle_events_in_progress_not_archived(cycle_events_db):
+    """进行中事件（event_date <= today）不被漂移清理撤掉，保住当下关心。"""
+    await _seed_cycle_records(cycle_events_db, [-85, -55, -25])
+    await _insert_event(
+        cycle_events_db, "c_old", "身体的日子", _date_offset(0),
+        source="cycle", dedupe_key=f"cycle:{_date_offset(0)}",
+    )
+
+    assert await ev.detect_cycle_events() == 1  # 只新建 today+5，不归档 today
+    rows = {r["dedupe_key"]: r["status"] for r in await _cycle_events(cycle_events_db)}
+    assert rows[f"cycle:{_date_offset(0)}"] == "active"
+    assert rows[f"cycle:{_date_offset(5)}"] == "active"

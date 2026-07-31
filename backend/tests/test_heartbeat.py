@@ -139,6 +139,7 @@ async def test_event_watchdog_runs_detectors_and_refreshes():
     with patch("utils.events.archive_expired", new_callable=AsyncMock, return_value=1) as archive, \
          patch("utils.events.detect_profile_events", new_callable=AsyncMock, return_value=0) as profile, \
          patch("utils.events.detect_weather_events", new_callable=AsyncMock, return_value=0) as weather, \
+         patch("utils.events.detect_cycle_events", new_callable=AsyncMock, return_value=0) as cycle, \
          patch("heartbeat.datetime") as mock_dt, \
          patch("heartbeat._refresh_agent", new_callable=AsyncMock) as refresh:
         mock_dt.datetime.now.return_value = fake_now
@@ -147,6 +148,7 @@ async def test_event_watchdog_runs_detectors_and_refreshes():
     archive.assert_awaited_once()
     profile.assert_awaited_once()
     weather.assert_awaited_once()     # 12 点是 6 小时检测点
+    cycle.assert_awaited_once()       # 生理期检测每次都跑（纯本地毫秒级）
     refresh.assert_awaited_once()     # 归档了 1 条 → 上下文变了 → 刷新提示词
 
 
@@ -163,6 +165,7 @@ async def test_event_watchdog_skips_weather_off_schedule():
     with patch("utils.events.archive_expired", new_callable=AsyncMock, return_value=0), \
          patch("utils.events.detect_profile_events", new_callable=AsyncMock, return_value=0), \
          patch("utils.events.detect_weather_events", new_callable=AsyncMock) as weather, \
+         patch("utils.events.detect_cycle_events", new_callable=AsyncMock, return_value=0), \
          patch("heartbeat.datetime") as mock_dt, \
          patch("heartbeat._refresh_agent", new_callable=AsyncMock) as refresh:
         mock_dt.datetime.now.return_value = fake_now
@@ -170,6 +173,30 @@ async def test_event_watchdog_skips_weather_off_schedule():
 
     weather.assert_not_awaited()      # 不是 6 小时检测点
     refresh.assert_not_awaited()      # 无变动不刷新
+
+
+async def test_event_watchdog_cycle_drift_alone_triggers_refresh():
+    """纯周期漂移（其他检测器全 0，只有 cycle 返回归档数）也刷新提示词。"""
+    from unittest.mock import AsyncMock, patch
+    import datetime as _dt
+    import heartbeat as hb
+    from utils.timezone import HKT as _HKT
+
+    fake_now = _dt.datetime(2026, 7, 25, 13, 0, tzinfo=_HKT)
+
+    with patch("utils.events.archive_expired", new_callable=AsyncMock, return_value=0), \
+         patch("utils.events.detect_profile_events", new_callable=AsyncMock, return_value=0), \
+         patch("utils.events.detect_weather_events", new_callable=AsyncMock, return_value=0), \
+         patch("utils.events.detect_anniversary_events", new_callable=AsyncMock, return_value=0), \
+         patch("utils.events.detect_memory_echoes", new_callable=AsyncMock, return_value=0), \
+         patch("utils.events.detect_cycle_events", new_callable=AsyncMock, return_value=2) as cycle, \
+         patch("heartbeat.datetime") as mock_dt, \
+         patch("heartbeat._refresh_agent", new_callable=AsyncMock) as refresh:
+        mock_dt.datetime.now.return_value = fake_now
+        await hb.event_watchdog(app=object())
+
+    cycle.assert_awaited_once()
+    refresh.assert_awaited_once()     # 漂移归档算事件变动 → 必须刷新
 
 
 # ── 自动日记 ──────────────────────────────────────────────────
@@ -493,8 +520,7 @@ async def test_proactive_prompt_mentions_weekend(tmp_db):
     try:
         with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
              patch("utils.events.get_active_events", return_value=[]), \
-             patch("utils.events.get_recent_proactive_texts", return_value=[]), \
-             patch("utils.cycle_tracker.get_care_context", return_value=None):
+             patch("utils.events.get_recent_proactive_texts", return_value=[]):
             sat = dt.datetime(2026, 8, 1, 14, 0, tzinfo=HKT)
             await heartbeat._generate_proactive_message("开心", "映海很清澈", 14, now_dt=sat)
             assert "今天是周六" in captured["human"]
@@ -502,6 +528,49 @@ async def test_proactive_prompt_mentions_weekend(tmp_db):
             mon = dt.datetime(2026, 8, 3, 14, 0, tzinfo=HKT)
             await heartbeat._generate_proactive_message("开心", "映海很清澈", 14, now_dt=mon)
             assert "周六" not in captured["human"]
+    finally:
+        db_core._db = original
+
+
+async def test_proactive_message_receives_cycle_event_memo(tmp_db):
+    """关心收敛回归：活跃 cycle 事件经事件通道进主动消息 prompt（带 memo）。
+
+    生理期关心不再由 _generate_proactive_message 硬编码，而是随
+    get_active_events 的事件列表注入——memo 里的关心纪律一并带到。
+    """
+    import datetime as dt
+    import database.core as db_core
+    import heartbeat
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from utils.timezone import HKT
+
+    original = db_core._db
+    db_core._db = tmp_db
+    captured = {}
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content="冷冷，今天身体怎么样呀？")
+
+    today = dt.datetime.now(HKT).date()
+    fake_cycle_event = {
+        "id": "c1", "title": "身体的日子", "event_type": "health",
+        "event_date": (today + dt.timedelta(days=1)).isoformat(),
+        "end_date": (today + dt.timedelta(days=3)).isoformat(),
+        "severity": "normal", "source": "cycle",
+        "memo": "按记录推算，这可能是冷冷身体不舒服的日子（她痛经很厉害，有时会昏迷）。",
+    }
+
+    try:
+        with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+             patch("utils.events.get_active_events", new=AsyncMock(return_value=[fake_cycle_event])), \
+             patch("utils.events.get_recent_proactive_texts", new=AsyncMock(return_value=[])):
+            await heartbeat._generate_proactive_message("担心", "映海很安静", 14)
+        assert "身体的日子" in captured["human"]
+        assert "痛经" in captured["human"]           # memo 关心纪律随事件注入
+        assert "小汐按日子推算的" in captured["human"]  # source 备注
     finally:
         db_core._db = original
 
@@ -647,6 +716,7 @@ async def test_watchdog_isolation_echo_stage(tmp_db):
              patch("utils.events.detect_profile_events", new=AsyncMock(return_value=0)) as m_prof, \
              patch("utils.events.detect_weather_events", new=AsyncMock(return_value=0)), \
              patch("utils.events.detect_anniversary_events", new=AsyncMock(return_value=0)), \
+             patch("utils.events.detect_cycle_events", new=AsyncMock(return_value=0)), \
              patch("utils.events.detect_memory_echoes", new=AsyncMock(side_effect=RuntimeError("boom"))):
             await heartbeat.event_watchdog()  # 不抛
         m_arch.assert_awaited_once()

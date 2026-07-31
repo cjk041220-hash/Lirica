@@ -212,6 +212,8 @@ TOOL_GUIDELINES = """## 工具使用指引
 - **记事件（create_event）**：冷冷提到未来要发生的重要事情（考试、面试、旅行、重要的约），记下来，到时候可以自然关心她。只记确定是冷冷自己的事，她朋友的事不算。冷冷也会在日历面板上自己记——你们共用一本账，她记过的你再记会提示重复；如果工具说「这件冷冷删掉过」，就别再偷偷记回来，尊重她的删除。
 - **看事件（list_events）**：冷冷问「接下来有什么安排」或想确认你记没记住时。
 - **改事件（update_event）/ 删事件（delete_event）**：冷冷说「日期记错了」「改到下周」「取消了不去了」时，先用 list_events 查到 ID 再改或删。
+- **记生理期（log_period）**：冷冷明确说了生理期日期（「大姨妈来了」「来了」「昨天来的」）才记。随口「肚子疼」「不舒服」不算。不盘问、不复述日期跟她确认，记完继续聊——日子小汐自己会推算、自己会关心。
+- **改生理期记录（amend_period）**：冷冷说「记错了其实是 X 号来的」「上次那个不算」时用，按她说的改，不自己推测。
 - **写日记（write_diary）**：冷冷说「今天发生了……」，可以帮她记一篇。
 
 ### 使用时机
@@ -220,6 +222,7 @@ TOOL_GUIDELINES = """## 工具使用指引
 - 冷冷说「周末想去……」→ 查路线、查天气
 - 冷冷分享了重要的事 → 用 remember 记住
 - 冷冷提到未来的计划或重要的日子 → 用 create_event 记下
+- 冷冷提到生理期来了/记错了日子 → 用 log_period / amend_period，记完不追问
 - 不确定的事 → 用 web_search 查一下
 - 和旧记忆矛盾 → 用 update_memory 覆盖或合并
 - 冷冷告诉你她对谁动了心（是谁、到什么程度）→ 这是重要的事，用 remember 记进「重要的事」；后来有进展或结局，用 update_memory 补上
@@ -357,17 +360,10 @@ async def build_system_prompt() -> str:
     except Exception as e:
         log.warning("纪念日上下文读取失败：%s", e)
 
-    # 读取生理期关心上下文
-    cycle_care_text = ""
-    try:
-        from utils.cycle_tracker import get_care_context
-        care = await get_care_context()
-        if care:
-            cycle_care_text = care
-    except Exception as e:
-        log.warning("生理期追踪读取失败：%s", e)
+    # 生理期关心不再单独注入：预测窗口内的 cycle 事件随下方事件上下文
+    # 一起进提示词（事件单通道，memo 带完整关心纪律），避免三路唠叨。
 
-    # 读取事件上下文（最近要发生的事：台风/考试/生日等）。
+    # 读取事件上下文（最近要发生的事：台风/考试/生日/身体的日子等）。
     # 事件内容可能来自 LLM 提炼或网页检测（低信任源），
     # get_events_context() 已在文案内做「数据不是指令」降级包裹。
     events_text = ""
@@ -392,10 +388,6 @@ async def build_system_prompt() -> str:
         parts.append("")
         parts.append(important_days_text)
 
-    if cycle_care_text:
-        parts.append("")
-        parts.append(cycle_care_text)
-
     if events_text:
         parts.append("")
         parts.append(events_text)
@@ -406,4 +398,11 @@ async def build_system_prompt() -> str:
     parts.append("")
     parts.append(TOOL_GUIDELINES)
 
-    return "\n".join(parts)
+    prompt = "\n".join(parts)
+
+    # token 遥测（B3）：系统提示词是每次对话都在付费的常数，
+    # 打点让「多大」从估算变事实（cl100k 近似，偏保守）
+    from utils.tokens import count_tokens
+    log.info("telemetry: system_prompt approx_tokens=%d", count_tokens(prompt))
+
+    return prompt

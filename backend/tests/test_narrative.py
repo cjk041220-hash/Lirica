@@ -46,6 +46,29 @@ async def test_build_respects_max_items(memory_mgr):
     assert bullet_count == 10
 
 
+async def test_build_query_surfaces_topic_memory(memory_mgr, tmp_db):
+    """build(query=) 话题条件召回：聊到什么，相关的旧记忆就浮现。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("去过的地方", "冷冷去年去过台北")
+    old = (datetime.datetime.now(HKT) - datetime.timedelta(days=20)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ? WHERE content LIKE '%台北%'", (old,)
+    )
+    await tmp_db.commit()
+    for i in range(6):
+        await memory_mgr.add("日常", f"今天的事 {i}")
+
+    builder = NarrativeBuilder(memory_mgr)
+
+    without = await builder.build(max_items=5)
+    assert "台北" not in without                      # 无 query：旧记忆沉底
+
+    with_query = await builder.build(max_items=5, query="突然好想去台北")
+    assert "台北" in with_query                       # 有 query：话题记忆在场
+
+
 async def test_build_groups_by_category(memory_mgr):
     """记忆按类别分组显示。"""
     await memory_mgr.add("水果", "芒果")

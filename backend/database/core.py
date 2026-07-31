@@ -164,6 +164,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         CHAT_ARCHIVE_SCHEMA_SQL,
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
+        MEMORIES_INDEX_SQL,
     )
     # life_state 表（v7：含 first_met_on）：老库由迁移补列，新库由共享
     # DDL 常量建立，与 migrations / conftest 三处永不漂移
@@ -171,12 +172,11 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await ensure_schema(conn)
 
     # 索引（幂等，IF NOT EXISTS）——此时 schema 已保证为最终形态
-    # memories(category, content) 为活跃行唯一部分索引（迁移 v5 建立），
-    # 与 manager.add 的 ON CONFLICT 推断条件保持一致；此处定义必须同步
+    # memories(category, content) 为活跃+core 行唯一部分索引（迁移 v5
+    # 建立、v10 扩谓词），与 manager.add 的 ON CONFLICT 推断条件保持
+    # 一致；定义走 MEMORIES_INDEX_SQL 共享常量，三源永不漂移
+    await conn.executescript(MEMORIES_INDEX_SQL)
     await conn.executescript("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
-            ON memories(category, content) WHERE status = 'active';
-
         CREATE INDEX IF NOT EXISTS idx_memories_status
             ON memories(status);
     """)
@@ -351,19 +351,22 @@ async def backup_database(
 
     # 隐私选项（P3-3）：从备份中剔除高敏数据。
     # 默认关闭（完整备份优先）；开启 BACKUP_SCRUB_SENSITIVE 后，
-    # 备份不再含 cycle_records 与对话档案（chat_sessions /
+    # 备份不再含 cycle_records、由它派生的周期推算事件
+    # （events.source='cycle'）与对话档案（chat_sessions /
     # chat_messages）——对话档案是最大体量的亲密数据，适合会把
-    # 备份同步到网盘/他人的场景。
+    # 备份同步到网盘/他人的场景。周期事件虽只存预测日，仍是
+    # 生理期的衍生物，与 cycle_records 同进同出。
     try:
         from config.settings import get_settings
 
         if get_settings().backup_scrub_sensitive:
             async with aiosqlite.connect(str(backup_path)) as scrub_conn:
                 await scrub_conn.execute("DELETE FROM cycle_records")
+                await scrub_conn.execute("DELETE FROM events WHERE source = 'cycle'")
                 await scrub_conn.execute("DELETE FROM chat_messages")
                 await scrub_conn.execute("DELETE FROM chat_sessions")
                 await scrub_conn.commit()
-            log.info("备份已脱敏：cycle_records + 对话档案已剔除")
+            log.info("备份已脱敏：cycle_records + 周期推算事件 + 对话档案已剔除")
     except Exception as e:
         log.warning("备份脱敏失败（备份本身仍保留）：%s", e)
 

@@ -8,9 +8,11 @@ import pytest
 import database.core as db_core
 from utils.cycle_tracker import (
     add_record,
+    delete_record,
+    move_record,
+    update_note,
     get_records,
     get_cycle_stats,
-    get_care_context,
     seed_initial_records,
 )
 
@@ -63,6 +65,104 @@ async def test_seed_initial_records(tmp_db):
     assert len(records) == 4
 
 
+# ── 对话修正面（delete / move / update_note）────────────────
+
+
+async def test_delete_record_removes(tmp_db):
+    """delete_record 删掉记录并返回 True。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18", "这次来得晚")
+    assert await delete_record("2026-07-18") is True
+    assert await get_records() == []
+
+
+async def test_delete_record_not_found(tmp_db):
+    """删不存在的日期返回 False。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await delete_record("2026-01-01") is False
+    assert len(await get_records()) == 1
+
+
+async def test_delete_record_rejects_malformed(tmp_db):
+    """坏日期不删且不误伤既有记录。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await delete_record("2026-13-40") is False
+    assert await delete_record("明天") is False
+    assert await delete_record("") is False
+    assert len(await get_records()) == 1
+
+
+async def test_move_record_moves_and_keeps_note(tmp_db):
+    """move_record 挪动记录并保留旧备注。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18", "近期周期波动较大")
+    assert await move_record("2026-07-18", "2026-07-16") == "moved"
+
+    records = await get_records()
+    assert len(records) == 1
+    assert records[0]["start_date"] == "2026-07-16"
+    assert records[0]["note"] == "近期周期波动较大"
+
+
+async def test_move_record_target_exists_keeps_old(tmp_db):
+    """新日期已有记录时返回 exists，旧记录不受损（原子性回归）。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18", "旧备注")
+    await add_record("2026-07-16", "已有备注")
+    assert await move_record("2026-07-18", "2026-07-16") == "exists"
+
+    records = {r["start_date"]: r["note"] for r in await get_records()}
+    assert records == {"2026-07-18": "旧备注", "2026-07-16": "已有备注"}
+
+
+async def test_move_record_not_found_creates_no_ghost(tmp_db):
+    """旧日期不存在时返回 not_found，且不产生幽灵新记录。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await move_record("2026-01-01", "2026-02-02") == "not_found"
+    records = await get_records()
+    assert len(records) == 1
+    assert records[0]["start_date"] == "2026-07-18"
+
+
+async def test_move_record_same_date_is_exists(tmp_db):
+    """old==new 归一为 exists 的幂等无操作。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await move_record("2026-07-18", "2026-07-18") == "exists"
+    assert len(await get_records()) == 1
+
+
+async def test_move_record_rejects_malformed(tmp_db):
+    """任一端日期非法即拒绝，记录不动。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await move_record("2026-13-40", "2026-07-16") == "not_found"
+    assert await move_record("2026-07-18", "明天") == "not_found"
+    assert await move_record("", "") == "not_found"
+    records = await get_records()
+    assert len(records) == 1
+    assert records[0]["start_date"] == "2026-07-18"
+
+
+async def test_update_note_updates(tmp_db):
+    """update_note 补/改备注。"""
+    db_core._db = tmp_db
+    await add_record("2026-07-18")
+    assert await update_note("2026-07-18", "那次痛得很厉害") is True
+    records = await get_records()
+    assert records[0]["note"] == "那次痛得很厉害"
+
+
+async def test_update_note_not_found(tmp_db):
+    """改不存在记录的备注返回 False。"""
+    db_core._db = tmp_db
+    assert await update_note("2026-01-01", "备注") is False
+    assert await update_note("2026-13-40", "备注") is False
+
+
 # ── 周期计算 ──────────────────────────────────────────────────
 
 
@@ -97,62 +197,9 @@ async def test_cycle_stats_predicts_next(tmp_db):
     assert stats["next_predicted"] == "2026-08-16"
 
 
-# ── 关心窗口 ──────────────────────────────────────────────────
-
-
-async def test_care_context_in_window(tmp_db):
-    """在关心窗口内返回关心文本。"""
-    db_core._db = tmp_db
-    # 让"今天"落在预测日期附近
-    await seed_initial_records(["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"])
-
-    # Mock 今天为 8 月 15 日（预测 8.16 前 1 天，在窗口内）
-    fake_today = datetime.datetime(2026, 8, 15, 12, 0, tzinfo=_HKT)
-    with patch("utils.cycle_tracker.datetime") as mock_dt:
-        mock_dt.datetime.now.return_value = fake_today
-        mock_dt.datetime.strptime = datetime.datetime.strptime
-        mock_dt.timedelta = datetime.timedelta
-        mock_dt.timezone = datetime.timezone
-        context = await get_care_context()
-
-    assert context is not None
-    assert "痛经" in context
-    assert "关心" in context
-
-
-async def test_care_context_outside_window(tmp_db):
-    """不在关心窗口内时返回 None。"""
-    db_core._db = tmp_db
-    await seed_initial_records(["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"])
-
-    # Mock 今天为 7 月 25 日（预测 8.16 还很远，不在窗口内）
-    fake_today = datetime.datetime(2026, 7, 25, 12, 0, tzinfo=_HKT)
-    with patch("utils.cycle_tracker.datetime") as mock_dt:
-        mock_dt.datetime.now.return_value = fake_today
-        mock_dt.datetime.strptime = datetime.datetime.strptime
-        mock_dt.timedelta = datetime.timedelta
-        mock_dt.timezone = datetime.timezone
-        context = await get_care_context()
-
-    assert context is None
-
-
-async def test_care_context_on_predicted_day(tmp_db):
-    """预测当天也触发关心。"""
-    db_core._db = tmp_db
-    await seed_initial_records(["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"])
-
-    # Mock 今天为 8 月 16 日（预测日期当天）
-    fake_today = datetime.datetime(2026, 8, 16, 12, 0, tzinfo=_HKT)
-    with patch("utils.cycle_tracker.datetime") as mock_dt:
-        mock_dt.datetime.now.return_value = fake_today
-        mock_dt.datetime.strptime = datetime.datetime.strptime
-        mock_dt.timedelta = datetime.timedelta
-        mock_dt.timezone = datetime.timezone
-        context = await get_care_context()
-
-    assert context is not None
-    assert "今天可能就是" in context
+# ── 坏日期入口防御 ────────────────────────────────────────────
+# 关心窗口语义已迁移到事件系统（utils/events.detect_cycle_events），
+# 原 get_care_context 及其三例窗口测试随 A4 收敛删除。
 
 
 async def test_add_record_rejects_malformed_date(tmp_db):

@@ -327,6 +327,77 @@ async def test_add_rejects_empty_category_or_content(memory_mgr):
     assert await memory_mgr.count() == 0
 
 
+# ── 话题条件召回（B1）──────────────────────────────────────────
+
+
+def test_char_bigrams_basic():
+    """字符 2-gram：去空白、短串兜底、空串空集。"""
+    from memory.manager import _char_bigrams
+
+    assert _char_bigrams("火锅") == {"火锅"}
+    assert _char_bigrams("想吃火锅") == {"想吃", "吃火", "火锅"}
+    assert _char_bigrams("想 吃 火锅") == {"想吃", "吃火", "火锅"}  # 空白剥离
+    assert _char_bigrams("饿") == {"饿"}                          # 单字兜底
+    assert _char_bigrams("") == set()
+    assert _char_bigrams("   ") == set()
+
+
+def test_bigram_overlap_semantics():
+    """overlap 系数：短 query 全命中长文得满分，无关为 0。"""
+    from memory.manager import _bigram_overlap
+
+    # query 的每个 bigram 都在内容里 → 满分（Jaccard 在此会趋零）
+    assert _bigram_overlap("火锅", "冷冷昨天说想吃火锅") == 1.0
+    # 部分命中按比例（4 个 query bigram 命中 3 个 → 0.75）
+    assert _bigram_overlap("喜欢火锅吗", "冷冷喜欢火锅") == 0.75
+    # 完全无关
+    assert _bigram_overlap("飞去北京", "冷冷喜欢火锅") == 0.0
+    # 空值安全
+    assert _bigram_overlap("", "火锅") == 0.0
+    assert _bigram_overlap("火锅", "") == 0.0
+
+
+async def test_recall_query_promotes_topic_memory(memory_mgr, tmp_db):
+    """话题命中：无关新流水占屏时，query 命中让 10 天前的旧记忆浮到顶。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("去过的地方", "冷冷上周去了趟澳门吃蛋挞")
+    ten_days_ago = (
+        datetime.datetime.now(HKT) - datetime.timedelta(days=10)
+    ).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ? WHERE content LIKE '%澳门%'",
+        (ten_days_ago,),
+    )
+    await tmp_db.commit()
+
+    for i in range(8):
+        await memory_mgr.add("日常", f"流水账 {i}")
+
+    # 无 query：旧记忆 recency≈0.37 沉在新流水（1.0）之下
+    no_query = await memory_mgr.recall(limit=3, passive=True)
+    assert not any("澳门" in m["content"] for m in no_query)
+
+    # 有 query：话题满分命中（+1.0）把它顶进 top-3
+    with_query = await memory_mgr.recall(limit=3, passive=True, query="好想去澳门啊")
+    assert any("澳门" in m["content"] for m in with_query), (
+        "话题命中的旧记忆未浮现——query 条件召回失效"
+    )
+
+
+async def test_recall_query_passive_keeps_counters(memory_mgr, tmp_db):
+    """双钉回归：query 只进排序键，passive=True 仍不刷热度（正反馈闭环保持阻断）。"""
+    await memory_mgr.add("喜好", "冷冷喜欢洛天依")
+    before = await memory_mgr.recall(limit=1, passive=True)
+    acc_before = before[0]["access_count"]
+
+    await memory_mgr.recall(limit=1, passive=True, query="洛天依出新曲了")
+
+    after = await memory_mgr.recall(limit=1, passive=True)
+    assert after[0]["access_count"] == acc_before
+
+
 async def test_recall_surfaces_old_frequently_used_memory(memory_mgr, tmp_db):
     """相关性召回不能被 created_at 预筛死：旧的高频记忆要能浮现。
 

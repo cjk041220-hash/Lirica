@@ -121,7 +121,16 @@ async def test_migrate_v6_creates_events_table(tmp_path):
 
     db_path = tmp_path / "v5.db"
     conn = await aiosqlite.connect(str(db_path))
+    # 真实 v5 库必有 memories 表（v1 建、v2 重构）——v10 迁移要重建其
+    # 去重索引，合成库不能省掉这张表（否则报 no such table，那是对
+    # 不真实输入的如实报错，不是迁移的缺陷）
     await conn.executescript("""
+        CREATE TABLE memories (
+            id TEXT PRIMARY KEY, content TEXT NOT NULL,
+            category TEXT DEFAULT '其他', created_at TEXT NOT NULL,
+            last_used_at TEXT, access_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
         CREATE TABLE schema_version (
             version INTEGER PRIMARY KEY,
             applied_at TEXT DEFAULT (datetime('now'))

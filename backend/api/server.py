@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from version import __version__
 from agent.graph import build_agent, make_pre_model_hook
 from agent.soul import build_system_prompt
-from tools import get_all_tools, set_memory_manager, set_diary_db_conn, set_http_client
+from tools import get_all_tools, set_memory_manager, set_diary_db_conn, set_http_client, set_cycle_prompt_refresh_callback
 from memory.manager import MemoryManager
 from memory.narrative import NarrativeBuilder
 from api.routes.chat import router as chat_router
@@ -119,6 +119,15 @@ async def lifespan(app: FastAPI):
     tools = get_all_tools()
     app.state.tools = tools
     log.info("%s 个工具已加载", len(tools))
+
+    # 生理期工具写账本后立即刷新提示词（不等每小时看门狗）：
+    # 冷冷刚说完「其实是昨天来的」，提示词与日历上的日子就该跟着变。
+    # 失败只降级——工具话术照常返回，看门狗下一小时兜底重算。
+    async def _refresh_prompt_after_cycle_change():
+        from api.routes.config import rebuild_agent_for_app  # 惰性 import 防环
+        await rebuild_agent_for_app(app)
+
+    set_cycle_prompt_refresh_callback(_refresh_prompt_after_cycle_change)
 
     # 5. LLM 模型 — 从运行时配置创建，保证与 GET /api/config 报告的
     #    默认值（medium / 0.7 / 8192 / flash）完全一致（单一数据源）

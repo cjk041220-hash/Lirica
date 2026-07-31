@@ -37,7 +37,22 @@ log = get_logger(__name__)
 #     同 key 重建（LLM 重新提取 / 检测器再生成）会被索引挡下，不再
 #     「删了又偷偷长回来」。archived 行仍不在谓词内——「翻篇了明年
 #     再来」（生日/周年/台风的年度再生成）语义不变
-SCHEMA_VERSION = 9
+# v10: 记忆分层 — 去重唯一部分索引谓词从 status='active' 扩为
+#     status IN ('active','core')。分层衰减（B2）引入 core（高频核心
+#     记忆）/ archived（冷藏遗忘）两个新取值；core 必须与 active 一样
+#     参与去重，否则同内容会出现 active+core 双行。archived 不在谓词
+#     内——忘了的事重提时 add() 开始新生命周期
+SCHEMA_VERSION = 10
+
+
+# memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
+# 全新安装（core.py init_db）/ 测试夹具（conftest）/ 迁移（v10 重建）。
+# manager.add 的 INSERT ... ON CONFLICT 推断子句必须与此谓词逐字一致
+# （SQLite 要求推断 WHERE 与索引谓词精确匹配，差一词即推断失败）。
+MEMORIES_INDEX_SQL = """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
+        ON memories(category, content) WHERE status IN ('active', 'core');
+"""
 
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
@@ -462,6 +477,32 @@ async def _migrate_v9(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[9] = _migrate_v9
+
+
+# ── v10 迁移：记忆分层 ────────────────────────────────────────
+
+async def _migrate_v10(conn: aiosqlite.Connection) -> None:
+    """v10: 记忆去重唯一部分索引谓词扩至 status IN ('active','core')。
+
+    背景：分层衰减（B2）给 memories.status 引入两个新取值——core
+    （access_count≥5 且 ≥30 天的高频核心记忆，叙事保底席位）与
+    archived（≤1 次且 ≥90 天的冷藏记忆，读面排除）。旧谓词只覆盖
+    active：core 行跌出约束后，add() 的 ON CONFLICT 推断命中不到它
+    → 同 (category, content) 出现 active + core 双行。扩谓词后 core
+    与 active 一样参与去重；archived 仍不在谓词内——遗忘后重提同内容
+    时 add() 插入新行开始新生命周期（正是「忘了又想起」的语义）。
+
+    SQLite 不支持 ALTER INDEX：drop + recreate。幂等——新库走
+    MEMORIES_INDEX_SQL（已同步新谓词），老库走本迁移，终态一致。
+    manager.add 的 ON CONFLICT 推断子句与读回 SELECT 已同步扩谓词。
+    """
+    await conn.execute("DROP INDEX IF EXISTS idx_memories_cat_content")
+    await conn.executescript(MEMORIES_INDEX_SQL)
+    await conn.commit()
+    log.info("迁移 v10 完成：记忆去重索引已覆盖 core 行（active + core）")
+
+
+_migrations[10] = _migrate_v10
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

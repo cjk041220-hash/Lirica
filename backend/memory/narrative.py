@@ -26,15 +26,18 @@ class NarrativeBuilder:
     def __init__(self, manager: MemoryManager | None = None):
         self._manager = manager
 
-    async def build(self, max_items: int = 30) -> str:
+    async def build(self, max_items: int = 30, query: str = "") -> str:
         """从 MemoryManager 读取记忆，构建叙事文本。
 
         检索策略为 hybrid（修复 P2-2）：
-        - top-K 相关性（recall：时间衰减 × 访问热度）——让"重要但较旧"
-          的记忆（如核心偏好、重要约定）也能进入系统侧叙事，而不是
-          只有最近几天的流水账被"自然想起"；
+        - top-K 相关性（recall：时间衰减 × 访问热度 × 话题命中）——让
+          "重要但较旧"的记忆（如核心偏好、重要约定）也能进入系统侧叙事，
+          而不是只有最近几天的流水账被"自然想起"；
         - 其余配额给最新记忆（recent）——保证"刚发生的事"在场。
         两路去重后不足 max_items 时用 recent 补足，最终按时间正序渲染。
+
+        query 传当前对话的最新一句话时，相关路按话题重叠加分——
+        聊天气时和聊心事时，浮现的不再是同一批固定阵容。
         """
         if self._manager is None:
             return ""
@@ -46,7 +49,9 @@ class NarrativeBuilder:
         # 否则会形成正反馈闭环——top 记忆每次注入都被刷新 last_used_at /
         # access_count，永远霸占相关性配额，新记忆挤不进来。
         relevance_k = min(3, max_items)
-        relevant = await self._manager.recall(limit=relevance_k, passive=True)
+        relevant = await self._manager.recall(
+            limit=relevance_k, passive=True, query=query
+        )
         recent = await self._manager.recent(max_items)
 
         picked: list[dict] = []
@@ -61,6 +66,14 @@ class NarrativeBuilder:
             if m["id"] not in seen:
                 seen.add(m["id"])
                 picked.append(m)
+
+        # core 保底席位（B2）：相关路 + 最新路全被近期流水占满时，
+        # 至少保证一条 core 记忆（高频复用的画像基石）在场——替换
+        # 末位（recent 补足席），损失最小；相关路自身常已含 core。
+        if picked and not any(m.get("status") == "core" for m in picked):
+            cores = await self._manager.top_core(limit=1)
+            if cores and cores[0]["id"] not in seen:
+                picked[-1] = cores[0]
 
         # 渲染按时间正序（与 recent() 原语义一致）
         memories = sorted(picked, key=lambda m: m.get("created_at") or "")

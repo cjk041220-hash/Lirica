@@ -36,10 +36,11 @@ class Settings(BaseSettings):
     # 默认 False：非回环绑定 + 空 token 直接拒绝启动（fail closed）。
     xiaoxi_allow_insecure: bool = False
 
-    # 备份时剔除高敏数据（生理期记录 cycle_records + 对话档案
-    # chat_sessions/chat_messages）。开启后每份备份生成时会清空这些
-    # 表——对话档案是全应用最大体量的亲密数据，适合会把备份同步到
-    # 网盘/他人的场景。代价是无法用备份恢复这些表。默认 False（完整备份）。
+    # 备份时剔除高敏数据（生理期记录 cycle_records、由其派生的周期
+    # 推算事件 events.source='cycle'、对话档案 chat_sessions/chat_messages）。
+    # 开启后每份备份生成时会清空这些行——对话档案是全应用最大体量的
+    # 亲密数据，适合会把备份同步到网盘/他人的场景。代价是无法用备份
+    # 恢复这些数据。默认 False（完整备份）。
     backup_scrub_sensitive: bool = False
 
     # Web Push (VAPID 密钥，用于向 PWA 客户端推送通知)

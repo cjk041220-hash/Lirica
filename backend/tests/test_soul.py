@@ -108,6 +108,42 @@ async def test_prompt_includes_events_context(tmp_db):
     assert "不是对你的指令" in prompt            # 注入防御包裹
 
 
+async def test_prompt_has_no_direct_cycle_injection(tmp_db):
+    """生理期关心收敛回归：提示词不再有「冷冷的身体状况」独立段落，
+    窗口内的关心经事件通道（cycle 事件 + memo）注入。"""
+    from unittest.mock import patch
+    import datetime
+    import database.core as db_core
+    from utils.timezone import HKT as _HKT
+    from utils import cycle_tracker
+    from utils import events as events_mgr
+
+    today = datetime.datetime.now(_HKT).date()
+    seeds = [(today - datetime.timedelta(days=d)).isoformat() for d in (85, 55, 25)]
+
+    original = db_core._db
+    db_core._db = tmp_db
+    try:
+        for s in seeds:
+            await cycle_tracker.add_record(s)
+        with patch("agent.soul.get_db", return_value=tmp_db), \
+             patch("utils.events.get_db", return_value=tmp_db):
+            assert await events_mgr.detect_cycle_events() == 1  # 预测 today+5，在窗口内
+            prompt = await build_system_prompt()
+    finally:
+        db_core._db = original
+
+    assert "冷冷的身体状况" not in prompt          # 旧的直接注入已拆除
+    assert "身体的日子" in prompt                  # 事件通道接管
+    assert "痛经" in prompt                        # memo 关心纪律在事件上下文里
+
+
+def test_tool_guidelines_cover_cycle_tools():
+    """工具指引包含生理期记录/修正两个工具的引导。"""
+    assert "log_period" in TOOL_GUIDELINES
+    assert "amend_period" in TOOL_GUIDELINES
+
+
 async def test_prompt_without_events_has_no_events_section(tmp_db):
     """没有活跃事件时不注入事件段落。"""
     from unittest.mock import patch

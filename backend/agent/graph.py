@@ -74,10 +74,21 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
                 conversation = conversation[trim_end:]
 
         # ── ② 记忆检索 ────────────────────────────────────────
+        # 话题条件召回：取最近一条 human 消息作 query，让叙事的相关路
+        # 优先浮现与当前话题字面重叠的记忆。跳过 ToolMessage；多模态
+        # （list 型 content）取空串，自动降级为纯时近/热度召回。
+        query = ""
+        for m in reversed(conversation):
+            if getattr(m, "type", "") == "human" and isinstance(
+                getattr(m, "content", ""), str
+            ):
+                query = m.content
+                break
+
         memory_text = ""
         if narrative_builder is not None:
             try:
-                memory_text = await narrative_builder.build(max_items=5)
+                memory_text = await narrative_builder.build(max_items=5, query=query)
             except Exception as e:
                 log.warning("记忆叙事构建失败：%s", e)
 
@@ -102,6 +113,20 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
             base_system_msgs = list(system_msgs) + [memory_msg]
 
         llm_input = base_system_msgs + conversation
+
+        # token 遥测（B3）：记忆叙事与总输入规模打点，供召回/裁剪调参
+        try:
+            from utils.tokens import count_tokens
+            total = sum(
+                count_tokens(m.content) for m in llm_input
+                if isinstance(getattr(m, "content", ""), str)
+            )
+            log.info(
+                "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
+                count_tokens(memory_text), total,
+            )
+        except Exception as e:
+            log.warning("token 遥测失败：%s", e)
 
         result = {"llm_input_messages": llm_input}
         if to_remove:

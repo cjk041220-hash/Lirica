@@ -1,7 +1,8 @@
-"""生理期追踪器 — 记录、预测、主动关心。
+"""生理期追踪器 — 记录、预测、对话修正。
 
-根据历史记录计算平均周期，预测下一次经期。
-在经期前后窗口期，心跳系统会生成关心身体的主动消息。
+根据历史记录计算平均周期，预测下一次经期。预测日由事件检测器
+（utils/events.detect_cycle_events）派生成日历上的「身体的日子」，
+关心提示统一走事件通道（提示词注入 + 主动消息），本模块只管账本。
 """
 import datetime
 from datetime import timedelta
@@ -13,12 +14,6 @@ log = get_logger(__name__)
 
 from utils.timezone import HKT as _HKT
 _DATE_FMT = "%Y-%m-%d"
-
-# 经期关心窗口：预测日期前 N 天到后 N 天
-_CARE_WINDOW_DAYS = 2
-
-# 痛经严重程度提醒
-_PAIN_NOTE = "痛经很厉害，有时会昏迷"
 
 
 async def add_record(date_str: str, note: str = "") -> bool:
@@ -53,6 +48,104 @@ async def add_record(date_str: str, note: str = "") -> bool:
         return False
 
 
+async def delete_record(date_str: str) -> bool:
+    """删除一条生理期记录（冷冷说「那天根本不算」）。
+
+    Args:
+        date_str: 要删除的开始日期，格式 YYYY-MM-DD
+
+    Returns:
+        是否真的删掉了（坏日期格式或记录不存在返回 False）
+    """
+    try:
+        datetime.datetime.strptime(date_str, _DATE_FMT)
+    except (TypeError, ValueError):
+        log.warning("生理期记录删除被拒绝：日期格式非法 %r（需要 YYYY-MM-DD）", date_str)
+        return False
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "DELETE FROM cycle_records WHERE start_date = ?", (date_str,)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        log.error("生理期记录删除失败: %s", e)
+        return False
+
+
+async def move_record(old_date: str, new_date: str) -> str:
+    """把一条记录挪到新日期（冷冷说「记错了，其实是 X 号来的」）。
+
+    顺序纪律：先 INSERT OR IGNORE 新日期占位（连同旧备注），占位失败
+    说明新日期已有记录 → 不动旧的直接返回，避免「毁旧不成反丢」；
+    占位成功再删旧记录。单连接单 commit 保证原子性。
+
+    Returns:
+        "moved"    — 挪动成功
+        "not_found" — 旧日期没有记录
+        "exists"   — 新日期已有记录（旧记录保持不动）；old==new 也归到这里
+    """
+    try:
+        datetime.datetime.strptime(old_date, _DATE_FMT)
+        datetime.datetime.strptime(new_date, _DATE_FMT)
+    except (TypeError, ValueError):
+        log.warning(
+            "生理期记录挪动被拒绝：日期格式非法 %r → %r（需要 YYYY-MM-DD）",
+            old_date, new_date,
+        )
+        return "not_found"
+    if old_date == new_date:
+        return "exists"
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "SELECT note FROM cycle_records WHERE start_date = ?", (old_date,)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return "not_found"
+        old_note = row[0] or ""
+        cursor = await conn.execute(
+            "INSERT OR IGNORE INTO cycle_records (start_date, note) VALUES (?, ?)",
+            (new_date, old_note),
+        )
+        if cursor.rowcount == 0:
+            return "exists"
+        await conn.execute(
+            "DELETE FROM cycle_records WHERE start_date = ?", (old_date,)
+        )
+        await conn.commit()
+        return "moved"
+    except Exception as e:
+        log.error("生理期记录挪动失败: %s", e)
+        return "not_found"
+
+
+async def update_note(date_str: str, note: str) -> bool:
+    """补/改某次生理期的备注（冷冷说「那次痛得很厉害」）。
+
+    Returns:
+        是否更新成功（坏日期格式或记录不存在返回 False）
+    """
+    try:
+        datetime.datetime.strptime(date_str, _DATE_FMT)
+    except (TypeError, ValueError):
+        log.warning("生理期备注更新被拒绝：日期格式非法 %r（需要 YYYY-MM-DD）", date_str)
+        return False
+    conn = await get_db()
+    try:
+        cursor = await conn.execute(
+            "UPDATE cycle_records SET note = ? WHERE start_date = ?",
+            (note, date_str),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        log.error("生理期备注更新失败: %s", e)
+        return False
+
+
 async def get_records() -> list[dict]:
     """获取所有生理期记录，按日期倒序。"""
     conn = await get_db()
@@ -72,9 +165,9 @@ async def get_cycle_stats() -> dict | None:
             "last_start": str,        # 最近一次开始日期
             "next_predicted": str,    # 预测下次开始日期
             "days_until_next": int,   # 距离预测还有几天（负数=已过）
-            "is_in_care_window": bool # 当前是否在关心窗口内
         }
-        如果记录不足 2 条，返回 None。
+        如果记录不足 2 条，返回 None。关心窗口的判定由事件检测器
+        （utils/events.detect_cycle_events）按 days_until_next 自行掌握。
     """
     records = await get_records()
     if len(records) < 2:
@@ -106,47 +199,13 @@ async def get_cycle_stats() -> dict | None:
     next_predicted = last_start + timedelta(days=avg_cycle)
     days_until = (next_predicted - today).days
 
-    # 关心窗口：预测日期前后各 CARE_WINDOW_DAYS 天
-    window_start = next_predicted - timedelta(days=_CARE_WINDOW_DAYS)
-    window_end = next_predicted + timedelta(days=_CARE_WINDOW_DAYS)
-    is_in_care_window = window_start <= today <= window_end
-
     return {
         "avg_cycle": avg_cycle,
         "last_start": last_start.strftime(_DATE_FMT),
         "next_predicted": next_predicted.strftime(_DATE_FMT),
         "days_until_next": days_until,
-        "is_in_care_window": is_in_care_window,
         "records_count": len(records),
     }
-
-
-async def get_care_context() -> str | None:
-    """如果当前在关心窗口内，返回注入系统提示词的上下文文本。
-
-    这段文本会在 build_system_prompt 时注入，让小汐知道该关心冷冷的身体。
-    不在窗口内时返回 None。
-    """
-    stats = await get_cycle_stats()
-    if stats is None or not stats["is_in_care_window"]:
-        return None
-
-    days = stats["days_until_next"]
-
-    if days > 0:
-        timing = f"大约还有 {days} 天"
-    elif days == 0:
-        timing = "今天可能就是"
-    else:
-        timing = "已经开始了"
-
-    return (
-        f"## 冷冷的身体状况\n"
-        f"根据记录推算，冷冷的生理期{timing}。"
-        f"她痛经{_PAIN_NOTE}。\n"
-        f"如果她在线，可以自然地关心一下她身体怎么样、有没有不舒服。"
-        f"不要直接说'你生理期到了'，用关心的方式旁敲侧击就好。"
-    )
 
 
 async def seed_initial_records(records: list[str]) -> int:

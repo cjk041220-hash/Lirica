@@ -134,11 +134,12 @@ async def _refresh_agent(app):
 
 
 async def _periodic_maintenance():
-    """定期维护：裁剪 checkpoint + 备份数据库。
+    """定期维护：裁剪 checkpoint + 备份数据库 + 记忆分层衰减。
 
     随心跳每 2 小时执行一次，对单用户应用频率足够。
     """
     from database.core import prune_checkpoints, backup_database
+    from memory.manager import run_status_decay
 
     try:
         await prune_checkpoints()
@@ -149,6 +150,13 @@ async def _periodic_maintenance():
         await backup_database()
     except Exception as e:
         log.error("数据库备份失败：%s", e)
+
+    # 记忆分层衰减（B2）：高频记忆晋升 core、长期冷落记忆归档冷藏。
+    # 无时效性，2h 频率绰绰有余；与前两段隔离，互不牵连
+    try:
+        await run_status_decay()
+    except Exception as e:
+        log.error("记忆分层衰减失败：%s", e)
 
 
 # ── 主动消息系统 ──────────────────────────────────────────────
@@ -223,18 +231,9 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
         f"要自然、简短、符合你的性格。不要问客服式的套话。"
     )
 
-    # 如果生理期关心窗口内，加入关心提示
-    try:
-        from utils.cycle_tracker import get_care_context
-        care = await get_care_context()
-        if care:
-            user_prompt += (
-                "\n\n另外，根据推算冷冷的生理期可能快到了或正在进行中。"
-                "她痛经很厉害。请自然地关心一下她的身体，"
-                "但不要直接说'你生理期到了'，用温暖的方式旁敲侧击。"
-            )
-    except Exception:
-        pass
+    # 生理期关心已收敛进事件系统：预测窗口内的 cycle 事件会随下面
+    # 的活跃事件列表一起注入（memo 里带完整的关心纪律），且自带
+    # 24h 防复读——不再在这里硬编码第二路关心提示。
 
     # 事件关心：有活跃事件时可以围绕它说话（不强制），并防复读——
     # 把近 24 小时已发的主动消息给她看，同样的关心不许说第二遍
@@ -419,12 +418,20 @@ async def event_watchdog(app=None):
     except Exception:
         log.exception("事件看门狗：记忆回声检测失败")
 
-    total_created = created_profile + created_weather + created_anniv + created_echo
+    # 生理期预测检测（cycle_records 派生「身体的日子」；返回值含
+    # 漂移归档数——对话修正记录后预测变了，纯归档也算事件变动）
+    created_cycle = 0
+    try:
+        created_cycle = await events_mgr.detect_cycle_events()
+    except Exception:
+        log.exception("事件看门狗：生理期检测失败")
+
+    total_created = created_profile + created_weather + created_anniv + created_echo + created_cycle
     if archived or total_created:
         log.info(
-            "事件看门狗：归档 %d 条，新建 %d 条（档案 %d / 天气 %d / 纪念日 %d / 回声 %d）",
+            "事件看门狗：归档 %d 条，新建 %d 条（档案 %d / 天气 %d / 纪念日 %d / 回声 %d / 周期 %d）",
             archived, total_created, created_profile, created_weather,
-            created_anniv, created_echo,
+            created_anniv, created_echo, created_cycle,
         )
         # 事件上下文变了，刷新 system prompt 让小汐立刻感知
         if app is not None:
