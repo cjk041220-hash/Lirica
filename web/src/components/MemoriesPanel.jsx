@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconWhale from '../assets/icons/IconWhale'
 import { apiFetch } from '../api/client'
@@ -15,7 +15,42 @@ export default function MemoriesPanel({ onClose }) {
   const [diaries, setDiaries] = useState([])
   const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [reloadKey, setReloadKey] = useState(0)
+  // 记忆编辑/删除（体检 R4：冷冷的记忆主权——控制权不押在 LLM 自觉上）
+  const [editingId, setEditingId] = useState(null)
+  const [editText, setEditText] = useState('')
+  const [confirmDelId, setConfirmDelId] = useState(null)
   const dialogRef = useFocusTrap()
+  const confirmDelTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(confirmDelTimerRef.current), [])
+
+  const reload = () => setReloadKey(k => k + 1)
+
+  const saveEdit = (id) => {
+    const content = editText.trim()
+    if (!content) return
+    apiFetch(`/api/memories/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
+      .then(res => { if (res.ok) { setEditingId(null); reload() } })
+      .catch(e => console.warn('[MemoriesPanel] edit failed:', e))
+  }
+
+  const handleDelete = (id) => {
+    if (confirmDelId === id) {
+      setConfirmDelId(null)
+      apiFetch(`/api/memories/${encodeURIComponent(id)}`, { method: 'DELETE' })
+        .then(res => { if (res.ok) reload() })
+        .catch(e => console.warn('[MemoriesPanel] delete failed:', e))
+    } else {
+      setConfirmDelId(id)
+      confirmDelTimerRef.current = setTimeout(
+        () => setConfirmDelId(cur => (cur === id ? null : cur)), 2000,
+      )
+    }
+  }
 
   // 切换 tab / 归档开关时按需拉取（apiFetch 带 token，裸 fetch 在配置了
   // XIAOXI_API_TOKEN 的部署下会 401 静默成空列表）。
@@ -37,7 +72,7 @@ export default function MemoriesPanel({ onClose }) {
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
-  }, [tab, showArchived])
+  }, [tab, showArchived, reloadKey])
 
   const items = tab === 'memories' ? memories : diaries
 
@@ -114,12 +149,65 @@ export default function MemoriesPanel({ onClose }) {
               {memories.map((item, i) => (
                 <div key={item.id || i} className="springy">
                   <div className="border-l-2 border-strawberry/25 pl-3.5 py-0.5">
-                    {(item.created_at || item.date) && (
-                      <p className="text-[10px] text-plum/25 mb-1">{item.created_at || item.date}</p>
+                    <div className="flex items-start justify-between gap-2">
+                      {(item.created_at || item.date) && (
+                        <p className="text-[10px] text-plum/25 mb-1">{item.created_at || item.date}</p>
+                      )}
+                      {/* 编辑/删除：记忆主权（R4）。冷藏行只读——要改动先回活跃态由小汐来 */}
+                      {item.id && item.status !== 'archived' && (
+                        <div className="flex gap-1 shrink-0 -mt-0.5">
+                          <button
+                            onClick={() => {
+                              if (editingId === item.id) { setEditingId(null) }
+                              else { setEditingId(item.id); setEditText(item.content || '') }
+                            }}
+                            className="btn-press text-[10px] text-plum/35 hover:text-raspberry px-1.5 py-0.5 rounded"
+                          >
+                            {editingId === item.id ? '收起' : '改改'}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(item.id)}
+                            className={`btn-press text-[10px] px-1.5 py-0.5 rounded ${
+                              confirmDelId === item.id
+                                ? 'text-raspberry bg-strawberry/10'
+                                : 'text-plum/35 hover:text-raspberry'
+                            }`}
+                          >
+                            {confirmDelId === item.id ? '真删？' : '忘掉'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {editingId === item.id ? (
+                      <div className="space-y-1.5">
+                        <textarea
+                          value={editText}
+                          onChange={e => setEditText(e.target.value)}
+                          rows={2}
+                          aria-label="编辑记忆内容"
+                          className="w-full text-[13px] text-plum/75 leading-[1.8] bg-plum/3 border border-strawberry/25 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:border-strawberry/60"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => saveEdit(item.id)}
+                            disabled={!editText.trim()}
+                            className="btn-press text-[10px] text-raspberry bg-strawberry/10 px-3 py-1 rounded-full disabled:opacity-40"
+                          >
+                            存好
+                          </button>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="btn-press text-[10px] text-plum/40 px-3 py-1 rounded-full"
+                          >
+                            算了
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[13px] text-plum/65 leading-[1.8]">
+                        {item.content || item.text || '(no content)'}
+                      </p>
                     )}
-                    <p className="text-[13px] text-plum/65 leading-[1.8]">
-                      {item.content || item.text || '(no content)'}
-                    </p>
                     {item.category && (
                       <span className="inline-block mt-1.5 text-[10px] text-raspberry bg-strawberry/8 px-2.5 py-0.5 rounded-full">
                         {item.category}

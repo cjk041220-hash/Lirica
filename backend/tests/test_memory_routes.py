@@ -112,6 +112,63 @@ async def test_export_contains_all_columns(client, tmp_db):
     assert row["source"] == "chat:s-test"
 
 
+# ── /memories/{id} 编辑与删除（体检 R4：记忆主权）────────────
+
+
+async def test_patch_memory_updates_content(client, tmp_db):
+    """PATCH 改记忆内容：覆盖语义（旧内容落 superseded 历史链）。"""
+    mgr = MemoryManager(tmp_db)
+    saved = await mgr.add("冷冷的信息", "冷冷爱吃火锅")
+
+    r = await client.request(
+        "PATCH", f"/api/memories/{saved['id']}", json={"content": "冷冷不爱吃火锅了"}
+    )
+    assert r.status_code == 200
+
+    cursor = await tmp_db.execute(
+        "SELECT content FROM memories WHERE id = ?", (saved["id"],)
+    )
+    assert (await cursor.fetchone())[0] == "冷冷不爱吃火锅了"
+    # 旧说法进了历史链（v15），没丢
+    hist = await mgr.history(saved["id"])
+    assert [h["content"] for h in hist] == ["冷冷爱吃火锅"]
+
+
+async def test_patch_memory_not_found(client, tmp_db):
+    r = await client.request(
+        "PATCH", "/api/memories/deadbeefdeadbeef", json={"content": "新内容"}
+    )
+    assert r.status_code == 404
+
+
+async def test_patch_memory_empty_content_rejected(client, tmp_db):
+    """空内容 422（pydantic 校验，不走 update_content 的 False 路径）。"""
+    mgr = MemoryManager(tmp_db)
+    saved = await mgr.add("日常", "记忆")
+
+    r = await client.request(
+        "PATCH", f"/api/memories/{saved['id']}", json={"content": "   "}
+    )
+    assert r.status_code == 422
+
+
+async def test_delete_memory_route(client, tmp_db):
+    """DELETE 删除记忆 + remaining 计数。"""
+    mgr = MemoryManager(tmp_db)
+    saved = await mgr.add("日常", "要删的记忆")
+
+    r = await client.request("DELETE", f"/api/memories/{saved['id']}")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert await mgr.count() == 0
+
+
+async def test_delete_memory_not_found(client, tmp_db):
+    r = await client.request("DELETE", "/api/memories/deadbeefdeadbeef")
+    assert r.status_code == 404
+
+
 # ── /memories（列表）──────────────────────────────────────────
 
 

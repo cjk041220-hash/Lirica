@@ -100,6 +100,19 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
+class MemoryUpdate(BaseModel):
+    """PATCH /api/memories/{id} 请求体（记忆编辑，体检 R4）。"""
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def _validate_content(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("记忆内容不能为空")
+        return v
+
+
 # ── 辅助 ────────────────────────────────────────────────────
 
 def _ensure_sid(req: ChatRequest) -> str:
@@ -498,6 +511,24 @@ async def chat_history(
 
 
 # ── 记忆管理端点 ────────────────────────────────────────────
+
+@router.patch("/memories/{memory_id}")
+async def update_memory_route(memory_id: str, body: MemoryUpdate, request: Request):
+    """修改一条记忆的内容（冷冷的记忆主权，体检 R4）。
+
+    此前删除/修改记忆只能「求小汐动手」，而 LLM 写路径纪律曾被实盘
+    证明不可靠（31 条消息零触发）——控制权不该押在模型自觉上。
+    覆盖走 manager.update_content 语义：保留 created_at、刷
+    updated_at、旧内容落 superseded 历史链（v15）+ 单层 prev_content。
+    """
+    mem = getattr(request.app.state, "memory_manager", None)
+    if mem is None:
+        raise HTTPException(503, "记忆系统未就绪")
+    ok = await mem.update_content(memory_id, body.content)
+    if not ok:
+        raise HTTPException(404, "未找到该记忆")
+    return {"status": "ok"}
+
 
 @router.delete("/memories/{memory_id}")
 async def delete_memory(memory_id: str, request: Request):
