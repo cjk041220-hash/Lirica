@@ -100,6 +100,14 @@ async def lifespan(app: FastAPI):
     await init_db(conn)
     log.info("userdata.db 已初始化（WAL 模式，长连接）")
 
+    # 1.5 孤儿 pending 主动消息清扫（体检 T1-6）：上次进程在「存 pending →
+    # 推送 → 改状态」之间崩溃时，消息会永久停在 pending 而对冷冷不可见。
+    # 此刻无在途推送，无条件降级 stored 永远正确（详见函数 docstring）
+    try:
+        await heartbeat.sweep_orphan_proactive_messages()
+    except Exception as e:
+        log.warning("孤儿 pending 清扫失败（不影响启动）：%s", e)
+
     # 2. 记忆系统（注入全局连接）
     memory_mgr = MemoryManager(conn)
     narrative_builder = NarrativeBuilder(memory_mgr)

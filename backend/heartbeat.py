@@ -321,6 +321,31 @@ async def _mark_stored(msg_id: str, label: str = "主动消息") -> None:
         log.warning("%s状态兜底失败 [%s]: %s", label, msg_id[:8], e)
 
 
+async def sweep_orphan_proactive_messages() -> int:
+    """启动清扫：把滞留的 pending 主动消息降级为 stored（进程崩溃兜底）。
+
+    _store_and_push_proactive 先存 pending 再推送；存完与改状态之间
+    进程崩溃（kill -9 / OOM / 断电）会让该行永久停在 pending，而
+    /api/push/unread 只读 delivered/stored → 消息对冷冷彻底不可见。
+    这是 _mark_stored 的姐妹路径：推送失败降级 stored 是一条路，
+    进程崩溃降级 stored 是另一条路，对冷冷同义——消息可见，只是
+    没响那一声。
+
+    在 lifespan 启动时（scheduler.start 与 ASGI 服务之前）无条件全扫：
+    此刻进程内不存在任何在途推送，全扫永远正确。**不加时间窗**——
+    清扫只跑这一次，带窗（如 created_at < now-10min）会永久漏掉最
+    典型的崩溃时机：崩溃前几分钟内刚存的行。
+    """
+    conn = await get_db()
+    cursor = await conn.execute(
+        "UPDATE proactive_messages SET status = 'stored' WHERE status = 'pending'"
+    )
+    await conn.commit()
+    if cursor.rowcount > 0:
+        log.info("启动清扫：%d 条孤儿 pending 主动消息降级 stored", cursor.rowcount)
+    return cursor.rowcount
+
+
 async def _store_and_push_proactive(content: str, *, label: str = "主动消息") -> None:
     """主动消息 / 早安共用的「存 pending → 推送 → 失败降级 stored」流水线。
 
