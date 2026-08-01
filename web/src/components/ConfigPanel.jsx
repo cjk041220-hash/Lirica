@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import { getToken, setToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { isGpsEnabled, setGpsEnabled } from '../api/location'
@@ -23,6 +23,9 @@ const styleLevels = [
 export default function ConfigPanel({ config, push, onClose }) {
   const { settings, updateSetting } = config
   const dialogRef = useFocusTrap()
+  // 「已保存」提示自动消失定时器：卸载时清理（体检杂项，hook 自洽）
+  const savedTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(savedTimerRef.current), [])
 
   // 访问令牌（修复 P1-2）：后端启用 XIAOXI_API_TOKEN 后必填
   const [tokenInput, setTokenInput] = useState(getToken())
@@ -47,7 +50,7 @@ export default function ConfigPanel({ config, push, onClose }) {
     setTokenInput(trimmed)
     setTokenSaved(true)
     setNeedToken(false)
-    setTimeout(() => setTokenSaved(false), 2000)
+    savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
   }
 
   // 位置辅助开关

@@ -16,6 +16,9 @@ from langchain_core.tools import tool
 from utils import cycle_tracker
 from utils import events as events_mgr
 from utils.errors import log_tool_error
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 _DATE_FMT = "%Y-%m-%d"
 
@@ -40,15 +43,13 @@ async def _sync_cycle_events() -> None:
     try:
         await events_mgr.detect_cycle_events()
     except Exception as e:  # 检测器尚未就绪/库未建表等，降级即可
-        import logging
-        logging.getLogger(__name__).warning("周期事件即时重算失败（看门狗兜底）：%s", e)
+        log.warning("周期事件即时重算失败（看门狗兜底）：%s", e)
     cb = _prompt_refresh_callback
     if cb is not None:
         try:
             await cb()
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("周期工具刷新提示词失败：%s", e)
+            log.warning("周期工具刷新提示词失败：%s", e)
 
 
 def _parse_date(date_str: str) -> str | None:

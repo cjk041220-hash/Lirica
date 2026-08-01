@@ -5,9 +5,17 @@ import aiosqlite
 from langchain_core.tools import tool
 
 from utils.errors import log_tool_error
+from utils.logger import get_logger
 # 冷冷在香港（UTC+8）
 from utils.timezone import HKT as _HKT
 from database.core import rows_to_dicts
+
+log = get_logger(__name__)
+
+# 日记内容长度上限（字符）：LLM 抽风写小作文时的截断保底（体检杂项：
+# 原无上限，超长文本直落无界 TEXT）。记忆有 500 字上限，日记体裁
+# 更长，留 2000 的余量。
+_MAX_DIARY_LEN = 2000
 
 # ── 全局连接注入（由 server.py lifespan 调用 set_db_conn 设置） ──
 
@@ -32,6 +40,10 @@ async def write_diary(content: str) -> str:
     if _db_conn is None:
         return "小汐的日记本还没有打开……"
     try:
+        if len(content or "") > _MAX_DIARY_LEN:
+            log.warning("日记内容超长截断：%d → %d 字", len(content), _MAX_DIARY_LEN)
+            content = content[:_MAX_DIARY_LEN] + "……"
+
         today_iso = datetime.datetime.now(_HKT).date().isoformat()
         today_title = datetime.datetime.now(_HKT).strftime("%m月%d日")
 

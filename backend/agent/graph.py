@@ -69,7 +69,9 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
                 if getattr(conversation[i], "type", "") == "human":
                     trim_end = i
                     break
-            if trim_end:
+            # is not None 而非真值判断：边界恰在 index 0 时 trim_end=0
+            # 为 falsy，真值写法会放弃裁剪（体检杂项：脆弱写法修正）
+            if trim_end is not None:
                 to_remove = conversation[:trim_end]
                 conversation = conversation[trim_end:]
 
@@ -121,14 +123,17 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
 
         llm_input = base_system_msgs + conversation
 
-        # token 遥测（B3）：记忆叙事与总输入规模打点，供召回/裁剪调参
+        # token 遥测（B3）：记忆叙事与总输入规模打点，供召回/裁剪调参。
+        # DEBUG 级（体检杂项）：本钩子每个模型调用前跑一次，工具循环
+        # 一轮可达 ~25 次，INFO 会把日志刷爆；调参时临时开 DEBUG 即可。
+        # 每用户轮的 session_tools 遥测（chat.py）保留 INFO，那是每轮一次。
         try:
             from utils.tokens import count_tokens
             total = sum(
                 count_tokens(m.content) for m in llm_input
                 if isinstance(getattr(m, "content", ""), str)
             )
-            log.info(
+            log.debug(
                 "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
                 count_tokens(memory_text), total,
             )

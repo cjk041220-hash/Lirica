@@ -11,7 +11,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, field_validator
 
@@ -522,8 +522,11 @@ async def export_memories(
     if mem is None:
         raise HTTPException(503, "记忆系统未就绪")
     data = await mem.export_json(include_archived=include_archived)
-    return JSONResponse(
-        content=json.loads(data),
+    # export_json 已产出序列化好的 JSON——直接 Response 回字节，
+    # 不再 json.loads 回 dict 交 JSONResponse 双重序列化（体检杂项）
+    return Response(
+        content=data,
+        media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=xiaoxi_memories.json"},
     )
 

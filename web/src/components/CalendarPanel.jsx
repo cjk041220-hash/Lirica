@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconCalendar from '../assets/icons/IconCalendar'
 import { fetchEvents, createEvent, updateEvent, deleteEvent } from '../api/events'
@@ -72,6 +72,13 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   const [toast, setToast] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
   const dialogRef = useFocusTrap()
+  // toast 与删除确认态的自动消失定时器：卸载时清理（体检杂项，hook 自洽）
+  const toastTimerRef = useRef(null)
+  const confirmDelTimerRef = useRef(null)
+  useEffect(() => () => {
+    clearTimeout(toastTimerRef.current)
+    clearTimeout(confirmDelTimerRef.current)
+  }, [])
 
   const cells = useMemo(() => monthGrid(month.y, month.m), [month])
   const byDay = useMemo(() => expandByDay(events, cells), [events, cells])
@@ -103,7 +110,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
   const showToast = (text) => {
     setToast(text)
-    setTimeout(() => setToast(null), 2200)
+    toastTimerRef.current = setTimeout(() => setToast(null), 2200)
   }
   const refresh = () => setReloadKey(k => k + 1)
 
@@ -157,7 +164,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
       })
     } else {
       setConfirmDelId(ev.id)
-      setTimeout(() => setConfirmDelId(cur => (cur === ev.id ? null : cur)), 2000)
+      confirmDelTimerRef.current = setTimeout(() => setConfirmDelId(cur => (cur === ev.id ? null : cur)), 2000)
     }
   }
 
@@ -219,6 +226,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                   <button
                     key={c.iso}
                     onClick={() => setSelectedDay(c.iso)}
+                    disabled={!c.inMonth}
                     aria-label={`${month.m}月${c.day}日${items.length ? `，${items.length}件事` : ''}`}
                     className={`springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
                       ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}

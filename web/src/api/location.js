@@ -15,8 +15,15 @@ export const isGpsEnabled = () => {
 
 export const setGpsEnabled = (on) => {
   try {
-    if (on) localStorage.removeItem(ENABLED_KEY)
-    else localStorage.setItem(ENABLED_KEY, '0')
+    if (on) {
+      localStorage.removeItem(ENABLED_KEY)
+    } else {
+      localStorage.setItem(ENABLED_KEY, '0')
+      // 关闭即清缓存坐标（体检杂项）：开关关了，本地也不该留着经纬度。
+      // 后端侧由请求体 gps_enabled 信号清 location_store（useChat 下发），
+      // 两端同语义：「关 = 立即消失」
+      localStorage.removeItem(CACHE_KEY)
+    }
   } catch {}
 }
 

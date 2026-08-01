@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconHistory from '../assets/icons/IconHistory'
 import IconWhale from '../assets/icons/IconWhale'
@@ -29,6 +29,11 @@ export default function SessionsPanel({ chat, onClose }) {
   // 删除两次点击确认：首点进入「确认？」态，2 秒后自动复位
   const [confirmId, setConfirmId] = useState(null)
   const dialogRef = useFocusTrap()
+  // 确认态自动复位定时器：卸载时清理（体检杂项——React 18 下落到
+  // 已卸载组件的 setState 是静默 no-op，属纪律瑕疵而非 bug，但 hook
+  // 应保持自洽）
+  const confirmTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(confirmTimerRef.current), [])
 
   useEffect(() => {
     let cancelled = false
@@ -68,7 +73,7 @@ export default function SessionsPanel({ chat, onClose }) {
         .catch(err => console.warn('[SessionsPanel] delete failed:', err))
     } else {
       setConfirmId(id)
-      setTimeout(() => setConfirmId(cur => (cur === id ? null : cur)), 2000)
+      confirmTimerRef.current = setTimeout(() => setConfirmId(cur => (cur === id ? null : cur)), 2000)
     }
   }
 

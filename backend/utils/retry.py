@@ -46,6 +46,12 @@ def with_retry(max_attempts: int = 3, base_delay: float = 1.0):
                             func.__name__, attempt, max_attempts, e,
                         )
                         await asyncio.sleep(delay)
-            raise last_exc  # type: ignore[misc]
+            if last_exc is None:
+                # max_attempts<=0 误配（现网调用方均 ≥2，纯防 None 裸抛：
+                # raise None 会是莫名的 TypeError，盖住配置错误本身）
+                raise RuntimeError(
+                    f"with_retry({func.__name__}): 一次都没尝试（max_attempts<=0?）"
+                )
+            raise last_exc
         return wrapper
     return decorator

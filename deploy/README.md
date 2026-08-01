@@ -29,11 +29,12 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 ## 4. 验证
 - `curl -I https://你的域名` → 见有效证书 + `Strict-Transport-Security`。
 - 浏览器打开能正常聊天；`/api/health` 返回 ok。
-- **SW v4 过渡人工复核**：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
+- **SW 版本过渡人工复核**（现 v5，CACHE_NAME 见 web/public/sw.js）：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
 
 ## 5. 数据与备份
 - 数据在 named volume `xiaoxi-data`（即 `userdata.db` + `checkpoints.db`）。可 `docker compose down` 不丢数据；要导出：`docker cp xiaoxi:/app/backend/data ./backup`。
-- 应用自身每 2h 用 SQLite Online Backup API 备份到 `data/backups/`（保留 5 份）；如需更长窗口见体检报告 REL-03。
+- 应用自身每 2h 用 SQLite Online Backup API 备份 **userdata.db** 到 `data/backups/`（保留 5 份，淘汰时同删 -wal/-shm 兄弟文件；开 BACKUP_SCRUB_SENSITIVE 时脱敏 + VACUUM 清页）；清空记忆的 JSON 备份也保留 5 份。
+- **checkpoints.db（LangGraph 对话活上下文）不在备份范围**——已知缺口：用备份恢复后会话上下文从头开始，记忆/档案/日历本身不受影响。如需更长窗口见体检报告 REL-03。
 - **迁移 v9 紧急回退**（仅「回代码不回库」时需要：把带墓碑机制的新代码退回旧版，而库已升到 v9）：
   ```bash
   sqlite3 userdata.db "DROP INDEX idx_events_dedupe; \
