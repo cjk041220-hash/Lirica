@@ -60,6 +60,10 @@ def _parse_time(t: str | None) -> datetime.datetime:
 # 卡死写入）。截断带 log，便于发现 LLM 长文倾向（2026-08-01 评审 D4）。
 _MAX_CONTENT_LEN = 500
 
+# 清空前 JSON 备份保留份数（体检 D-1：原来无轮换，与 userdata 备份的
+# 5 份策略对齐）。
+_MAX_JSON_BACKUPS = 5
+
 
 def _cap_content(content: str, context: str) -> str:
     """截断超长记忆内容（500 字），超限部分替换为省略号并记日志。"""
@@ -315,6 +319,17 @@ class MemoryManager:
         # 同步文件写入卸载到线程池，避免阻塞事件循环
         await asyncio.to_thread(backup_path.write_text, data, encoding="utf-8")
         restrict_backup_permissions(backup_path)
+
+        # 轮换（体检 D-1）：memories_backup_*.json 与 userdata 备份同目录，
+        # 但不在 database.core 的 db 轮换 glob 内——清空是手动低频操作，
+        # 不轮换也会缓慢无限累积。只保留最近 _MAX_JSON_BACKUPS 份。
+        json_backups = sorted(
+            backup_dir.glob("memories_backup_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in json_backups[_MAX_JSON_BACKUPS:]:
+            old.unlink(missing_ok=True)
 
         log.info("记忆备份已保存：%s", backup_path)
         return backup_path

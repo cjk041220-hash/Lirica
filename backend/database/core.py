@@ -364,6 +364,11 @@ async def backup_database(
     # chat_messages）——对话档案是最大体量的亲密数据，适合会把
     # 备份同步到网盘/他人的场景。周期事件虽只存预测日，仍是
     # 生理期的衍生物，与 cycle_records 同进同出。
+    # DELETE 之后必须 VACUUM（体检 T1-4）：SQLite 的 DELETE 只把页
+    # 标记为可复用，数据页原文仍留在备份文件里，十六进制编辑器可
+    # 直接捞回——对一个以隐私为卖点的脱敏开关，那是语义级漏洞。
+    # VACUUM 重写整库文件彻底清除空闲页（需要约一倍备份大小的临时
+    # 磁盘空间，个人库量级无碍；同文件 prune_checkpoints 已有先例）。
     try:
         from config.settings import get_settings
 
@@ -374,11 +379,15 @@ async def backup_database(
                 await scrub_conn.execute("DELETE FROM chat_messages")
                 await scrub_conn.execute("DELETE FROM chat_sessions")
                 await scrub_conn.commit()
-            log.info("备份已脱敏：cycle_records + 周期推算事件 + 对话档案已剔除")
+                await scrub_conn.execute("VACUUM")
+            log.info("备份已脱敏：cycle_records + 周期推算事件 + 对话档案已剔除（含 VACUUM 清页）")
     except Exception as e:
         log.warning("备份脱敏失败（备份本身仍保留）：%s", e)
 
-    # 只保留最近 _MAX_BACKUPS 份
+    # 只保留最近 _MAX_BACKUPS 份。淘汰时同删 -wal/-shm 兄弟文件
+    # （体检 D-1）：Online Backup 拷出的文件继承 WAL 模式位，脱敏/
+    # 读取开连接会伴生 sidecar，非干净关闭即残留——轮换 glob 只匹配
+    # *.db 碰不到它们，孤儿会无限累积（生产备份目录实测 14 个）。
     backups = sorted(
         backup_dir.glob("userdata_backup_*.db"),
         key=lambda p: p.stat().st_mtime,
@@ -386,6 +395,11 @@ async def backup_database(
     )
     for old_backup in backups[_MAX_BACKUPS:]:
         old_backup.unlink()
+        for sibling in (
+            old_backup.parent / (old_backup.name + "-wal"),
+            old_backup.parent / (old_backup.name + "-shm"),
+        ):
+            sibling.unlink(missing_ok=True)
 
     log.info("数据库备份已保存：%s", backup_path)
     return backup_path

@@ -100,3 +100,76 @@ async def test_no_scrub_by_default_keeps_everything(tmp_path):
     assert _query(backup_path, "SELECT COUNT(*) FROM cycle_records")[0][0] == 1
     assert _query(backup_path, "SELECT COUNT(*) FROM events WHERE source = 'cycle'")[0][0] == 1
     assert _query(backup_path, "SELECT COUNT(*) FROM chat_messages")[0][0] == 1
+
+
+# ── VACUUM 字节级清页（体检 T1-4：DELETE 不 VACUUM = 脱敏名不副实）──
+
+_MARKER = "SECRET_MARKER_XYZZY_123"  # 纯 ASCII，避免对 UTF-8 分页边界打赌
+
+
+async def _make_db_with_marker(path):
+    """造含唯一标记字符串的高敏数据源库（cycle 备注 + 对话档案双处植入）。"""
+    from database.migrations import CHAT_ARCHIVE_SCHEMA_SQL, EVENTS_SCHEMA_SQL
+
+    conn = await aiosqlite.connect(str(path))
+    await conn.executescript("""
+        CREATE TABLE cycle_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_date TEXT NOT NULL UNIQUE, note TEXT
+        );
+    """)
+    await conn.executescript(EVENTS_SCHEMA_SQL)
+    await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
+    await conn.execute(
+        "INSERT INTO cycle_records (start_date, note) VALUES ('2026-07-18', ?)",
+        (_MARKER,),
+    )
+    await conn.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at) "
+        "VALUES ('s1', ?, '2026-07-31 10:00', '2026-07-31 10:00')",
+        (_MARKER,),
+    )
+    await conn.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at) "
+        "VALUES ('s1', 'user', ?, '2026-07-31 10:00')",
+        (_MARKER,),
+    )
+    await conn.commit()
+    await conn.close()
+
+
+async def test_scrub_vacuum_purges_marker_bytes_from_file(tmp_path):
+    """T1-4 核心回归：脱敏后 VACUUM 重写文件，marker 字节不可捞回。
+
+    修复前 DELETE 只标记页可复用，数据页原文仍在文件里——十六进制
+    编辑器直接捞回「已脱敏」的生理期数据。
+    """
+    src = tmp_path / "src.db"
+    await _make_db_with_marker(src)
+    fake_settings = SimpleNamespace(backup_scrub_sensitive=True)
+
+    with patch("config.settings.get_settings", return_value=fake_settings):
+        backup_path = await backup_database(
+            source_path=src, backup_dir=tmp_path / "backups"
+        )
+
+    assert backup_path is not None and backup_path.exists()
+    # SQL 层确实删了
+    assert _query(backup_path, "SELECT COUNT(*) FROM cycle_records")[0][0] == 0
+    # 字节层也清干净了（VACUUM 的功劳）
+    assert _MARKER.encode() not in backup_path.read_bytes()
+
+
+async def test_no_scrub_marker_bytes_remain_in_file(tmp_path):
+    """对照钉：不脱敏时 marker 字节存在于文件中——证明上一条测的是
+    VACUUM 在起作用，而不是备份 API 碰巧没拷进去。"""
+    src = tmp_path / "src.db"
+    await _make_db_with_marker(src)
+    fake_settings = SimpleNamespace(backup_scrub_sensitive=False)
+
+    with patch("config.settings.get_settings", return_value=fake_settings):
+        backup_path = await backup_database(
+            source_path=src, backup_dir=tmp_path / "backups"
+        )
+
+    assert _MARKER.encode() in backup_path.read_bytes()
