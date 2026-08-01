@@ -44,7 +44,11 @@ async def test_build_system_prompt_logs_telemetry(caplog):
 
 
 async def test_pre_model_hook_logs_telemetry(caplog):
-    """graph 埋点：pre_model_hook 打出 narrative 与 total_input 计数。"""
+    """graph 埋点：pre_model_hook 打出 narrative 与 total_input 计数。
+
+    DEBUG 级（体检杂项：钩子每个模型调用前跑一次，工具循环一轮可达
+    ~25 跳，INFO 刷屏；调参时临时开 DEBUG。每轮遥测仍在 chat.py INFO）。
+    """
     from agent.graph import make_pre_model_hook
 
     class StubBuilder:
@@ -52,7 +56,7 @@ async def test_pre_model_hook_logs_telemetry(caplog):
             return "以下是小汐记住的关于冷冷的事情：\n\n### 喜好\n- 喜欢火锅\n"
 
     hook = make_pre_model_hook(StubBuilder())
-    with caplog.at_level(logging.INFO, logger="agent.graph"):
+    with caplog.at_level(logging.DEBUG, logger="agent.graph"):
         await hook({"messages": [HumanMessage(content="冷冷想吃火锅")]})
 
     joined = "\n".join(r.message for r in caplog.records)
