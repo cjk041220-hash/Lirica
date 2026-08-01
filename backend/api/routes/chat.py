@@ -155,6 +155,54 @@ def _build_config(session_id: str) -> dict:
     }
 
 
+# ── 断连看门狗（体检 R1'/R2'）────────────────────────────────
+# 修复前：非流式 /chat 客户端断开后 ainvoke 照跑完整个工具循环，白烧
+# token；SSE 的 is_disconnected 检测是事件驱动的，卡在单次 LLM 调用
+# 内（重试链最坏数分钟无事件）发现不了断连。
+_DISCONNECT_POLL_SECONDS = 1.0
+# SSE 空闲超时须大于最坏单跳静默时长：providers/deepseek.py 的
+# timeout=120 × (1 + max_retries=2) = 一次健康但慢的调用最坏 ~240s
+# 不产出任何流事件。取值低于它会在重试链中误杀正常对话，故 300s
+# （5 分钟）+ 注释留推导。代价是硬断连最坏 5 分钟后才止损——优于
+# 修复前的「永远跑完」。
+_SSE_IDLE_TIMEOUT = 300.0
+
+
+async def _await_with_disconnect_watch(coro, request: Request, sid: str):
+    """带断连看门狗地执行 awaitable（非流式 /chat 用）。
+
+    每秒检查一次 request.is_disconnected()；断开则取消内层任务并
+    返回 None（调用方跳过归档与遥测——用户什么都没看到，无文本可
+    归；用户消息已在调用前归档，顺序无损）。任务正常完成返回其
+    结果；任务抛异常原样上抛（走既有 500 兜底）。
+
+    取消的是内层 task、不向调用方传播 CancelledError——调用方的
+    `async with _session_lock` 正常走完 __aexit__ 释放锁，无死锁面。
+    """
+    task = asyncio.create_task(coro)
+    while not task.done():
+        if await request.is_disconnected():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.warning("断开取消后任务收尾异常（客户端已离开，sid=%s）",
+                            sid, exc_info=True)
+            log.info("客户端已断开，取消非流式对话任务 (sid=%s)", sid)
+            return None
+        try:
+            # shield 使 wait_for 超时时不取消真实任务，只回去做下轮
+            # 断连检查；任务提前完成则立即唤醒
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=_DISCONNECT_POLL_SECONDS
+            )
+        except asyncio.TimeoutError:
+            pass  # 仍在运行，下一轮再查断连
+    return task.result()
+
+
 # ── 对话端点 ────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
@@ -181,10 +229,13 @@ async def chat(req: ChatRequest, request: Request):
             # 只拼进 input_data，档案与前端看到的一致）。失败只记日志
             await chat_archive.record_user_message(sid, req.message)
 
-            result = await agent.ainvoke(
-                input_data,
-                _build_config(sid),
+            result = await _await_with_disconnect_watch(
+                agent.ainvoke(input_data, _build_config(sid)),
+                request, sid,
             )
+            if result is None:
+                # 客户端已离开：跳过归档与遥测，锁正常释放
+                return ChatResponse(reply="", session_id=sid)
 
             messages = result.get("messages", [])
             reply = ""
@@ -259,11 +310,32 @@ async def chat_stream(req: ChatRequest, request: Request):
                 # 客户端在流开始迭代前就断开则不归档——对话没有发生
                 await chat_archive.record_user_message(sid, req.message)
                 try:
-                    async for event in agent.astream_events(
+                    # 手动驱动迭代器以挂空闲看门狗（体检 R2'）：
+                    # async for 的 is_disconnected 检查只在有事件产出时
+                    # 运行，卡在单次 LLM 调用内（重试链最坏 ~240s 静默）
+                    # 发现不了断连。wait_for(__anext__) 每事件重置空闲
+                    # 计时，超时按断连处理 → break → finally 尽力归档
+                    # 已累积 chunks（_SSE_IDLE_TIMEOUT 取值推导见常量注释）
+                    event_iter = agent.astream_events(
                         {"messages": [HumanMessage(content=user_content)]},
                         _build_config(sid),
                         version="v2",
-                    ):
+                    ).__aiter__()
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(
+                                event_iter.__anext__(),
+                                timeout=_SSE_IDLE_TIMEOUT,
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            log.warning(
+                                "流式生成 %ds 无事件，按断连语义停止 (sid=%s)",
+                                int(_SSE_IDLE_TIMEOUT), sid,
+                            )
+                            break
+
                         # 检测客户端是否已断开连接，避免白白消耗 API Token
                         if await request.is_disconnected():
                             log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
