@@ -487,6 +487,37 @@ async def test_recall_surfaces_old_frequently_used_memory(memory_mgr, tmp_db):
     )
 
 
+async def test_recall_category_surfaces_old_frequent_memory(memory_mgr, tmp_db):
+    """D2 回归：类别路径不再 created_at 预筛——类别内旧的高频记忆
+    也能进候选池。修复前 ORDER BY created_at DESC LIMIT limit*2 把
+    候选池限死在同类别最新 2*limit 条，旧核心偏好（创建早、天天被
+    想起）被同类别新流水永久挤出，与无类别路径的病同源。
+    """
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("核心偏好", "冷冷喜欢喝椰子水")
+    ten_days_ago = (
+        datetime.datetime.now(HKT) - datetime.timedelta(days=10)
+    ).strftime(_TIME_FMT)
+    now = datetime.datetime.now(HKT).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_used_at = ?, access_count = 800 "
+        "WHERE content = ?",
+        (ten_days_ago, now, "冷冷喜欢喝椰子水"),
+    )
+    await tmp_db.commit()
+
+    # 同类别 8 条更新的流水——修复前候选池（limit*2=6）全是它们
+    for i in range(8):
+        await memory_mgr.add("核心偏好", f"新偏好 {i}")
+
+    matched = await memory_mgr.recall(category="核心偏好", limit=3, passive=True)
+    assert any(m["content"] == "冷冷喜欢喝椰子水" for m in matched), (
+        "旧的高频记忆未能进入类别召回 top-3——类别路径又被 created_at 预筛了"
+    )
+
+
 # ── old_memories（小本本：久远记忆采样，批次 D）────────────────
 
 

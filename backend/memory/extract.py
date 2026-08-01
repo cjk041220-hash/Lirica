@@ -141,11 +141,15 @@ async def _set_fail_count(conn, n: int) -> None:
     await conn.commit()
 
 
-async def _fetch_pending(conn, watermark: int) -> tuple[list[str], int, str | None]:
-    """取水位线之后的消息（最近一批），返回 (渲染行文本, 批内最大 id, 末条会话 id)。
+async def _fetch_pending(
+    conn, watermark: int
+) -> tuple[list[str], int, str | None, str]:
+    """取水位线之后的消息（最近一批）。
 
+    返回 (渲染行文本, 批内最大 id, 末条会话 id, 冷冷发言拼接)。
+    最后一项供冲突上下文做话题候选召回（体检 D1，见 extract_new_memories）。
     超长预算从旧消息端丢弃：提取价值随对话变旧衰减，批次尾部（最新）
-    永远保留；无新消息返回 ([], watermark, None)。
+    永远保留；无新消息返回 ([], watermark, None, "")。
     """
     cursor = await conn.execute(
         """SELECT id, session_id, role, content FROM chat_messages
@@ -154,16 +158,22 @@ async def _fetch_pending(conn, watermark: int) -> tuple[list[str], int, str | No
     )
     rows = rows_to_dicts(cursor, await cursor.fetchall())
     if not rows:
-        return [], watermark, None
+        return [], watermark, None, ""
 
     batch = rows[-_MAX_EXTRACT_MESSAGES:]
     max_id = batch[-1]["id"]
     last_session_id = batch[-1].get("session_id")
 
     lines = []
+    user_parts = []
     for r in batch:
-        label = "冷冷" if r["role"] == "user" else "小汐"
-        lines.append(f"{label}：{(r['content'] or '').strip()}")
+        content = (r["content"] or "").strip()
+        if r["role"] == "user":
+            lines.append(f"冷冷：{content}")
+            if content:
+                user_parts.append(content)
+        else:
+            lines.append(f"小汐：{content}")
 
     total = sum(len(line) for line in lines)
     while total > _MAX_EXTRACT_CHARS and len(lines) > 1:
@@ -171,7 +181,7 @@ async def _fetch_pending(conn, watermark: int) -> tuple[list[str], int, str | No
         total -= len(dropped)
     if total > _MAX_EXTRACT_CHARS:
         lines[0] = lines[0][-_MAX_EXTRACT_CHARS:]  # 单条超长保留最新段
-    return lines, max_id, last_session_id
+    return lines, max_id, last_session_id, " ".join(user_parts)
 
 
 def _build_prompt(messages: list[str], existing: list[dict]) -> str:
@@ -301,14 +311,19 @@ async def extract_new_memories(conn=None) -> dict:
     mgr = MemoryManager(conn)
 
     watermark = await get_watermark(conn)
-    messages, max_id, last_session_id = await _fetch_pending(conn, watermark)
+    messages, max_id, last_session_id, user_text = await _fetch_pending(conn, watermark)
     if not messages:
         return {"processed": 0, "added": 0, "updated": 0, "skipped": 0,
                 "llm_error": False, "dead_letter": False}
 
-    # 冲突上下文：现有记忆 top-10（被动读取，不刷热度——叙事注入的
-    # passive 纪律同样适用于提取侧）
-    existing = await mgr.recent(limit=10)
+    # 冲突上下文：按批次话题召回候选（体检 D1）。修复前只喂最近 10 条
+    # （mgr.recent）——与更旧记忆的矛盾（如三个月前的「爱吃火锅」遇上
+    # 今天的「不爱吃了」）LLM 根本看不见，只能发 add → 矛盾记忆共存。
+    # manager.recall 内置 bigram 二段话题排序（共享二字词整体优先 +
+    # 层内四因子评分）与全表候选池，是现成的话题候选召回器；passive
+    # 保持提取侧不刷排序热度的纪律（按日计 hit_count 作衰减燃料，
+    # 提取上下文同样是一次「浮现」，该计就计）。
+    existing = await mgr.recall(limit=10, passive=True, query=user_text)
     prompt = _build_prompt(messages, existing)
 
     try:

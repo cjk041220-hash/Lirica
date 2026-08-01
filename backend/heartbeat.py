@@ -731,9 +731,13 @@ async def daily_diary():
     memories_lines = []
     try:
         conn = await get_db()
+        # 读面谓词与全项目约定对齐 IN ('active','core')（体检 D6：
+        # 此处是唯一违约点。当天记忆其实不可能是 core——晋升要求 ≥30
+        # 天龄——当前无害；但谓词漂移遇上阈值调低/手动晋升就静默漏数，
+        # 一致性债当即清）
         cursor = await conn.execute(
             """SELECT category, content FROM memories
-               WHERE status = 'active' AND created_at LIKE ?
+               WHERE status IN ('active', 'core') AND created_at LIKE ?
                ORDER BY created_at DESC LIMIT 5""",
             (f"{today_str}%",),
         )

@@ -23,13 +23,19 @@ _TIME_FMT = "%Y-%m-%d %H:%M"
 
 
 class _FakeLLM:
-    """返回预设文本或抛出预设异常的假 LLM（monkeypatch _create_llm 注入）。"""
+    """返回预设文本或抛出预设异常的假 LLM（monkeypatch _create_llm 注入）。
+
+    captured 保存最近一次 ainvoke 收到的 messages，供测试断言送入
+    LLM 的提示词内容（如冲突上下文是否含旧话题记忆）。
+    """
 
     def __init__(self, text=None, exc=None):
         self._text = text
         self._exc = exc
+        self.captured = None
 
     async def ainvoke(self, messages):
+        self.captured = messages
         if self._exc:
             raise self._exc
         return type("R", (), {"content": self._text})()
@@ -376,6 +382,38 @@ async def test_extract_llm_exception_not_counted_as_parse_failure(tmp_db, fake_l
     assert result["dead_letter"] is False
     assert await _get_fail_count(tmp_db) == 0
     assert await extract.get_watermark(tmp_db) == 0  # 依然保持待重试
+
+
+# ── 冲突上下文话题召回（D1）──────────────────────────────────
+#
+# 修复前冲突上下文只有 mgr.recent(10)——与更旧记忆的矛盾 LLM 看不见，
+# 只能发 add → 矛盾记忆共存（「爱吃火锅」三个月后遇上「不爱吃了」）。
+# 修复后按批次话题 recall(query=) 全库召回候选。
+
+
+async def test_extract_conflict_context_includes_old_topic_memory(tmp_db, fake_llm):
+    """旧话题记忆被 12 条更新记忆挤出 recent-10，仍经话题召回进入
+    提取 LLM 的冲突上下文——矛盾才有机会被判成 update 而非 add。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("冷冷喜欢的", "冷冷爱吃火锅")
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=30)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ? WHERE content = '冷冷爱吃火锅'", (old,)
+    )
+    for i in range(12):  # 12 条更新的无关记忆挤掉 recent-10 的全部席位
+        await mgr.add("日常", f"无关的闲谈 {i}")
+    await tmp_db.commit()
+
+    # 措辞避开与新记忆的共享 bigram（如「最近」），让话题召回而非
+    # 时近排序决定候选——这正是本测试要钉的机制
+    await _seed_messages(tmp_db, ["火锅不想吃了"])
+    fake = fake_llm(text="[]")
+
+    await extract.extract_new_memories(tmp_db)
+
+    assert fake.captured is not None
+    prompt_text = fake.captured[1].content  # HumanMessage = 提取提示词
+    assert "冷冷爱吃火锅" in prompt_text, "旧话题记忆未进入冲突上下文"
 
 
 # ── 批次预算 ──────────────────────────────────────────────────

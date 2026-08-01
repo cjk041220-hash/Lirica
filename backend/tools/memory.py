@@ -125,19 +125,23 @@ async def update_memory(memory_id: str, new_content: str) -> str:
 
 
 @tool
-async def recall(category: str = "") -> str:
+async def recall(category: str = "", query: str = "") -> str:
     """让小汐回忆之前记住的事情。冷冷问"我之前……"或聊天中提到过去的事时主动调用。
 
     按相关性排序：越近、越常被回忆的记忆排在前面。
+    **query 要填**（体检 D3）：把冷冷问的原话填进去——与它共享二字词
+    的记忆会整体优先浮现。不填 query 就只剩时间/热度排序，旧而冷门的
+    事实（「你还记得我之前说的那件事吗」）大概率召不回。
 
     Args:
         category: 按类别筛选记忆，不传则返回全部
+        query: 冷冷的原话或话题关键词，如「之前说的考试」
     """
     try:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
 
-        mems = await _memory_manager.recall(category)
+        mems = await _memory_manager.recall(category, query=query)
         if category:
             if not mems:
                 return f"小汐在映海里翻了翻，没有找到关于「{category}」的记忆……"
@@ -199,6 +203,14 @@ async def delete_memory(memory_id: str) -> str:
         return "小汐放记忆的时候手滑了……过一会儿再试试好不好？"
 
 
+# 导出工具的展示上限（体检 D4）：修复前 all() 全量 + 每条全文灌回
+# LLM 上下文——记忆量到几百条即是上下文/账单炸弹（单条 ≤500 字 ×
+# 无上限条数）。封顶 50 条 + 每条压到 200 字；全量下载走 HTTP 端点
+# /api/memories/export（返回 JSON 文件，不进 LLM 上下文）。
+_EXPORT_TOOL_LIMIT = 50
+_EXPORT_ITEM_LEN = 200
+
+
 @tool
 async def export_memories() -> str:
     """导出冷冷所有记忆的摘要。冷冷想看自己全部记忆时调用。"""
@@ -209,11 +221,21 @@ async def export_memories() -> str:
         if not mems:
             return "映海里还空空的，没有记忆可以导出呢。"
 
-        lines = [f"🐋 小汐一共记住了 {len(mems)} 件事：\n"]
-        for m in mems:
+        total = len(mems)
+        shown = mems[:_EXPORT_TOOL_LIMIT]
+        lines = [f"🐋 小汐一共记住了 {total} 件事：\n"]
+        for m in shown:
+            content = " ".join((m.get("content", "") or "").split())
+            if len(content) > _EXPORT_ITEM_LEN:
+                content = content[:_EXPORT_ITEM_LEN] + "……"
             lines.append(
                 f"📌 [{m.get('id', '?')}] **{m.get('category', '')}** "
-                f"({m.get('created_at', '')})\n   {m.get('content', '')}"
+                f"({m.get('created_at', '')})\n   {content}"
+            )
+        if total > _EXPORT_TOOL_LIMIT:
+            lines.append(
+                f"\n💡 还有 {total - _EXPORT_TOOL_LIMIT} 条没列出来——"
+                "冷冷想看全部的话，在控制台可以下载完整导出哦~"
             )
         lines.append("\n💡 冷冷可以通过控制台删除不想要的记忆哦~")
         return "\n".join(lines)

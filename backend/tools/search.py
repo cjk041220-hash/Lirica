@@ -58,8 +58,17 @@ async def close_tavily_client() -> None:
 
 @with_retry(max_attempts=2, base_delay=1.0)
 async def _tavily_search(client, query: str) -> dict:
-    """带重试的 Tavily 搜索调用。"""
-    return await client.search(query, search_depth="basic", max_results=5)
+    """带重试的 Tavily 搜索调用。
+
+    显式 timeout=10（体检 T1'）：tavily-python 原生支持每请求级超时
+    （默认 60s——×2 次重试最坏 ~121s+ 占着工具循环）。搜索是辅助信息，
+    10s 不出来就该降级，不该让半死端点拖住整轮对话。超时抛 builtin
+    TimeoutError（3.11+ 即 asyncio.TimeoutError），已在 with_retry 的
+    可重试白名单里，语义不变。
+    """
+    return await client.search(
+        query, search_depth="basic", max_results=5, timeout=10
+    )
 
 
 @tool

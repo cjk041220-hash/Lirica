@@ -379,11 +379,14 @@ class MemoryManager:
         不进上面的排序键，因此不破坏被动纪律。详见 _count_hits。
         """
         if category:
+            # 类别路径同样不能 created_at DESC 预筛（体检 D2：无类别路径
+            # 早已修复的同款缺陷在类别路径原样保留——类别内「旧但高频/
+            # 高相关」的记忆永远进不了候选池，评分只能在最新 N 条里选）。
+            # LIKE 过滤后全量评分，单用户量级（百级～千级）可承受。
             cursor = await self._db.execute(
                 """SELECT * FROM memories
-                   WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
-                   ORDER BY created_at DESC LIMIT ?""",
-                (f"%{_escape_like(category)}%", limit * 2),  # 多取一些，评分后再截断
+                   WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')""",
+                (f"%{_escape_like(category)}%",),
             )
         else:
             # 相关性召回不能用 created_at DESC 预筛：候选池一旦被「最新 N 条」

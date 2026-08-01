@@ -130,6 +130,33 @@ async def test_recall_empty_returns_friendly_text(injected_mgr):
     assert "还没有记住" in result
 
 
+async def test_recall_tool_query_surfaces_old_topic(injected_mgr):
+    """D3 回归：query 透传后，旧而冷门的话题记忆召得回。
+
+    修复前工具不传 query，只剩时近/热度排序——「你还记得我之前说的
+    那件事吗」类主回忆场景召不回旧事实。构造：旧话题记忆被 12 条
+    新流水挤出时近 top-10，传话题 query 后凭 bigram 命中浮上来。
+    """
+    from tools.memory import recall
+
+    await injected_mgr.add("冷冷喜欢的", "冷冷喜欢喝椰子水")
+    await injected_mgr._db.execute(
+        "UPDATE memories SET created_at = ? WHERE content = '冷冷喜欢喝椰子水'",
+        ("2026-01-01 10:00",),
+    )
+    await injected_mgr._db.commit()
+    for i in range(12):
+        await injected_mgr.add("测试类别", f"记忆条目{i}号")
+
+    # 不传 query：旧记忆沉在时近排序底部，进不了 top-10
+    no_query = await recall.ainvoke({"category": ""})
+    assert "椰子水" not in no_query
+
+    # 传冷冷原话：话题命中整体优先，旧记忆浮现
+    with_query = await recall.ainvoke({"query": "我平时喜欢喝什么"})
+    assert "椰子水" in with_query
+
+
 # ── 工具层 update / delete / list / export（D9：零测试缺口补齐）──
 
 
@@ -195,6 +222,21 @@ async def test_export_memories_tool(injected_mgr):
     result = await export_memories.ainvoke({})
     assert "去过台北" in result
     assert "1 件事" in result
+
+
+async def test_export_memories_tool_capped_at_fifty(injected_mgr):
+    """D4 回归：导出封顶 50 条 + 尾部引导（修复前 all() 全量灌回
+    LLM 上下文，几百条记忆即上下文/账单炸弹）。"""
+    from tools.memory import export_memories
+
+    for i in range(55):
+        await injected_mgr.add("日常", f"流水账 {i}")
+
+    result = await export_memories.ainvoke({})
+
+    assert result.count("📌") == 50          # 封顶
+    assert "一共记住了 55 件事" in result     # 总量如实
+    assert "还有 5 条没列出来" in result      # 引导全量下载
 
 
 async def test_tools_manager_not_injected_graceful(injected_mgr):
