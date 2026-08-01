@@ -1,5 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+// 展示体「站酷快乐体」自托管（体检 T1-3 第二阶段，回收 B7 的 CSP 外链
+// 白名单）：fontsource 分片包（OFL 协议），93 个 unicode-range 子集，
+// 浏览器只下载页面用到的字形。此前从 Google Fonts 外链——隐私陪伴
+// 应用每次加载都把 IP 送给 Google，且外链字体进不了同源缓存，破坏
+// PWA 离线叙事。
+import '@fontsource/zcool-kuaile'
 import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'

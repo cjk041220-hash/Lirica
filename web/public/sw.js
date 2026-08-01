@@ -1,4 +1,7 @@
-const CACHE_NAME = 'xiaoxi-room-v5'
+// v6（体检 T1-3 第二阶段）：展示体自托管取代 Google Fonts 外链——
+// bump 版本让旧缓存在 activate 时整体退役，避免过渡期继续供旧
+// index.html 引用的外链字体
+const CACHE_NAME = 'xiaoxi-room-v6'
 
 self.addEventListener('install', () => {
   self.skipWaiting()
