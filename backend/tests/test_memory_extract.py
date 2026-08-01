@@ -209,7 +209,89 @@ async def test_extract_unparseable_output_keeps_watermark(tmp_db, fake_llm):
     result = await extract.extract_new_memories(tmp_db)
 
     assert result["llm_error"] is True
+    assert result["dead_letter"] is False
     assert await extract.get_watermark(tmp_db) == 0
+
+
+# ── 卡死死信（v13：连续解析失败 ≥3 次放弃该批，防永久空转）──
+
+
+async def _get_fail_count(tmp_db):
+    cursor = await tmp_db.execute(
+        "SELECT fail_count FROM memory_extract_state WHERE id = 1"
+    )
+    row = await cursor.fetchone()
+    return (row[0] or 0) if row else 0
+
+
+async def test_extract_parse_failures_accumulate(tmp_db, fake_llm):
+    """阈值内：失败累计、水位线保持（给瞬态故障留重试窗口）。"""
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(text="抱歉，我不会输出 JSON……")
+
+    r1 = await extract.extract_new_memories(tmp_db)
+    r2 = await extract.extract_new_memories(tmp_db)
+
+    assert r1["dead_letter"] is False
+    assert r2["dead_letter"] is False
+    assert r2["llm_error"] is True
+    assert await extract.get_watermark(tmp_db) == 0
+    assert await _get_fail_count(tmp_db) == 2
+
+
+async def test_extract_parse_failure_dead_letter_after_three(tmp_db, fake_llm):
+    """第 3 次连续解析失败 → 死信：放弃该批、推进水位线、归零计数。
+
+    修复前（v13）：输出确定性损坏的批次会让水位线永不推进，提取通道
+    每 2h 空转重试同一批，永久卡死。
+    """
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(text="不是 JSON")
+
+    await extract.extract_new_memories(tmp_db)
+    await extract.extract_new_memories(tmp_db)
+    r3 = await extract.extract_new_memories(tmp_db)
+
+    assert r3["dead_letter"] is True
+    assert await extract.get_watermark(tmp_db) == 1   # 该批被弃，通道恢复
+    assert await _get_fail_count(tmp_db) == 0
+
+    # 死信后的新消息照常处理——通道没有整体死掉
+    await _seed_messages(tmp_db, ["新的事实"])
+    fake_llm(text='[{"action": "add", "category": "其他", "content": "新的事实"}]')
+    r4 = await extract.extract_new_memories(tmp_db)
+    assert r4["added"] == 1
+    assert r4["dead_letter"] is False
+
+
+async def test_extract_success_resets_fail_count(tmp_db, fake_llm):
+    """失败后成功消费一批：连续失败计数归零（死信只针对同一批持续损坏）。"""
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(text="不是 JSON")
+    await extract.extract_new_memories(tmp_db)
+    await extract.extract_new_memories(tmp_db)
+    assert await _get_fail_count(tmp_db) == 2
+
+    fake_llm(text="[]")  # 合法空批也是成功消费
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["llm_error"] is False
+    assert await _get_fail_count(tmp_db) == 0
+    assert await extract.get_watermark(tmp_db) == 1
+
+
+async def test_extract_llm_exception_not_counted_as_parse_failure(tmp_db, fake_llm):
+    """LLM 调用异常是瞬态故障：不计入解析失败（永不触发死信），
+    长期失灵由健康检查「记忆停滞」告警兜底。"""
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(exc=RuntimeError("网络断了"))
+
+    for _ in range(5):  # 超过死信阈值的次数也不死信
+        result = await extract.extract_new_memories(tmp_db)
+
+    assert result["dead_letter"] is False
+    assert await _get_fail_count(tmp_db) == 0
+    assert await extract.get_watermark(tmp_db) == 0  # 依然保持待重试
 
 
 # ── 批次预算 ──────────────────────────────────────────────────

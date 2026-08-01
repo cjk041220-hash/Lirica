@@ -46,6 +46,16 @@ _MAX_UPDATE_PER_RUN = 3
 # 不节流会 12 条/天的刷屏告警）
 _HEALTH_WARN_THROTTLE_HOURS = 24
 
+# 提取解析失败死信阈值（v13）：同一批连续解析失败达到此数 → 放弃该批
+# 并推进水位线。修复前「输出不可解析」永远不推进水位线：输出确定性
+# 损坏的批次（满载 8 动作 JSON 撞 max_tokens 截断就是典型）会让提取
+# 通道在同一批上永久空转，且健康检查只能报「停滞」、无法自愈。连续
+# 3 次（心跳 2h 一次 ≈ 6h）仍解析不了，判定为内容系统性损坏，死信丢弃
+# （与预算超限从旧端丢弃同语义：被弃消息不再回看）。
+# LLM 调用异常（网络/配额）不计次——那是瞬态故障，重试即自愈；长期
+# 失灵由健康检查「记忆停滞」告警兜底。
+_MAX_PARSE_FAILURES = 3
+
 # 提取系统提示词：只提取确定事实、不抄档案、类别复用、输出纯 JSON。
 # 与 remember 工具（tools/memory.py）及 soul.py 档案边界纪律保持一致。
 _EXTRACT_SYSTEM = """你是小汐的记忆管家。从对话中提炼「值得长期记住的关于冷冷的新事实或变化」，只输出 JSON 数组，不要任何解释。
@@ -72,7 +82,11 @@ def _create_llm():
     from api.routes.config import get_current_model
     from providers.deepseek import create_deepseek_llm
 
-    return create_deepseek_llm(model=get_current_model(), temperature=0.2, max_tokens=300)
+    # max_tokens 800（v13，原 300）：满载批允许 5 add + 3 update 共 8 个
+    # JSON 动作，中文内容下 300 token 容易被截断 → 输出不可解析。放宽
+    # 到 800 消除绝大多数截断；万一仍损坏，死信（_MAX_PARSE_FAILURES）
+    # 保证水位线不会永久卡死。
+    return create_deepseek_llm(model=get_current_model(), temperature=0.2, max_tokens=800)
 
 
 # ── 水位线（memory_extract_state 单行表）──────────────────────
@@ -88,14 +102,39 @@ async def get_watermark(conn) -> int:
 
 
 async def _set_watermark(conn, last_message_id: int) -> None:
-    """推进水位线（UPSERT 单行表）。"""
+    """推进水位线（UPSERT 单行表）。
+
+    同时归零 fail_count：批次只要被成功消费（含合法空批 []），连续
+    解析失败计数就从头开始——死信只针对「同一批持续损坏」。
+    """
     await conn.execute(
-        """INSERT INTO memory_extract_state (id, last_message_id, last_run_at)
-           VALUES (1, ?, ?)
+        """INSERT INTO memory_extract_state (id, last_message_id, last_run_at, fail_count)
+           VALUES (1, ?, ?, 0)
            ON CONFLICT(id) DO UPDATE SET
                last_message_id = excluded.last_message_id,
-               last_run_at = excluded.last_run_at""",
+               last_run_at = excluded.last_run_at,
+               fail_count = 0""",
         (last_message_id, _now()),
+    )
+    await conn.commit()
+
+
+async def get_fail_count(conn) -> int:
+    """当前批次连续解析失败次数（无状态行返回 0）。"""
+    cursor = await conn.execute(
+        "SELECT fail_count FROM memory_extract_state WHERE id = 1"
+    )
+    row = await cursor.fetchone()
+    return (row[0] or 0) if row else 0
+
+
+async def _set_fail_count(conn, n: int) -> None:
+    """更新失败计数（UPSERT 保留水位线；尚无状态行时水位线为 0）。"""
+    await conn.execute(
+        """INSERT INTO memory_extract_state (id, last_message_id, fail_count)
+           VALUES (1, 0, ?)
+           ON CONFLICT(id) DO UPDATE SET fail_count = excluded.fail_count""",
+        (n,),
     )
     await conn.commit()
 
@@ -221,7 +260,9 @@ async def extract_new_memories(conn=None) -> dict:
     由心跳 _periodic_maintenance 每 2h 调用（无新消息时纯读，近零开销）。
     返回值供日志与测试断言：
     {"processed": 送入 LLM 的消息条数, "added": 新增, "updated": 更新,
-     "skipped": 跳过, "llm_error": 是否失败（水位线未推进）}
+     "skipped": 跳过, "llm_error": 是否失败（水位线未推进）,
+     "dead_letter": 是否死信丢弃了本批（v13：连续解析失败 ≥3 次后
+     放弃该批并推进水位线，防提取通道永久卡死）}
     """
     if conn is None:
         from database.core import get_db
@@ -231,7 +272,8 @@ async def extract_new_memories(conn=None) -> dict:
     watermark = await get_watermark(conn)
     messages, max_id, last_session_id = await _fetch_pending(conn, watermark)
     if not messages:
-        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0, "llm_error": False}
+        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0,
+                "llm_error": False, "dead_letter": False}
 
     # 冲突上下文：现有记忆 top-10（被动读取，不刷热度——叙事注入的
     # passive 纪律同样适用于提取侧）
@@ -245,20 +287,41 @@ async def extract_new_memories(conn=None) -> dict:
             HumanMessage(content=prompt),
         ])
     except Exception as e:
+        # 瞬态故障（网络/配额）：不计入 fail_count，重试即自愈；
+        # 长期失灵由健康检查「记忆停滞」告警兜底
         log.error("记忆后台提取：LLM 调用失败，水位线保持 %d 待下次重试：%s", watermark, e)
-        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0, "llm_error": True}
+        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0,
+                "llm_error": True, "dead_letter": False}
 
     actions = _parse_actions(
         response.content if hasattr(response, "content") else str(response)
     )
     if actions is None:
-        log.warning("记忆后台提取：LLM 输出不可解析，水位线保持 %d 待下次重试", watermark)
-        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0, "llm_error": True}
+        fails = await get_fail_count(conn) + 1
+        if fails >= _MAX_PARSE_FAILURES:
+            # 死信：同一批连续 3 次不可解析 → 输出确定性损坏（如满载
+            # JSON 撞 token 上限截断），放弃该批并推进水位线，让提取
+            # 通道恢复流动。被弃消息不再回看（同预算超限旧端丢弃语义）。
+            await _set_watermark(conn, max_id)  # 内部顺带归零 fail_count
+            log.error(
+                "记忆后台提取：批次（水位线 %d → %d）连续 %d 次不可解析，"
+                "死信丢弃该批并推进水位线，防永久卡死",
+                watermark, max_id, fails,
+            )
+            return {"processed": 0, "added": 0, "updated": 0, "skipped": 0,
+                    "llm_error": True, "dead_letter": True}
+        await _set_fail_count(conn, fails)
+        log.warning(
+            "记忆后台提取：LLM 输出不可解析（%d/%d），水位线保持 %d 待下次重试",
+            fails, _MAX_PARSE_FAILURES, watermark,
+        )
+        return {"processed": 0, "added": 0, "updated": 0, "skipped": 0,
+                "llm_error": True, "dead_letter": False}
 
     # 来源追踪（v12）：新记忆标注提取自哪个会话，供「为什么记得这个」追溯
     source = f"chat:{last_session_id}" if last_session_id else None
     added, updated, skipped = await _dispatch(mgr, actions, source=source)
-    await _set_watermark(conn, max_id)
+    await _set_watermark(conn, max_id)  # 内部顺带归零 fail_count
     log.info(
         "记忆后台提取：处理 %d 条消息 → 新增 %d / 更新 %d / 跳过 %d",
         len(messages), added, updated, skipped,
@@ -269,6 +332,7 @@ async def extract_new_memories(conn=None) -> dict:
         "updated": updated,
         "skipped": skipped,
         "llm_error": False,
+        "dead_letter": False,
     }
 
 
