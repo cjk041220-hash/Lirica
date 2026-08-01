@@ -10,6 +10,24 @@ async def test_prompt_contains_base_persona():
     assert "映海" in prompt
 
 
+def test_cold_info_birthday_matches_constants():
+    """体检 S1 回归：档案散文里的生日与导出常量一致（f-string 嵌入
+    后逐字节不变——此前散文写死、events 检测器手动同步，两处漂移）。"""
+    from agent.soul import (
+        COLD_INFO, COLD_BIRTHDAY_YEAR, COLD_BIRTHDAY_MONTH, COLD_BIRTHDAY_DAY,
+    )
+
+    assert (
+        f"生日是 {COLD_BIRTHDAY_YEAR} 年 {COLD_BIRTHDAY_MONTH} 月 "
+        f"{COLD_BIRTHDAY_DAY} 日。"
+    ) in COLD_INFO
+    assert "2004 年 6 月 3 日" in COLD_INFO  # 钉死当前值，防常量被静默改动
+
+    # events 检测器与 soul 同源
+    from utils.events import _BIRTHDAY_MONTH, _BIRTHDAY_DAY
+    assert (_BIRTHDAY_MONTH, _BIRTHDAY_DAY) == (COLD_BIRTHDAY_MONTH, COLD_BIRTHDAY_DAY)
+
+
 async def test_prompt_contains_interaction_rules():
     """提示词包含交互铁律。"""
     prompt = await build_system_prompt()

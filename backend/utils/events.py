@@ -40,9 +40,13 @@ log = get_logger(__name__)
 from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT, DEFAULT_LAT, DEFAULT_LON
 _DATE_FMT = "%Y-%m-%d"
 
-# ── 档案派生事件常量（来自 soul.py COLD_INFO，冷冷生日 2004-06-03）──
-_BIRTHDAY_MONTH = 6
-_BIRTHDAY_DAY = 3
+# ── 档案派生事件常量（单一来源 agent.soul，冷冷生日 2004-06-03）──
+# 体检 S1 修复：此前手动同步 soul 散文里的生日，改一处另一处不跟随。
+# 模块级 import 安全：soul 对本模块只有函数级惰性 import，不成环。
+from agent.soul import (
+    COLD_BIRTHDAY_MONTH as _BIRTHDAY_MONTH,
+    COLD_BIRTHDAY_DAY as _BIRTHDAY_DAY,
+)
 _BIRTHDAY_LOOKAHEAD_DAYS = 7  # 提前几天开始惦记
 
 # ── 天气检测阈值 ──────────────────────────────────────────────
