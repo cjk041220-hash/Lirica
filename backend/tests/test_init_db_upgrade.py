@@ -64,6 +64,7 @@ async def test_init_db_upgrades_legacy_v1_database(tmp_path):
         assert "prev_content" in columns  # v12 覆盖留痕
         assert "hit_count" in columns  # v13 衰减弱信号
         assert "last_hit_date" in columns  # v14 按日计数守卫
+        assert "superseded_by" in columns  # v15 覆盖历史链
         assert "time" not in columns
 
         # 2. 旧数据完整保留，time 已映射为 created_at

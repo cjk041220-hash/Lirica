@@ -54,7 +54,7 @@ log = get_logger(__name__)
 #       remember 为 NULL）：「小汐为什么记得这个」可追溯（D6）；
 #     prev_content —— 覆盖前的旧文本（单层快照）：矛盾纠正后能回看
 #       旧说法（D5 的轻量版本，不做完整版本链）。
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -528,7 +528,8 @@ MEMORY_EXTRACT_STATE_SQL = """
         last_message_id  INTEGER NOT NULL DEFAULT 0,
         last_run_at      TEXT,
         health_warned_at TEXT,
-        fail_count       INTEGER NOT NULL DEFAULT 0
+        fail_count       INTEGER NOT NULL DEFAULT 0,
+        consolidate_ran_at TEXT
     );
 """
 
@@ -658,6 +659,42 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[14] = _migrate_v14
+
+
+# ── v15 迁移：覆盖历史链 + 整合节流时间戳 ────────────────────
+
+async def _migrate_v15(conn: aiosqlite.Connection) -> None:
+    """v15: memories.superseded_by（覆盖历史链）+ memory_extract_state.consolidate_ran_at。
+
+    背景（2026-08-01 全面复核 R3/R1）：
+    - prev_content 是单层快照，二次覆盖即丢最初版本。superseded_by
+      列支撑「失效行」：被覆盖的旧内容另落一行 status='superseded'、
+      superseded_by 指向现记忆，形成无论覆盖多少次都可追溯的历史链
+      （Zep/Graphiti 双时态边失效化思想的 5% 移植——失效保留而非
+      删除；读面谓词统一 IN('active','core') 使 superseded 行天然
+      消失在一切日常读面，v10 去重索引同谓词故不挡同内容重提）；
+    - consolidate_ran_at 供 dreaming-lite 周期整合 pass 做 24h 节流
+      （心跳维护段调用，复用本状态表避免再建表）。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    mem_cols = {row[1] for row in await cursor.fetchall()}
+    if "superseded_by" not in mem_cols:
+        await conn.execute(
+            "ALTER TABLE memories ADD COLUMN superseded_by TEXT"
+        )
+
+    cursor = await conn.execute("PRAGMA table_info(memory_extract_state)")
+    state_cols = {row[1] for row in await cursor.fetchall()}
+    if "consolidate_ran_at" not in state_cols:
+        await conn.execute(
+            "ALTER TABLE memory_extract_state ADD COLUMN consolidate_ran_at TEXT"
+        )
+
+    await conn.commit()
+    log.info("迁移 v15 完成：memories.superseded_by + memory_extract_state.consolidate_ran_at")
+
+
+_migrations[15] = _migrate_v15
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

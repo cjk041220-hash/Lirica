@@ -236,28 +236,46 @@ class MemoryManager:
         return rows_to_dicts(cursor, [row])[0]
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
-        """覆盖一条记忆的内容，保留首次时间、记录修改时间与旧文本。
+        """覆盖一条记忆的内容，保留首次时间、记录修改时间，旧文本落历史链。
 
         v12 语义（评审 D5）：created_at 是「第一次记住」的时间，覆盖
         只刷 updated_at——否则时间衰减被重置，被纠正的旧记忆反而
-        变成「新记忆」；旧文本存进 prev_content（单层快照），矛盾
-        纠正后仍可回看旧说法。
+        变成「新记忆」。
+
+        v15 语义（体检 R3，Zep/Graphiti 边失效化思想）：被覆盖的旧
+        内容另落一行 status='superseded'（superseded_by 指向本记忆），
+        形成完整历史链——prev_content 是单层快查（二次覆盖即丢最初
+        版本），superseded 行链则无论覆盖多少次、每一代旧说法都可
+        追溯。读面谓词统一 IN('active','core')，superseded 行在日常
+        读面自然消失；v10 去重索引同谓词，故重提同内容不被历史行
+        阻挡（「忘了又想起」语义不受影响）。
         """
         new_content = _cap_content((new_content or "").strip(), "update_content")
         if not new_content:
             return False
-        # 先读旧文本（同一事务内完成：取旧值 → 覆盖），
-        # 找不到目标行直接返回 False（不写空快照）
+        # 先读旧文本与历史行所需字段（同一事务内完成：取旧值 → 落
+        # 历史行 → 覆盖），找不到目标行直接返回 False（不写空快照）
         cursor = await self._db.execute(
-            "SELECT content FROM memories WHERE id = ? AND status IN ('active', 'core')",
+            """SELECT content, category, created_at, source
+               FROM memories WHERE id = ? AND status IN ('active', 'core')""",
             (memory_id,),
         )
         row = await cursor.fetchone()
         if row is None:
             return False
-        old_content = row[0]
+        old_content, category, original_created_at, source = row
 
         now = _now()
+        # 历史行：created_at 用本记忆的**最初**创建时间（时序诚实——
+        # 这条旧说法确实是那时说出的），状态 superseded 使其跌出
+        # 一切读面与去重谓词
+        await self._db.execute(
+            """INSERT INTO memories
+               (id, content, category, created_at, status, superseded_by, source)
+               VALUES (?, ?, ?, ?, 'superseded', ?, ?)""",
+            (uuid.uuid4().hex[:16], old_content, category,
+             original_created_at, memory_id, source),
+        )
         cursor = await self._db.execute(
             """UPDATE memories
                SET content = ?, updated_at = ?, prev_content = ?, last_used_at = ?
@@ -266,6 +284,21 @@ class MemoryManager:
         )
         await self._db.commit()
         return cursor.rowcount > 0
+
+    async def history(self, memory_id: str) -> list[dict]:
+        """一条记忆的历代旧说法（superseded 行，按时间正序）。
+
+        供「我以前是不是说过……」类回看（体检 R3）。不含当前内容
+        （当前内容在记忆本行）。
+        """
+        cursor = await self._db.execute(
+            """SELECT * FROM memories
+               WHERE superseded_by = ? AND status = 'superseded'
+               ORDER BY created_at ASC""",
+            (memory_id,),
+        )
+        rows = await cursor.fetchall()
+        return rows_to_dicts(cursor, rows)
 
     # ── 删除 ────────────────────────────────────────────────
 

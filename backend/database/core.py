@@ -125,7 +125,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             status          TEXT DEFAULT 'active',
             updated_at      TEXT,
             source          TEXT,
-            prev_content    TEXT
+            prev_content    TEXT,
+            superseded_by   TEXT
         );
 
         CREATE TABLE IF NOT EXISTS diaries (
