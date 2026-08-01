@@ -121,6 +121,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             last_used_at    TEXT,
             access_count    INTEGER DEFAULT 0,
             hit_count       INTEGER DEFAULT 0,
+            last_hit_date   TEXT,
             status          TEXT DEFAULT 'active',
             updated_at      TEXT,
             source          TEXT,

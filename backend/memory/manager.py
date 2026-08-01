@@ -24,6 +24,16 @@ log = get_logger(__name__)
 from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
 from database.core import rows_to_dicts
 
+# hit_count 按日去重的守卫格式（v14）：HKT 日历日，"%Y-%m-%d"。
+# **不能复用 _TIME_FMT**——那是分钟精度 "%Y-%m-%d %H:%M"，分钟级守卫
+# 几乎永远放行，按日计数等于没修。TEXT 字典序即日期序，比较安全。
+_DATE_FMT = "%Y-%m-%d"
+
+
+def _today_str() -> str:
+    """HKT 今日日期字符串（hit_count 按日计数守卫用）。"""
+    return datetime.datetime.now(_HKT).strftime(_DATE_FMT)
+
 
 def _escape_like(s: str) -> str:
     """转义 LIKE 通配符，category 里的 % / _ 只按字面匹配。
@@ -130,25 +140,36 @@ class MemoryManager:
     # ── 内部工具 ────────────────────────────────────────────
 
     async def _count_hits(self, ids: list[str]) -> None:
-        """hit_count +1（v13 衰减弱信号）。空列表无操作。
+        """hit_count 按日 +1（v13 弱信号，v14 改按「不同天数」计数）。空列表无操作。
 
-        hit_count 记录「这条记忆被系统浮现到小汐眼前多少次」——被动
-        读取（叙事注入、小本本翻旧事、core 保底席位）也计数，但它只
-        作 apply_status_decay 的衰减燃料，**永不进入** _relevance_score
-        排序。排序仍只认 access_count（主动想起），那条 passive 纪律
-        防的是「越注入越热门」正反馈闭环（见 recall() 注释）；衰减是
-        另一件事——一条天天被注入的记忆不该因为「不是被主动 recall
-        的」就在 90 天后被冷藏。v13 之前的衰减只有 access_count 一个
-        燃料源，而它唯一的增量点在非被动 recall，主消费路径（叙事注入）
-        按铁律 passive → 稳态下几乎所有记忆都会到期归档，包括高重要
-        事实。hit_count 就是给衰减机器补上的燃料。
+        hit_count 记录「这条记忆被系统浮现在多少个不同日子」（HKT 日历
+        日去重，守卫见 SQL）——被动读取（叙事注入、小本本翻旧事、core
+        保底席位）也计数，但它只作 apply_status_decay 的衰减燃料，
+        **永不进入** _relevance_score 排序。排序仍只认 access_count
+        （主动想起），那条 passive 纪律防的是「越注入越热门」正反馈
+        闭环（见 recall() 注释）；衰减是另一件事——一条天天被注入的
+        记忆不该因为「不是被主动 recall 的」就在 90 天后被冷藏。
+
+        v14 语义修正（体检 T1-1）：v13 的原始次数计数被叙事注入的频率
+        带崩——每次 LLM 模型调用前都浮现一遍（活跃日 25-70 次/天），
+        阈值校准差一个数量级。按「不同天数」计后与聊天频率解耦：
+        重度用户一天聊 50 轮，某记忆也只记 1 天。守卫放在 WHERE 里，
+        同日重复浮现命中 0 行（还省写入）。
+
+        已知轻微过计（不修，记录在案）：叙事保底席位替换末位时，被换下
+        的 recent 记忆当天已吃过 +1 却未真正注入——守卫后噪音封顶
+        1 天/日，远小于衰减阈值量级。
         """
         if not ids:
             return
+        today = _today_str()
         placeholders = ",".join("?" for _ in ids)
         await self._db.execute(
-            f"UPDATE memories SET hit_count = hit_count + 1 WHERE id IN ({placeholders})",
-            ids,
+            f"""UPDATE memories
+                SET hit_count = hit_count + 1, last_hit_date = ?
+                WHERE id IN ({placeholders})
+                  AND COALESCE(last_hit_date, '') != ?""",
+            (today, *ids, today),
         )
         await self._db.commit()
 
@@ -338,9 +359,9 @@ class MemoryManager:
         top-K 记忆刷新一轮热度和 last_used_at，形成「越被注入越热门、
         越热门越被注入」的正反馈闭环，把同样的记忆永久钉在榜首。
 
-        计数器双信号（v13）：无论 passive 与否都会 +1 hit_count——它
-        只作衰减燃料（apply_status_decay），不进上面的排序键，因此不
-        破坏被动纪律。详见 _count_hits。
+        计数器双信号（v13 引入、v14 按日计数）：无论 passive 与否都会
+        按「不同天数」+1 hit_count——它只作衰减燃料（apply_status_decay），
+        不进上面的排序键，因此不破坏被动纪律。详见 _count_hits。
         """
         if category:
             cursor = await self._db.execute(
@@ -384,29 +405,35 @@ class MemoryManager:
         matched.sort(key=_sort_key, reverse=True)
         matched = matched[:limit]
 
-        # 计数器（双信号，v13）：
+        # 计数器（双信号，v13 引入、v14 按日计数）：
         # - access_count / last_used_at：仅主动召回（passive=False）更新，
         #   参与 _relevance_score 排序——被动注入刷这两个会形成正反馈
         #   闭环，铁律禁止；
-        # - hit_count：任何读取（含 passive）都 +1，只做衰减燃料，
-        #   不进排序（见 _count_hits 的设计说明）。
+        # - hit_count：任何读取（含 passive）都按「不同天数」+1，只做
+        #   衰减燃料，不进排序（见 _count_hits 的设计说明）。
         if matched:
             ids = [m["id"] for m in matched]
             placeholders = ",".join("?" for _ in ids)
             if passive:
-                await self._db.execute(
-                    f"UPDATE memories SET hit_count = hit_count + 1 "
-                    f"WHERE id IN ({placeholders})",
-                    ids,
-                )
-            else:
-                await self._db.execute(
-                    f"""UPDATE memories
-                        SET last_used_at = ?, access_count = access_count + 1,
-                            hit_count = hit_count + 1
-                        WHERE id IN ({placeholders})""",
-                    (_now(), *ids),
-                )
+                await self._count_hits(ids)
+                return matched
+            today = _today_str()
+            # 主动分支不能用 _count_hits 的 WHERE 守卫版——守卫会把
+            # 「今天已被浮现过」的行整行排除，连坐 access_count 不加。
+            # access_count 是「被主动想起」的真实信号（排序热度 + core
+            # 晋升条件），必须无条件计数；hit 两列走 CASE 条件自增。
+            await self._db.execute(
+                f"""UPDATE memories
+                    SET last_used_at = ?,
+                        access_count = access_count + 1,
+                        hit_count = hit_count + CASE
+                            WHEN COALESCE(last_hit_date, '') != ? THEN 1 ELSE 0 END,
+                        last_hit_date = CASE
+                            WHEN COALESCE(last_hit_date, '') != ? THEN ?
+                            ELSE last_hit_date END
+                    WHERE id IN ({placeholders})""",
+                (_now(), today, today, today, *ids),
+            )
             await self._db.commit()
 
         return matched
@@ -432,8 +459,8 @@ class MemoryManager:
         """返回最近 N 条活跃记忆，按时间正序排列（最早的在前）。
 
         用于叙事构建器注入系统提示词。被动读取：不更新 last_used_at /
-        access_count，但计 hit_count（v13 衰减弱信号——被叙事浮现过的
-        记忆不该到期冷藏）。
+        access_count，但按日计 hit_count（v13 衰减弱信号、v14 按不同
+        天数——被叙事浮现过的记忆不该到期冷藏）。
         """
         cursor = await self._db.execute(
             """SELECT * FROM (
@@ -455,8 +482,8 @@ class MemoryManager:
         纯被动：不更新 last_used_at / access_count。调用方是记忆回声
         检测器——若刷热度，被 echo 的记忆会在 _relevance_score 里
         突然「复活」霸榜（L220-223 注释记录的正反馈闭环），必须只读。
-        但计 hit_count（v13）：被翻出来回声的记忆正是「系统浮现过」
-        的典型，衰减燃料该收下这个信号。
+        但按日计 hit_count（v13 引入、v14 按不同天数）：被翻出来回声
+        的记忆正是「系统浮现过」的典型，衰减燃料该收下这个信号。
 
         全库日期为 TEXT "%Y-%m-%d %H:%M"，字典序即时间序，
         created_at <= cutoff 就是年龄达标；RANDOM() 保证每次采样
@@ -524,7 +551,8 @@ class MemoryManager:
 
         不刷热度（同 old_memories 的被动纪律——若刷 access_count，
         core 会在 _relevance_score 里自我加冕，违背被动读取原则）；
-        但计 hit_count（v13）：保底席位的浮现是衰减燃料，不是排名信号。
+        但按日计 hit_count（v13 引入、v14 按不同天数）：保底席位的
+        浮现是衰减燃料，不是排名信号。
         """
         cursor = await self._db.execute(
             """SELECT * FROM memories WHERE status = 'core'
@@ -632,14 +660,17 @@ class MemoryManager:
 
 
 # ── 分层衰减阈值 ──────────────────────────────────────────────
-# 晋升 core：被主动想起 ≥5 次，或被系统浮现 ≥90 次（v13 hit_count：
-#   约合一个月里平均每天被叙事浮现 3 次），且存在 ≥30 天——经月反复
-#   用到的才算核心画像。
-# 归档：主动+被动信号合计 ≤1 次且 ≥90 天——三个月既没被想起、也没
-#   被注入过才冷藏。「重要的事」类别豁免（高重要事实永不自动冷藏）。
+# 晋升 core：被主动想起 ≥5 次，或在 ≥20 个不同日子被系统浮现
+#   （v14 hit_count 按 HKT 日历日去重，与聊天频率解耦：20 ≈ 重度用户
+#   3-4 周 / 轻度用户 6-8 周的「经月活跃在场」），且存在 ≥30 天
+#   （年龄闸防「爆发一周即晋升」）。
+# 归档：主动想起 + 浮现天数合计 ≤1 且 ≥90 天——三个月里至多一天
+#   被想起或被注入过才冷藏。「重要的事」类别豁免（高重要事实永不
+#   自动冷藏）。v13 时代 hit 是原始次数（活跃日 25-70 次/天通胀），
+#   v14 改按日计数后阈值 90 → 20（体检 T1-1 校准）。
 # 衰减 job 挂心跳维护（_periodic_maintenance，2h），日志输出计数便于调参。
 _CORE_MIN_ACCESSES = 5
-_CORE_MIN_HITS = 90
+_CORE_MIN_HITS = 20
 _CORE_MIN_AGE_DAYS = 30
 _ARCHIVE_MAX_ACCESSES = 1
 _ARCHIVE_MIN_AGE_DAYS = 90

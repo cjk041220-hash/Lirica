@@ -110,7 +110,7 @@ async def test_active_recall_counts_both_signals(memory_mgr, tmp_db):
 
 
 async def test_surface_paths_count_hits(memory_mgr, tmp_db):
-    """recent / top_core 浮现一次各 +1 hit_count，不碰 access_count。"""
+    """recent / top_core 浮现计 hit_count（v14：同日去重），不碰 access_count。"""
     await _insert_raw(tmp_db, "r1", "近事", "日常", _days_ago(1))
     await _insert_raw(tmp_db, "c1", "核心", "喜好", _days_ago(60), access=9, status="core")
 
@@ -121,26 +121,27 @@ async def test_surface_paths_count_hits(memory_mgr, tmp_db):
         "SELECT id, access_count, hit_count FROM memories ORDER BY id"
     )
     rows = {r[0]: (r[1], r[2]) for r in await cursor.fetchall()}
-    # c1 被 recent（谓词含 core）和 top_core 各浮现一次；r1 只被 recent 浮现
-    assert rows["c1"] == (9, 2)   # access 原值不动，hit 两次
+    # c1 被 recent（谓词含 core）+ top_core 同日双浮现——v14 按日去重只计 1
+    assert rows["c1"] == (9, 1)   # access 原值不动，hit 同日封顶 1
     assert rows["r1"] == (0, 1)
 
 
 async def test_hits_protect_from_archive(memory_mgr, tmp_db):
-    """access=0 但 hit_count 高的旧记忆不归档——阻塞项 #1 的核心场景：
-    「芒果过敏」天天被叙事注入，修复前 90 天到期即冷藏。"""
+    """access=0 但有浮现天数（中间层 1<hit<20）的旧记忆不归档——
+    阻塞项 #1 的核心场景：「芒果过敏」被叙事注入过，修复前 90 天
+    到期即冷藏。（hit≥20 走晋升，见 test_hits_can_promote_core。）"""
     await tmp_db.execute(
         """INSERT INTO memories
            (id, content, category, created_at, last_used_at,
             access_count, hit_count, status)
-           VALUES ('m1', '冷冷对芒果过敏', '冷冷的信息', ?, ?, 0, 50, 'active')""",
+           VALUES ('m1', '冷冷对芒果过敏', '冷冷的信息', ?, ?, 0, 10, 'active')""",
         (_days_ago(100), _days_ago(100)),
     )
     await tmp_db.commit()
 
     result = await memory_mgr.apply_status_decay()
 
-    assert result["archived"] == 0
+    assert result == {"promoted": 0, "archived": 0}
     cursor = await tmp_db.execute("SELECT status FROM memories WHERE id = 'm1'")
     assert (await cursor.fetchone())[0] == "active"
 
@@ -162,13 +163,13 @@ async def test_zero_signal_memory_still_archives(memory_mgr, tmp_db):
 
 
 async def test_hits_can_promote_core(memory_mgr, tmp_db):
-    """被系统高频浮现（hit≥90）的记忆也能晋升 core——修复前 core 晋升
-    不可达，narrative 保底席位是死代码。"""
+    """在 ≥20 个不同日子被系统浮现的记忆也能晋升 core（v14 阈值；
+    修复前 core 晋升不可达，narrative 保底席位是死代码）。"""
     await tmp_db.execute(
         """INSERT INTO memories
            (id, content, category, created_at, last_used_at,
             access_count, hit_count, status)
-           VALUES ('m1', '冷冷在学法律', '冷冷的信息', ?, ?, 0, 95, 'active')""",
+           VALUES ('m1', '冷冷在学法律', '冷冷的信息', ?, ?, 0, 25, 'active')""",
         (_days_ago(40), _days_ago(40)),
     )
     await tmp_db.commit()
@@ -190,6 +191,68 @@ async def test_important_category_exempt_from_archive(memory_mgr, tmp_db):
     assert result["archived"] == 0
     cursor = await tmp_db.execute("SELECT status FROM memories WHERE id = 'm1'")
     assert (await cursor.fetchone())[0] == "active"
+
+
+# ── v14 按日计数：与聊天频率解耦 ──────────────────────────────
+#
+# 核心回归（体检 T1-1）：v13 的原始次数计数被叙事注入频率带崩——
+# 每次 LLM 模型调用前都浮现一遍，活跃日 25-70 次/天，阈值校准差
+# 一个数量级。v14 改按 HKT 日历日去重：一天浮现 50 次也只记 1 天。
+
+
+async def test_same_day_repeat_surface_counts_once(memory_mgr, tmp_db):
+    """同日反复浮现只计 1 天——v14 核心语义（v13 会记 N 次）。"""
+    await _insert_raw(tmp_db, "m1", "冷冷对芒果过敏", "冷冷的信息", _days_ago(5))
+
+    await memory_mgr.recall(passive=True)
+    await memory_mgr.recall(passive=True)
+    await memory_mgr.recent(limit=5)
+
+    cursor = await tmp_db.execute(
+        "SELECT hit_count, last_hit_date FROM memories WHERE id = 'm1'"
+    )
+    hit, last_hit = await cursor.fetchone()
+    assert hit == 1                 # 三次浮现同一天，只记 1
+    assert last_hit is not None     # 守卫日期已写入
+
+
+async def test_next_day_surface_increments(memory_mgr, tmp_db):
+    """跨日再浮现 +1：last_hit_date 预置昨天 → 今天浮现后 hit 增长。"""
+    yesterday = (
+        datetime.datetime.now(HKT) - datetime.timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    await _insert_raw(tmp_db, "m1", "冷冷喜欢喝椰子水", "喜好", _days_ago(5))
+    await tmp_db.execute(
+        "UPDATE memories SET hit_count = 1, last_hit_date = ? WHERE id = 'm1'",
+        (yesterday,),
+    )
+    await tmp_db.commit()
+
+    await memory_mgr.recall(passive=True)
+
+    cursor = await tmp_db.execute(
+        "SELECT hit_count, last_hit_date FROM memories WHERE id = 'm1'"
+    )
+    hit, last_hit = await cursor.fetchone()
+    assert hit == 2
+    assert last_hit == datetime.datetime.now(HKT).strftime("%Y-%m-%d")
+
+
+async def test_active_recall_same_day_access_per_call_hit_per_day(memory_mgr, tmp_db):
+    """主动 recall 同日两次：access_count 每次 +1（真实被想起信号不受
+    日守卫连坐），hit_count 同日只 +1，last_used_at 每次都刷新。"""
+    await _insert_raw(tmp_db, "m1", "冷冷在学吉他", "喜好", _days_ago(5))
+
+    await memory_mgr.recall(passive=False)
+    await memory_mgr.recall(passive=False)
+
+    cursor = await tmp_db.execute(
+        "SELECT access_count, hit_count, last_used_at FROM memories WHERE id = 'm1'"
+    )
+    access, hit, last_used = await cursor.fetchone()
+    assert access == 2              # 两次主动想起，次次作数
+    assert hit == 1                 # 同一天，浮现天数只记 1
+    assert last_used != _days_ago(5)  # last_used_at 已刷新（非入库值）
 
 
 # ── v10 三同步:晋升后 add 去重仍生效 ─────────────────────────

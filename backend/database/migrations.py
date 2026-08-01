@@ -54,7 +54,7 @@ log = get_logger(__name__)
 #       remember 为 NULL）：「小汐为什么记得这个」可追溯（D6）；
 #     prev_content —— 覆盖前的旧文本（单层快照）：矛盾纠正后能回看
 #       旧说法（D5 的轻量版本，不做完整版本链）。
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -605,8 +605,12 @@ async def _migrate_v13(conn: aiosqlite.Connection) -> None:
     cursor = await conn.execute("PRAGMA table_info(memory_extract_state)")
     state_cols = {row[1] for row in await cursor.fetchall()}
     if "fail_count" not in state_cols:
+        # NOT NULL 与共享常量 MEMORY_EXTRACT_STATE_SQL 终态对齐（体检 T1-7：
+        # 原文漏写 NOT NULL，全新安装与升级路径终态漂移）。已上过原版 v13
+        # 的库列已存在、幂等守卫跳过，留存可空列——读面 get_fail_count 的
+        # (row[0] or 0) 兜住 NULL，无重建必要。
         await conn.execute(
-            "ALTER TABLE memory_extract_state ADD COLUMN fail_count INTEGER DEFAULT 0"
+            "ALTER TABLE memory_extract_state ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0"
         )
 
     await conn.commit()
@@ -614,6 +618,46 @@ async def _migrate_v13(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[13] = _migrate_v13
+
+
+# ── v14 迁移：hit_count 按日计数语义修正 + 存量回填 ──────────
+
+async def _migrate_v14(conn: aiosqlite.Connection) -> None:
+    """v14: memories.last_hit_date（hit_count 改按「不同天数」计数）+ 存量回填。
+
+    背景（2026-08-01 全面复核 T1-1）：v13 的 hit_count 是原始浮现次数，
+    而叙事注入在每次 LLM 模型调用前都跑（recall passive + recent 两路
+    独立计数、重叠记忆双计），活跃日单记忆增速 25-70/天——_CORE_MIN_HITS
+    阈值校准与实际速率差一个数量级，小库活跃用户 30 天后全体晋升 core、
+    归档机制灭绝。修正把 hit_count 语义改为「被浮现的不同天数」（HKT
+    日历日去重，计数守卫在 manager._count_hits 的 SQL 里），与聊天频率
+    解耦；阈值相应重校准（_CORE_MIN_HITS 90 → 20 个不同日子）。
+
+    存量回填是本迁移的必需部分，不是可选项：v13 通胀期积累的 hit_count
+    （普遍 ≥20）撞上校准后阈值，会让升级后首次衰减运行（2h 内）把所有
+    ≥30 天记忆一次性全体晋升 core——症状延迟复发。clamp 到 19 同时防
+    两个方向的误伤：<20 无意外晋升；>1（归档阈值）无意外归档扫荡
+    （清零会让「90 天老、access=0、实际天天被注入」的诚实热记忆被错杀）。
+    last_hit_date 置 NULL 让下次浮现记为全新一天，从升级日起诚实累积。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    mem_cols = {row[1] for row in await cursor.fetchall()}
+    if "last_hit_date" not in mem_cols:
+        await conn.execute(
+            "ALTER TABLE memories ADD COLUMN last_hit_date TEXT"
+        )
+
+    # 存量回填：MIN(hit_count, 19) 是 SQLite 双参标量函数（非聚合），
+    # 幂等——重跑时已 ≤19 的行不受影响
+    await conn.execute(
+        "UPDATE memories SET hit_count = MIN(hit_count, 19), last_hit_date = NULL"
+    )
+
+    await conn.commit()
+    log.info("迁移 v14 完成：memories.last_hit_date + hit_count 存量回填（clamp ≤19）")
+
+
+_migrations[14] = _migrate_v14
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
