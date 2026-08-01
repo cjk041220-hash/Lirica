@@ -1,7 +1,11 @@
 /* eslint-disable no-console */
 // 浏览器级交互验证：用系统 Edge（headless）驱动 :8000 上构建好的前端，
 // 逐一点击每个交互点，断言"有响应"，并截图 + 收集控制台错误。
-// 复用全局 @ejazullah/mcp-playwright 自带的 playwright（NODE_PATH 注入），不下载浏览器。
+// playwright 是 web/package.json 的 devDependency（体检 F-13：此前靠
+// NODE_PATH 指向全局 mcp-playwright 嵌套目录，换机不可复现）。脚本在
+// scripts/e2e/ 下解析不到 web/node_modules，运行时仍需 NODE_PATH 指过去：
+//   NODE_PATH=$PWD/web/node_modules node scripts/e2e/ui_test.cjs
+// 浏览器用系统 Edge（channel:'msedge'），不下载 chromium。
 const path = require('path');
 const fs = require('fs');
 const { chromium } = require('playwright');

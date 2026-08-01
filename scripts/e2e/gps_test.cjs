@@ -4,10 +4,11 @@
 // 拦截 /api/chat/stream 请求体断言坐标已上传，并打印小汐的最终回复
 // （高德 key 已配置时，她会真的用这个坐标查"附近"）。
 //
-// 运行（复用全局 mcp-playwright，NODE_PATH 注入，系统 Edge）：
+// 运行（playwright 是 web/ 的 devDependency，体检 F-13 后不再依赖全局
+// mcp-playwright；脚本在 scripts/e2e/ 解析不到 web/node_modules，仍需
+// NODE_PATH 指过去；浏览器用系统 Edge）：
 //   先启动后端 :8000，然后
-//   NODE_PATH="<npm root -g>\@ejazullah\mcp-playwright\node_modules" \
-//     node scripts/e2e/gps_test.cjs
+//   NODE_PATH=$PWD/web/node_modules node scripts/e2e/gps_test.cjs
 //
 // 退出码：任一断言 [FAIL] → 非零（修复旧版断言失败仍 exit 0 的缺陷，否则 CI 看不见失败）
 const path = require('path');

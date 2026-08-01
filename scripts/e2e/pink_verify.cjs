@@ -3,7 +3,9 @@
 // 纯读 + 本地戳一戳，不向 API 写任何东西（零污染）。
 // 维度：视觉(四时段/房间/四面板/日历详情表单/桌面) · 时序(开面板连拍验扫掠) ·
 //       动效安全(reduced-motion) · 离线(字体回落) · 控制台清洁。
-// 用法：NODE_PATH=$(npm root -g)/@ejazullah/mcp-playwright/node_modules node scripts/e2e/pink_verify.cjs
+// 用法（playwright 是 web/ 的 devDependency，体检 F-13；脚本在 scripts/e2e/
+// 解析不到 web/node_modules，NODE_PATH 指过去）：
+//   NODE_PATH=$PWD/web/node_modules node scripts/e2e/pink_verify.cjs
 const path = require('path');
 const fs = require('fs');
 const os = require('os');

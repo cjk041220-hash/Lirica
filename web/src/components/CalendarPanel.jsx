@@ -79,6 +79,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
     clearTimeout(toastTimerRef.current)
     clearTimeout(confirmDelTimerRef.current)
   }, [])
+  // 两层 sheet 各自的焦点陷阱（体检 F-5：此前只有外层面板有 trap，
+  // Tab 会穿过 sheet 边界操作被遮住的月历）。useFocusTrap 的嵌套栈
+  // 保证焦点在内层时外层 trap 让路；callback ref 随条件渲染挂载激活
+  const daySheetRef = useFocusTrap()
+  const formSheetRef = useFocusTrap()
 
   const cells = useMemo(() => monthGrid(month.y, month.m), [month])
   const byDay = useMemo(() => expandByDay(events, cells), [events, cells])
@@ -263,6 +268,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
           <div className="absolute inset-0 z-[5] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => setSelectedDay(null)} />
             <div className="panel-surface-solid panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+              ref={daySheetRef} tabIndex={-1}
               role="dialog" aria-modal="true" aria-label={`${selectedDay} 的安排`}>
               <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
               <div className="flex items-baseline gap-2 mb-3">
@@ -330,6 +336,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
           <div className="absolute inset-0 z-[6] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => { setFormOpen(false); setEditing(null); setSimilar(null) }} />
             <div className="panel-surface-solid panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+              ref={formSheetRef} tabIndex={-1}
               role="dialog" aria-modal="true" aria-label={editing ? '修改这件事' : '记一件事'}>
               <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
               <h3 className="font-display text-[16px] text-plum/85 leading-tight mb-1">{editing ? '改一件事' : '记一件事'}</h3>
