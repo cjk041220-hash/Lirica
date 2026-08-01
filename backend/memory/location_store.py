@@ -34,6 +34,18 @@ async def get(session_id: str) -> tuple[float, float] | None:
         return entry["lat"], entry["lon"]
 
 
+async def forget(session_id: str) -> bool:
+    """删除某会话的缓存坐标（GPS 显式关闭信号用）。返回是否删掉了。
+
+    体检「GPS 关不净」修复配套：此前前端关 GPS 只写本地开关，后端
+    缓存仍按 TTL 最长保留 8 小时并持续向每条对话注入旧坐标——对
+    隐私敏感应用，「关了还在用」不可接受。前端随请求携带
+    gps_enabled=false 时 chat 路由调本函数，「关 = 立即消失」闭环。
+    """
+    async with _lock:
+        return _location_cache.pop(session_id, None) is not None
+
+
 async def get_any() -> tuple[float, float] | None:
     """获取任意一个有效缓存的坐标（适用于单用户场景）。"""
     async with _lock:

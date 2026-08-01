@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { apiFetch } from '../api/client'
-import { getGpsCoords } from '../api/location'
+import { getGpsCoords, isGpsEnabled } from '../api/location'
 
 let msgId = 0
 const nextId = () => `msg-${++msgId}-${Date.now()}`
@@ -147,6 +147,9 @@ export function useChat() {
           message: text,
           session_id: sessionIdRef.current,
           ...(coords || {}),
+          // GPS 开关信号随请求下发：关闭时后端立即清掉缓存坐标
+          // （否则旧坐标按 TTL 最长 8h 仍在注入——「关了还在用」）
+          gps_enabled: isGpsEnabled(),
         }),
         signal: controller.signal,
       })

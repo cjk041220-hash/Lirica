@@ -58,6 +58,9 @@ class ChatRequest(BaseModel):
     session_id: str = ""
     latitude: float | None = None
     longitude: float | None = None
+    # GPS 开关信号（体检「GPS 关不净」修复）：None = 旧客户端未表态
+    # （行为不变）；False = 用户显式关闭 GPS → 立即清后端缓存且不注入。
+    gps_enabled: bool | None = None
 
     @field_validator("message")
     @classmethod
@@ -126,6 +129,13 @@ async def _build_input_with_location(user_message: str, req: ChatRequest, sid: s
     v2 重构：不再注入记忆叙事。记忆由 pre_model_hook 通过
     llm_input_messages 动态注入，不进入 checkpoint。
     """
+    if req.gps_enabled is False:
+        # 显式关闭信号：立即清掉本会话缓存坐标（体检「GPS 关不净」：
+        # 此前前端开关只写 localStorage，后端缓存按 TTL 最长 8h 持续
+        # 注入旧坐标——关了还在用。清缓存 + 跳过注入，关即消失）。
+        await location_store.forget(sid)
+        return {"messages": [HumanMessage(content=user_message)]}
+
     if req.latitude is not None and req.longitude is not None:
         await location_store.update(sid, req.latitude, req.longitude)
 
