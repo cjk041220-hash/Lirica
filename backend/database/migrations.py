@@ -54,7 +54,7 @@ log = get_logger(__name__)
 #       remember 为 NULL）：「小汐为什么记得这个」可追溯（D6）；
 #     prev_content —— 覆盖前的旧文本（单层快照）：矛盾纠正后能回看
 #       旧说法（D5 的轻量版本，不做完整版本链）。
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -527,7 +527,8 @@ MEMORY_EXTRACT_STATE_SQL = """
         id               INTEGER PRIMARY KEY CHECK (id = 1),
         last_message_id  INTEGER NOT NULL DEFAULT 0,
         last_run_at      TEXT,
-        health_warned_at TEXT
+        health_warned_at TEXT,
+        fail_count       INTEGER NOT NULL DEFAULT 0
     );
 """
 
@@ -574,6 +575,45 @@ async def _migrate_v12(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[12] = _migrate_v12
+
+
+# ── v13 迁移：衰减弱信号 + 提取卡死死信 ──────────────────────
+
+async def _migrate_v13(conn: aiosqlite.Connection) -> None:
+    """v13: memories.hit_count（衰减弱信号）+ memory_extract_state.fail_count（解析死信）。
+
+    ALTER TABLE ADD COLUMN 逐列守卫（幂等）。背景（2026-08-01 第三轮
+    体检阻塞项）：
+    - 分层衰减的唯一燃料是 access_count，而它唯一的增量点在主动
+      recall——主消费路径（叙事注入）按铁律 passive → 稳态下几乎所有
+      记忆 access_count 永远为 0，90 天后连同「芒果过敏」「重要约定」
+      这类天天被注入的高重要事实一起被归档，core 晋升实际不可达。
+      hit_count 计「被系统浮现」次数（含被动读取），只做衰减燃料，
+      不参与相关性排序（排序的 passive 纪律保持不动）；
+    - 后台提取 LLM 输出不可解析时无限重试同一批：输出确定性损坏的
+      批次（如满载 8 动作 JSON 撞上 max_tokens 截断）会让水位线永远
+      不推进、提取通道永久空转。fail_count 计连续解析失败次数，达
+      3 次死信该批并推进水位线。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    mem_cols = {row[1] for row in await cursor.fetchall()}
+    if "hit_count" not in mem_cols:
+        await conn.execute(
+            "ALTER TABLE memories ADD COLUMN hit_count INTEGER DEFAULT 0"
+        )
+
+    cursor = await conn.execute("PRAGMA table_info(memory_extract_state)")
+    state_cols = {row[1] for row in await cursor.fetchall()}
+    if "fail_count" not in state_cols:
+        await conn.execute(
+            "ALTER TABLE memory_extract_state ADD COLUMN fail_count INTEGER DEFAULT 0"
+        )
+
+    await conn.commit()
+    log.info("迁移 v13 完成：memories.hit_count + memory_extract_state.fail_count")
+
+
+_migrations[13] = _migrate_v13
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

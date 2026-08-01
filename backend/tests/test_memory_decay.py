@@ -67,6 +67,131 @@ async def test_decay_promote_before_archive_exclusive(memory_mgr, tmp_db):
     assert result == {"promoted": 1, "archived": 1}
 
 
+# ── v13 双信号衰减：hit_count（衰减弱信号）───────────────────
+#
+# 核心回归（2026-08-01 体检阻塞项 #1）：v13 之前衰减只烧 access_count，
+# 而它唯一的增量点在主动 recall——主消费路径（叙事注入）按铁律 passive
+# → 稳态下几乎所有记忆 access_count 永远为 0，90 天后连同天天被注入的
+# 高重要事实一起被冷藏，core 晋升实际不可达。hit_count 计「被浮现」
+# 次数（含被动读取），只作衰减燃料，不参与相关性排序。
+
+
+async def test_passive_recall_counts_hits_not_access(memory_mgr, tmp_db):
+    """passive recall：hit_count +1，access_count / last_used_at 不动。
+
+    排序的 passive 纪律保持（防越注入越热门的正反馈闭环），衰减燃料
+    照常收下——两件事分开钉。
+    """
+    await _insert_raw(tmp_db, "m1", "冷冷对芒果过敏", "冷冷的信息", _days_ago(5))
+
+    await memory_mgr.recall(passive=True)
+
+    cursor = await tmp_db.execute(
+        "SELECT access_count, hit_count, last_used_at FROM memories WHERE id = 'm1'"
+    )
+    access, hits, last_used = await cursor.fetchone()
+    assert access == 0
+    assert hits == 1
+    assert last_used == _days_ago(5)  # 仍是入库值，未被被动读取刷新
+
+
+async def test_active_recall_counts_both_signals(memory_mgr, tmp_db):
+    """主动召回：access_count 与 hit_count 同时 +1。"""
+    await _insert_raw(tmp_db, "m1", "冷冷喜欢喝椰子水", "喜好", _days_ago(5))
+
+    await memory_mgr.recall(passive=False)
+
+    cursor = await tmp_db.execute(
+        "SELECT access_count, hit_count FROM memories WHERE id = 'm1'"
+    )
+    access, hits = await cursor.fetchone()
+    assert access == 1
+    assert hits == 1
+
+
+async def test_surface_paths_count_hits(memory_mgr, tmp_db):
+    """recent / top_core 浮现一次各 +1 hit_count，不碰 access_count。"""
+    await _insert_raw(tmp_db, "r1", "近事", "日常", _days_ago(1))
+    await _insert_raw(tmp_db, "c1", "核心", "喜好", _days_ago(60), access=9, status="core")
+
+    await memory_mgr.recent(limit=5)
+    await memory_mgr.top_core(limit=1)
+
+    cursor = await tmp_db.execute(
+        "SELECT id, access_count, hit_count FROM memories ORDER BY id"
+    )
+    rows = {r[0]: (r[1], r[2]) for r in await cursor.fetchall()}
+    # c1 被 recent（谓词含 core）和 top_core 各浮现一次；r1 只被 recent 浮现
+    assert rows["c1"] == (9, 2)   # access 原值不动，hit 两次
+    assert rows["r1"] == (0, 1)
+
+
+async def test_hits_protect_from_archive(memory_mgr, tmp_db):
+    """access=0 但 hit_count 高的旧记忆不归档——阻塞项 #1 的核心场景：
+    「芒果过敏」天天被叙事注入，修复前 90 天到期即冷藏。"""
+    await tmp_db.execute(
+        """INSERT INTO memories
+           (id, content, category, created_at, last_used_at,
+            access_count, hit_count, status)
+           VALUES ('m1', '冷冷对芒果过敏', '冷冷的信息', ?, ?, 0, 50, 'active')""",
+        (_days_ago(100), _days_ago(100)),
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.apply_status_decay()
+
+    assert result["archived"] == 0
+    cursor = await tmp_db.execute("SELECT status FROM memories WHERE id = 'm1'")
+    assert (await cursor.fetchone())[0] == "active"
+
+
+async def test_zero_signal_memory_still_archives(memory_mgr, tmp_db):
+    """双信号都为零才冷藏：衰减机器本身仍然运转（不是废了归档）。"""
+    await tmp_db.execute(
+        """INSERT INTO memories
+           (id, content, category, created_at, last_used_at,
+            access_count, hit_count, status)
+           VALUES ('m1', '三个月前随口一句', '日常', ?, ?, 0, 0, 'active')""",
+        (_days_ago(100), _days_ago(100)),
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.apply_status_decay()
+
+    assert result == {"promoted": 0, "archived": 1}
+
+
+async def test_hits_can_promote_core(memory_mgr, tmp_db):
+    """被系统高频浮现（hit≥90）的记忆也能晋升 core——修复前 core 晋升
+    不可达，narrative 保底席位是死代码。"""
+    await tmp_db.execute(
+        """INSERT INTO memories
+           (id, content, category, created_at, last_used_at,
+            access_count, hit_count, status)
+           VALUES ('m1', '冷冷在学法律', '冷冷的信息', ?, ?, 0, 95, 'active')""",
+        (_days_ago(40), _days_ago(40)),
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.apply_status_decay()
+
+    assert result == {"promoted": 1, "archived": 0}
+    cursor = await tmp_db.execute("SELECT status FROM memories WHERE id = 'm1'")
+    assert (await cursor.fetchone())[0] == "core"
+
+
+async def test_important_category_exempt_from_archive(memory_mgr, tmp_db):
+    """「重要的事」类别豁免自动归档：双信号全零、超龄也不冷藏——
+    重要约定只允许手动删除/覆盖，永不自动遗忘。"""
+    await _insert_raw(tmp_db, "m1", "约定一起去看极光", "重要的事", _days_ago(200), access=0)
+
+    result = await memory_mgr.apply_status_decay()
+
+    assert result["archived"] == 0
+    cursor = await tmp_db.execute("SELECT status FROM memories WHERE id = 'm1'")
+    assert (await cursor.fetchone())[0] == "active"
+
+
 # ── v10 三同步:晋升后 add 去重仍生效 ─────────────────────────
 
 

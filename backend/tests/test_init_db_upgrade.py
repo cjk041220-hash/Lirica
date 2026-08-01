@@ -62,6 +62,7 @@ async def test_init_db_upgrades_legacy_v1_database(tmp_path):
         assert "source" in columns  # v12 以新语义加回（来源追踪，与 v1 死字段无继承）
         assert "updated_at" in columns  # v12 覆盖留痕
         assert "prev_content" in columns  # v12 覆盖留痕
+        assert "hit_count" in columns  # v13 衰减弱信号
         assert "time" not in columns
 
         # 2. 旧数据完整保留，time 已映射为 created_at

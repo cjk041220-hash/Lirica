@@ -15,6 +15,7 @@ async def tmp_db(tmp_path):
             id TEXT PRIMARY KEY, content TEXT NOT NULL,
             category TEXT DEFAULT '其他', created_at TEXT NOT NULL,
             last_used_at TEXT, access_count INTEGER DEFAULT 0,
+            hit_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active',
             updated_at TEXT, source TEXT, prev_content TEXT
         );

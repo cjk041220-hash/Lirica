@@ -598,3 +598,45 @@ async def test_recall_at_scale_1000(memory_mgr, tmp_db):
         "SELECT access_count FROM memories WHERE id = 'mtopic'"
     )
     assert (await cursor.fetchone())[0] == before
+
+
+# ── 清空与清空前备份（v13 阻塞项 #2：archived 不得被静默销毁）──
+
+
+async def _seed_archived(tmp_db):
+    """造一条冷藏记忆（读面不可见，但行在库里）。"""
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES ('x1', '冷藏的记忆', '日常', '2026-01-01 10:00', 'archived')"
+    )
+    await tmp_db.commit()
+
+
+async def test_clear_counts_archived_too(memory_mgr, tmp_db):
+    """clear 返回的清除量含 archived——旧版只数 active+core，删全表
+    却少报删除量（冷藏也是记忆，用户有权知道它被删了）。"""
+    await memory_mgr.add("日常", "活跃记忆")
+    await _seed_archived(tmp_db)
+
+    assert await memory_mgr.clear() == 2
+
+    cursor = await tmp_db.execute("SELECT COUNT(*) FROM memories")
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_backup_before_clear_includes_archived(memory_mgr, tmp_db, tmp_path):
+    """清空前备份含 archived——否则冷藏记忆在清空时永久销毁且无备份，
+    违反「遗忘是可回溯的冷藏，不是销毁」（v13 阻塞项 #2 核心回归）。"""
+    await memory_mgr.add("日常", "活跃记忆")
+    await _seed_archived(tmp_db)
+
+    backup_path = await memory_mgr.backup_before_clear(backup_dir=tmp_path)
+
+    data = json.loads(backup_path.read_text(encoding="utf-8"))
+    contents = {m["content"] for m in data["memories"]}
+    assert {"活跃记忆", "冷藏的记忆"} <= contents
+
+    # 备份 → 清空 → 冷库行仍可从备份找回（端到端不丢数据）
+    await memory_mgr.clear()
+    cursor = await tmp_db.execute("SELECT COUNT(*) FROM memories")
+    assert (await cursor.fetchone())[0] == 0

@@ -127,6 +127,31 @@ class MemoryManager:
     def __init__(self, db: aiosqlite.Connection):
         self._db = db
 
+    # ── 内部工具 ────────────────────────────────────────────
+
+    async def _count_hits(self, ids: list[str]) -> None:
+        """hit_count +1（v13 衰减弱信号）。空列表无操作。
+
+        hit_count 记录「这条记忆被系统浮现到小汐眼前多少次」——被动
+        读取（叙事注入、小本本翻旧事、core 保底席位）也计数，但它只
+        作 apply_status_decay 的衰减燃料，**永不进入** _relevance_score
+        排序。排序仍只认 access_count（主动想起），那条 passive 纪律
+        防的是「越注入越热门」正反馈闭环（见 recall() 注释）；衰减是
+        另一件事——一条天天被注入的记忆不该因为「不是被主动 recall
+        的」就在 90 天后被冷藏。v13 之前的衰减只有 access_count 一个
+        燃料源，而它唯一的增量点在非被动 recall，主消费路径（叙事注入）
+        按铁律 passive → 稳态下几乎所有记忆都会到期归档，包括高重要
+        事实。hit_count 就是给衰减机器补上的燃料。
+        """
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        await self._db.execute(
+            f"UPDATE memories SET hit_count = hit_count + 1 WHERE id IN ({placeholders})",
+            ids,
+        )
+        await self._db.commit()
+
     # ── 写入 ────────────────────────────────────────────────
 
     async def add(
@@ -228,10 +253,15 @@ class MemoryManager:
         return cursor.rowcount > 0
 
     async def clear(self) -> int:
-        """清空所有记忆。返回清除的条数。"""
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM memories WHERE status IN ('active', 'core')"
-        )
+        """清空所有记忆（含 archived 冷藏行）。返回清除的条数。
+
+        计数含 archived（2026-08-01 体检修复）：旧版只数 active+core，
+        而删除删的是全表——冷藏记忆被删却不计入返回数字，用户看到的
+        清除量比真实删除量少。冷藏也是记忆。调用前应经过
+        backup_before_clear()（其备份同样含 archived，否则冷藏行在
+        清空时被永久销毁）。
+        """
+        cursor = await self._db.execute("SELECT COUNT(*) FROM memories")
         count = (await cursor.fetchone())[0]
         await self._db.execute("DELETE FROM memories")
         await self._db.commit()
@@ -239,16 +269,23 @@ class MemoryManager:
 
     # ── 备份 / 导出 ─────────────────────────────────────────
 
-    async def backup_before_clear(self) -> Path:
-        """清空前将所有记忆导出为 JSON 备份文件，返回备份路径。
+    async def backup_before_clear(self, backup_dir: Path | None = None) -> Path:
+        """清空前将全部记忆（含 archived）导出为 JSON 备份文件，返回备份路径。
+
+        备份含冷藏记忆（include_archived=True，2026-08-01 体检阻塞项
+        修复）：clear() 删的是全表，若备份只导 active+core，archived
+        会在「清空」时被永久销毁且无备份——直接违反 apply_status_decay
+        立下的「遗忘是可回溯的冷藏，不是销毁」不变量。
 
         备份目录 700、文件 600（含敏感数据，禁止同机其他用户读取）。
+        backup_dir 供测试注入，生产默认 data/backups/。
         """
         from database.core import restrict_backup_permissions
 
-        data = await self.export_json()
+        data = await self.export_json(include_archived=True)
 
-        backup_dir = Path(__file__).parent.parent / "data" / "backups"
+        if backup_dir is None:
+            backup_dir = Path(__file__).parent.parent / "data" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         restrict_backup_permissions(backup_dir, is_dir=True)
 
@@ -296,10 +333,14 @@ class MemoryManager:
         默认（passive=False）更新被召回记忆的 last_used_at 和 access_count，
         记录真实的「被想起」信号。
 
-        passive=True 时为纯只读，不触碰任何计数器——供 NarrativeBuilder 等
-        系统被动读取的场景使用。否则每次 LLM 调用前的叙事注入都会给
+        passive=True 时不触碰 last_used_at / access_count——供 NarrativeBuilder
+        等系统被动读取的场景使用。否则每次 LLM 调用前的叙事注入都会给
         top-K 记忆刷新一轮热度和 last_used_at，形成「越被注入越热门、
         越热门越被注入」的正反馈闭环，把同样的记忆永久钉在榜首。
+
+        计数器双信号（v13）：无论 passive 与否都会 +1 hit_count——它
+        只作衰减燃料（apply_status_decay），不进上面的排序键，因此不
+        破坏被动纪律。详见 _count_hits。
         """
         if category:
             cursor = await self._db.execute(
@@ -343,16 +384,29 @@ class MemoryManager:
         matched.sort(key=_sort_key, reverse=True)
         matched = matched[:limit]
 
-        # 更新 last_used_at 和 access_count（passive 模式为被动读取，跳过）
-        if matched and not passive:
+        # 计数器（双信号，v13）：
+        # - access_count / last_used_at：仅主动召回（passive=False）更新，
+        #   参与 _relevance_score 排序——被动注入刷这两个会形成正反馈
+        #   闭环，铁律禁止；
+        # - hit_count：任何读取（含 passive）都 +1，只做衰减燃料，
+        #   不进排序（见 _count_hits 的设计说明）。
+        if matched:
             ids = [m["id"] for m in matched]
             placeholders = ",".join("?" for _ in ids)
-            await self._db.execute(
-                f"""UPDATE memories
-                    SET last_used_at = ?, access_count = access_count + 1
-                    WHERE id IN ({placeholders})""",
-                (_now(), *ids),
-            )
+            if passive:
+                await self._db.execute(
+                    f"UPDATE memories SET hit_count = hit_count + 1 "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                )
+            else:
+                await self._db.execute(
+                    f"""UPDATE memories
+                        SET last_used_at = ?, access_count = access_count + 1,
+                            hit_count = hit_count + 1
+                        WHERE id IN ({placeholders})""",
+                    (_now(), *ids),
+                )
             await self._db.commit()
 
         return matched
@@ -360,7 +414,10 @@ class MemoryManager:
     async def recall_by_category(self, category: str, limit: int = 5) -> list[dict]:
         """按精确类别查询记忆（用于 remember 工具的矛盾检测）。
 
-        与 recall() 不同，这里用 LIKE 模糊匹配且不更新 access_count。
+        与 recall() 不同，这里用 LIKE 模糊匹配且不更新任何计数器
+        （access_count / hit_count 都不碰）——这是写入路径的内部查找
+        （「这条新事实有没有和旧记忆矛盾」），不是把记忆浮现到小汐
+        眼前，不应计入浮现次数。
         """
         cursor = await self._db.execute(
             """SELECT * FROM memories
@@ -374,7 +431,9 @@ class MemoryManager:
     async def recent(self, limit: int = 30) -> list[dict]:
         """返回最近 N 条活跃记忆，按时间正序排列（最早的在前）。
 
-        用于叙事构建器注入系统提示词。不更新 last_used_at（被动读取）。
+        用于叙事构建器注入系统提示词。被动读取：不更新 last_used_at /
+        access_count，但计 hit_count（v13 衰减弱信号——被叙事浮现过的
+        记忆不该到期冷藏）。
         """
         cursor = await self._db.execute(
             """SELECT * FROM (
@@ -385,7 +444,9 @@ class MemoryManager:
             (limit,),
         )
         rows = await cursor.fetchall()
-        return rows_to_dicts(cursor, rows)
+        mems = rows_to_dicts(cursor, rows)
+        await self._count_hits([m["id"] for m in mems])
+        return mems
 
     async def old_memories(self, min_age_days: int = 90, limit: int = 5,
                            exclude_ids: list[str] | None = None) -> list[dict]:
@@ -394,6 +455,8 @@ class MemoryManager:
         纯被动：不更新 last_used_at / access_count。调用方是记忆回声
         检测器——若刷热度，被 echo 的记忆会在 _relevance_score 里
         突然「复活」霸榜（L220-223 注释记录的正反馈闭环），必须只读。
+        但计 hit_count（v13）：被翻出来回声的记忆正是「系统浮现过」
+        的典型，衰减燃料该收下这个信号。
 
         全库日期为 TEXT "%Y-%m-%d %H:%M"，字典序即时间序，
         created_at <= cutoff 就是年龄达标；RANDOM() 保证每次采样
@@ -420,7 +483,9 @@ class MemoryManager:
                 (cutoff, limit),
             )
         rows = await cursor.fetchall()
-        return rows_to_dicts(cursor, rows)
+        mems = rows_to_dicts(cursor, rows)
+        await self._count_hits([m["id"] for m in mems])
+        return mems
 
     async def list_categories(self) -> dict[str, int]:
         """列出所有类别及活跃记忆数量。"""
@@ -457,8 +522,9 @@ class MemoryManager:
     async def top_core(self, limit: int = 1) -> list[dict]:
         """按最近使用取 core 记忆（叙事保底席位用）。
 
-        纯只读，不刷热度（同 old_memories 的被动纪律——若刷，core
-        会在 _relevance_score 里自我加冕，违背被动读取原则）。
+        不刷热度（同 old_memories 的被动纪律——若刷 access_count，
+        core 会在 _relevance_score 里自我加冕，违背被动读取原则）；
+        但计 hit_count（v13）：保底席位的浮现是衰减燃料，不是排名信号。
         """
         cursor = await self._db.execute(
             """SELECT * FROM memories WHERE status = 'core'
@@ -466,17 +532,27 @@ class MemoryManager:
             (limit,),
         )
         rows = await cursor.fetchall()
-        return rows_to_dicts(cursor, rows)
+        mems = rows_to_dicts(cursor, rows)
+        await self._count_hits([m["id"] for m in mems])
+        return mems
 
     async def apply_status_decay(self) -> dict:
         """分层衰减：active→core（高频晋升）/ active→archived（低频遗忘）。
+
+        双信号燃料（v13）：access_count（被主动想起）+ hit_count（被
+        系统浮现，含被动注入）。修复前衰减只烧 access_count，而它唯一
+        的增量点在主动 recall——主消费路径（叙事注入）按铁律 passive
+        → 稳态下「芒果过敏」这类天天被注入的高重要事实也会在 90 天后
+        被冷藏，core 晋升实际不可达、保底席位是死代码。hit_count 补上
+        了衰减燃料，且不参与排序（见 _count_hits）。
 
         阈值见模块尾部常量。设计纪律：
         - 只从 active 搬——core 不降级、archived 不自动复活；冷冷重提
           旧事时 add() 插新行开始新生命周期（archived 已释放 v10 唯一
           索引槽位）；
-        - 晋升先于归档执行（阈值互斥：access≥5 vs access≤1，顺序只是
-          为语义清晰）；
+        - 晋升先于归档执行（顺序为语义清晰，两条 SQL 互不干涉）；
+        - 「重要的事」类别豁免归档——高重要事实永不自动冷藏，只允许
+          手动删除/覆盖（类别名与提取 prompt 的类别表一致）；
         - archived 从一切读面消失（recall/recent/count/… 谓词只含
           active+core），但行仍在库里——遗忘是可回溯的冷藏，不是销毁。
 
@@ -493,15 +569,21 @@ class MemoryManager:
 
         cursor = await self._db.execute(
             """UPDATE memories SET status = 'core'
-               WHERE status = 'active' AND access_count >= ? AND created_at <= ?""",
-            (_CORE_MIN_ACCESSES, core_cutoff),
+               WHERE status = 'active'
+                 AND (access_count >= ? OR hit_count >= ?)
+                 AND created_at <= ?""",
+            (_CORE_MIN_ACCESSES, _CORE_MIN_HITS, core_cutoff),
         )
         promoted = cursor.rowcount
 
+        exempt = ",".join("?" for _ in _ARCHIVE_EXEMPT_CATEGORIES)
         cursor = await self._db.execute(
-            """UPDATE memories SET status = 'archived'
-               WHERE status = 'active' AND access_count <= ? AND created_at <= ?""",
-            (_ARCHIVE_MAX_ACCESSES, archive_cutoff),
+            f"""UPDATE memories SET status = 'archived'
+                WHERE status = 'active'
+                  AND (access_count + hit_count) <= ?
+                  AND created_at <= ?
+                  AND category NOT IN ({exempt})""",
+            (_ARCHIVE_MAX_ACCESSES, archive_cutoff, *_ARCHIVE_EXEMPT_CATEGORIES),
         )
         archived = cursor.rowcount
 
@@ -550,13 +632,18 @@ class MemoryManager:
 
 
 # ── 分层衰减阈值 ──────────────────────────────────────────────
-# 晋升 core：被主动想起 ≥5 次且存在 ≥30 天——经月反复用到的才算
-# 核心画像；归档：≤1 次且 ≥90 天——三个月几乎没被想起就冷藏。
+# 晋升 core：被主动想起 ≥5 次，或被系统浮现 ≥90 次（v13 hit_count：
+#   约合一个月里平均每天被叙事浮现 3 次），且存在 ≥30 天——经月反复
+#   用到的才算核心画像。
+# 归档：主动+被动信号合计 ≤1 次且 ≥90 天——三个月既没被想起、也没
+#   被注入过才冷藏。「重要的事」类别豁免（高重要事实永不自动冷藏）。
 # 衰减 job 挂心跳维护（_periodic_maintenance，2h），日志输出计数便于调参。
 _CORE_MIN_ACCESSES = 5
+_CORE_MIN_HITS = 90
 _CORE_MIN_AGE_DAYS = 30
 _ARCHIVE_MAX_ACCESSES = 1
 _ARCHIVE_MIN_AGE_DAYS = 90
+_ARCHIVE_EXEMPT_CATEGORIES = frozenset({"重要的事"})
 
 
 # ── 记忆健康检查阈值 ─────────────────────────────────────────────
