@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconCalendar from '../assets/icons/IconCalendar'
-import { apiFetch } from '../api/client'
 import { fetchEvents, createEvent, updateEvent, deleteEvent } from '../api/events'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 

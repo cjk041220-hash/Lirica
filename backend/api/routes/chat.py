@@ -463,11 +463,12 @@ async def clear_memories(
     if mem is None:
         raise HTTPException(503, "记忆系统未就绪")
 
-    # 清空前自动备份
+    # 清空前自动备份（含 archived 冷藏记忆，v13 修复）
     backup_path = await mem.backup_before_clear()
 
     count = await mem.clear()
-    return {"status": "ok", "cleared": count, "backup": str(backup_path)}
+    # 只回文件名不回完整路径：避免向前端泄漏服务器内部目录结构
+    return {"status": "ok", "cleared": count, "backup": backup_path.name}
 
 
 @router.get("/memories")
