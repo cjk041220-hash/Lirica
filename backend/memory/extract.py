@@ -8,8 +8,10 @@
 
 本模块 = 提取流水线 + 水位线断点：
 - 水位线存 memory_extract_state.last_message_id（chat_messages.id
-  AUTOINCREMENT 单调，跨重启持久）；从未运行过时视为 0，首次运行
-  自动回填全部历史消息；
+  AUTOINCREMENT 单调，跨重启持久）；从未运行过时视为 0。**有界、
+  不回看**（体检 T1-8 修 docstring 对齐实际行为）：首次运行只消费
+  最新 50 条并把水位线直接推到批尾，更早的历史永久跳过——提取价值
+  随对话变旧衰减，不追历史是有意设计，不是缺陷；
 - 心跳每 2h 调 extract_new_memories()：无新消息 → 纯读检查直接返回
   （近零开销）；有新消息 → 取最近一批（限 50 条 / 4000 字，超长从
   旧消息端截断），连同现有记忆 top-10 作冲突上下文，轻量 LLM 决策
@@ -187,13 +189,39 @@ def _build_prompt(messages: list[str], existing: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _coerce_content(text) -> str:
+    """LLM 响应 content 归一化为纯文本（体检 T1-2：堵死信机制的后门）。
+
+    OpenAI 兼容协议允许 content 是多段 list（[{"type": "text", "text": ...}, ...]，
+    thinking 模型/特定 langchain 版本会产生）——修复前 `(text or "").strip()`
+    对非空 list 直接抛 AttributeError，而 _parse_actions 的调用在 try 块
+    之外：异常不计 fail_count、不推进水位线 → 每 2h 原样重放同一批，
+    **恰好复现死信机制要消灭的永久卡死，只是换了个入口**。
+
+    归一化优先于死信：list 里的 text 块拼回纯文本，其中可解析的 JSON
+    照常提取（不该因为传输形态把有效输出送进死信永久丢失）；抽不出
+    text 块 → 空串 → _parse_actions 返回 None → 走正常的失败计数/死信。
+    """
+    if isinstance(text, list):
+        parts = []
+        for part in text:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return "".join(parts)
+    return str(text or "")
+
+
 def _parse_actions(text) -> list[dict] | None:
     """容错解析 LLM 输出的 JSON 数组（剥离 ```json 围栏，取首个 [ ] 块）。
 
     None 与 [] 语义不同：[] 是 LLM 判定无话可记（合法，推进水位线）；
-    None 是输出格式坏了（不推进，下次重试同一批）。
+    None 是输出格式坏了（不推进，计入 fail_count，达阈值死信弃批）。
+    入参先经 _coerce_content 归一化——任何响应形态都不会在本函数内
+    抛异常（防绕过死信的卡死后门，见 _coerce_content 说明）。
     """
-    s = (text or "").strip()
+    s = _coerce_content(text).strip()
     start, end = s.find("["), s.rfind("]")
     if start == -1 or end <= start:
         return None
@@ -259,8 +287,11 @@ async def extract_new_memories(conn=None) -> dict:
 
     由心跳 _periodic_maintenance 每 2h 调用（无新消息时纯读，近零开销）。
     返回值供日志与测试断言：
-    {"processed": 送入 LLM 的消息条数, "added": 新增, "updated": 更新,
-     "skipped": 跳过, "llm_error": 是否失败（水位线未推进）,
+    {"processed": 成功消费时的消息条数（失败/死信路径为 0）,
+     "added": 新增, "updated": 更新, "skipped": 跳过,
+     "llm_error": 本批未产出（LLM 调用失败 / 输出不可解析 / 死信弃批
+     均置真；注意死信时水位线**仍推进**——这是它与设计意图的区别：
+     其余 llm_error=True 路径水位线保持待重试）,
      "dead_letter": 是否死信丢弃了本批（v13：连续解析失败 ≥3 次后
      放弃该批并推进水位线，防提取通道永久卡死）}
     """

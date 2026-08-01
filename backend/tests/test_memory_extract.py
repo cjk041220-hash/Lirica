@@ -1,9 +1,12 @@
 """记忆后台提取 + 健康检查 回归（2026-08-01 架构评审 D1/D2/D3）。
 
 覆盖：
-- 水位线语义：首次运行回填全部、成功推进、无新消息 no-op、失败保持
+- 水位线语义：首次运行消费待处理批（有界、不回看）、成功推进、
+  无新消息 no-op、失败保持、失败时既有水位线不被触碰
 - 提取决策：add / update / noop dispatch、预算护栏（5 add / 3 update）
 - 容错：LLM 调用异常、输出不可解析 → 水位线不推进（下次重试）
+- 卡死死信（v13）：连续解析失败 ≥3 次弃批推进 / 成功归零 / 异常不计次
+- 响应形态归一化（T1-2）：多段 list content 回收 text 块、无 text 计失败
 - 批次预算：50 条消息 / 4000 字上限
 - 内容长度上限（manager.add / update_content 截断，D4）
 - 健康检查：指标（有对话零记忆 / 记忆停滞 / 正常）+ 24h 节流告警
@@ -71,8 +74,11 @@ async def test_watermark_zero_when_no_state(tmp_db):
     assert await extract.get_watermark(tmp_db) == 0
 
 
-async def test_extract_backfills_all_history(tmp_db, fake_llm):
-    """首次运行：全部历史消息送入提取，add 落库，水位线推进到最大 id。"""
+async def test_first_run_consumes_pending_batch(tmp_db, fake_llm):
+    """首次运行（水位线 0）：待处理批次送入提取，add 落库，水位线推进
+    到批内最大 id。（命名诚实化：原 test_extract_backfills_all_history
+    暗示「回填全部历史」，实际 >50 条的历史会被水位线跳过，见模块
+    docstring 的有界设计说明。）"""
     await _seed_messages(tmp_db, ["冷冷说她喜欢喝椰子水", "今天下雨了"])
     fake_llm(text='[{"action": "add", "category": "冷冷喜欢的", "content": "冷冷喜欢喝椰子水"}]')
 
@@ -278,6 +284,84 @@ async def test_extract_success_resets_fail_count(tmp_db, fake_llm):
     assert result["llm_error"] is False
     assert await _get_fail_count(tmp_db) == 0
     assert await extract.get_watermark(tmp_db) == 1
+
+
+# ── 响应形态归一化（T1-2：堵死信机制的解析后门）──────────────
+#
+# 修复前：response.content 为非 str（OpenAI 兼容多段 list）时，
+# _parse_actions 首行 .strip() 抛 AttributeError——调用在 try 块外，
+# 异常不计次不推进 → 每 2h 原样重放同一批，绕过死信永久卡死。
+
+
+async def test_extract_list_content_text_blocks_recovered(tmp_db, fake_llm):
+    """多段 list content 里的 text 块被归一化回收——有效 JSON 不该被
+    送进死信永久丢失。"""
+    await _seed_messages(tmp_db, ["冷冷说她最近在学画画"])
+    fake_llm(text=[
+        {"type": "text", "text": '[{"action": "add", "category": "冷冷的信息", '
+                                  '"content": "冷冷最近在学画画"}]'},
+    ])
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["added"] == 1           # 归一化生效，不是死信
+    assert result["dead_letter"] is False
+    assert await extract.get_watermark(tmp_db) == 1
+
+
+async def test_extract_list_content_no_text_counts_failure(tmp_db, fake_llm):
+    """list 里抽不出 text 块（如纯 image_url 段）→ 归一化为空 → 计解析
+    失败（走正常失败计数，不是异常后门）。"""
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(text=[{"type": "image_url", "image_url": {"url": "..."}}])
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["llm_error"] is True
+    assert result["dead_letter"] is False
+    assert await extract.get_watermark(tmp_db) == 0
+    assert await _get_fail_count(tmp_db) == 1
+
+
+async def test_extract_none_content_counts_failure(tmp_db, fake_llm):
+    """content=None → 空串 → 计解析失败（修复前 None 也会走 (text or "")
+    兜住，本条钉死该行为不被归一化改动破坏）。"""
+    await _seed_messages(tmp_db, ["重要的话"])
+    fake_llm(text=None)
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["llm_error"] is True
+    assert await extract.get_watermark(tmp_db) == 0
+    assert await _get_fail_count(tmp_db) == 1
+
+
+async def test_extract_parse_failure_preserves_watermark(tmp_db, fake_llm):
+    """水位线已在 42 时解析失败 → fail_count 计数但水位线保持 42
+    （_set_fail_count 的 ON CONFLICT 只更新 fail_count，不碰水位线）。"""
+    # 先正常消费一批把水位线推到 1，再造 41 条空档到 42 不现实——
+    # 直接改状态行模拟「水位线 42」的既成状态
+    await _seed_messages(tmp_db, ["第一条"])
+    fake_llm(text="[]")
+    await extract.extract_new_memories(tmp_db)
+    await tmp_db.execute(
+        "UPDATE memory_extract_state SET last_message_id = 42 WHERE id = 1"
+    )
+    await tmp_db.commit()
+    await _seed_messages(tmp_db, ["第四十三条"])  # id=2 > 水位线？不——id=2 < 42，不会被取
+    # 种一条 id > 42 的消息才能被 _fetch_pending 取到
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (id, session_id, role, content, created_at) "
+        "VALUES (43, 's-x', 'user', '新消息', '2026-08-01 10:00')"
+    )
+    await tmp_db.commit()
+
+    fake_llm(text="不是 JSON")
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["llm_error"] is True
+    assert await extract.get_watermark(tmp_db) == 42   # 未被 _set_fail_count 触碰
+    assert await _get_fail_count(tmp_db) == 1
 
 
 async def test_extract_llm_exception_not_counted_as_parse_failure(tmp_db, fake_llm):
