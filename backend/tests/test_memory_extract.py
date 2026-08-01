@@ -66,8 +66,11 @@ async def _seed_messages(tmp_db, texts):
 
 
 async def _fetch_memories(tmp_db):
+    # 只取活跃读面：superseded 历史行（v15 覆盖留痕）是内部账本，
+    # 提取语义断言不该把它算进「记忆条数」
     cursor = await tmp_db.execute(
-        "SELECT id, category, content FROM memories ORDER BY created_at, rowid"
+        "SELECT id, category, content FROM memories "
+        "WHERE status IN ('active', 'core') ORDER BY created_at, rowid"
     )
     return await cursor.fetchall()
 

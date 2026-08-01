@@ -176,6 +176,15 @@ async def _periodic_maintenance():
     except Exception as e:
         log.error("记忆健康检查失败：%s", e)
 
+    # 记忆周期整合（dreaming-lite，体检 R1）：按类别合并近义重复记忆。
+    # 24h 节流 + 单次 ≤3 合并；业界共识动作（ChatGPT Dreaming / Letta
+    # sleep-time / LangMem consolidation），与小汐心跳维护窗口天然契合
+    try:
+        from memory.consolidate import consolidate_memories
+        await consolidate_memories()
+    except Exception as e:
+        log.error("记忆周期整合失败：%s", e)
+
 
 # ── 主动消息系统 ──────────────────────────────────────────────
 
