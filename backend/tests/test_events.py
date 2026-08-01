@@ -108,10 +108,11 @@ async def test_create_event_concurrent_same_key(events_db):
 
 
 async def test_get_active_events_ordered_by_date(events_db):
-    """活跃事件按发生日期正序返回。"""
-    await _insert_event(events_db, "e1", "晚的事", "2026-09-01")
-    await _insert_event(events_db, "e2", "早的事", "2026-08-01")
-    await _insert_event(events_db, "e3", "已翻篇", "2026-07-01", status="archived")
+    """活跃事件按发生日期正序返回。日期用动态偏移（写死的未来日期
+    一过零点就变过去日期被读面过滤，2026-08-02 体检实锤）。"""
+    await _insert_event(events_db, "e1", "晚的事", _date_offset(30))
+    await _insert_event(events_db, "e2", "早的事", _date_offset(3))
+    await _insert_event(events_db, "e3", "已翻篇", _date_offset(-30), status="archived")
 
     events = await ev.get_active_events()
     assert [e["title"] for e in events] == ["早的事", "晚的事"]

@@ -1,7 +1,22 @@
-"""事件工具层测试 — create_event / list_events 的逻辑回归。"""
+"""事件工具层测试 — create_event / list_events 的逻辑回归。
+
+日期防老化：事件日期一律用 _d(N)（今天 + N 天的动态偏移），禁止写死
+具体日期——写死的「未来日期」一过零点就变成过去日期，全套变红
+（2026-08-02 体检实锤：8 个用例因写死 2026-08-01 集体阵亡）。
+"""
+import datetime
 from unittest.mock import patch
 
 import pytest
+
+from utils.timezone import HKT
+
+
+def _d(days: int) -> str:
+    """今天 + N 天的日期串（永不老化的事件日期）。"""
+    return (
+        datetime.datetime.now(HKT) + datetime.timedelta(days=days)
+    ).strftime("%Y-%m-%d")
 
 
 @pytest.fixture
@@ -20,7 +35,7 @@ async def test_create_event_happy_path(events_tool_db):
 
     result = await create_event.ainvoke({
         "title": "期中考试",
-        "event_date": "2026-08-01",
+        "event_date": _d(3),
         "event_type": "exam",
         "memo": "冷冷说考完想去庆祝",
     })
@@ -71,8 +86,8 @@ async def test_create_event_rejects_end_before_start(events_tool_db):
 
     result = await create_event.ainvoke({
         "title": "旅行",
-        "event_date": "2026-09-17",
-        "end_date": "2026-09-10",
+        "event_date": _d(47),
+        "end_date": _d(40),
     })
     assert "结束日期" in result
 
@@ -84,8 +99,8 @@ async def test_create_event_duplicate_returns_existing(events_tool_db):
     """回归：重复登记同一事件不产生重复行，提示「之前已经记下」。"""
     from tools.events import create_event
 
-    await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
-    second = await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
+    await create_event.ainvoke({"title": "期中考试", "event_date": _d(3)})
+    second = await create_event.ainvoke({"title": "期中考试", "event_date": _d(3)})
 
     assert "已经记下" in second
     assert "不用重复记" in second
@@ -98,8 +113,8 @@ async def test_create_event_shows_other_active_events(events_tool_db):
     """登记后展示其他活跃事件，让 LLM 自查换个说法的重复。"""
     from tools.events import create_event
 
-    await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
-    result = await create_event.ainvoke({"title": "周末爬山", "event_date": "2026-08-08"})
+    await create_event.ainvoke({"title": "期中考试", "event_date": _d(3)})
+    result = await create_event.ainvoke({"title": "周末爬山", "event_date": _d(10)})
 
     assert "期中考试" in result  # 旧事件展示在新事件返回里
     assert "同一件事" in result  # 自查引导
@@ -111,7 +126,7 @@ async def test_create_event_normalizes_bad_severity(events_tool_db):
 
     await create_event.ainvoke({
         "title": "小事",
-        "event_date": "2026-08-01",
+        "event_date": _d(3),
         "severity": "超级重要",
     })
     cursor = await events_tool_db.execute("SELECT severity FROM events")
@@ -133,17 +148,17 @@ async def test_list_events_shows_upcoming(events_tool_db):
     """列出活跃事件及日期范围。"""
     from tools.events import create_event, list_events
 
-    await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
+    await create_event.ainvoke({"title": "期中考试", "event_date": _d(3)})
     await create_event.ainvoke({
         "title": "日本旅行",
-        "event_date": "2026-09-10",
-        "end_date": "2026-09-17",
+        "event_date": _d(40),
+        "end_date": _d(47),
     })
 
     result = await list_events.ainvoke({})
     assert "期中考试" in result
     assert "日本旅行" in result
-    assert "2026-09-10 ~ 2026-09-17" in result  # 多天事件展示日期范围
+    assert f"{_d(40)} ~ {_d(47)}" in result  # 多天事件展示日期范围
 
 
 async def test_create_event_rejects_unknown_event_type(events_tool_db):
@@ -152,7 +167,7 @@ async def test_create_event_rejects_unknown_event_type(events_tool_db):
 
     result = await create_event.ainvoke({
         "title": "生日派对",
-        "event_date": "2026-09-01",
+        "event_date": _d(30),
         "event_type": "生日！！",
     })
     assert "exam" in result  # 提示合法枚举
@@ -183,10 +198,10 @@ async def test_create_event_respects_tombstone(events_tool_db):
     from utils import events as ev
     from tools.events import create_event
 
-    saved, _ = await ev.create_event("期中考试", "exam", "2026-08-01")
+    saved, _ = await ev.create_event("期中考试", "exam", _d(3))
     await ev.soft_delete_event(saved["id"])
 
-    result = await create_event.ainvoke({"title": "期中考试", "event_date": "2026-08-01"})
+    result = await create_event.ainvoke({"title": "期中考试", "event_date": _d(3)})
     assert "删掉过" in result                 # 归因文案，不是「没找到」也不是空转
     assert "日历" in result                   # 指明恢复路径
 
@@ -198,11 +213,11 @@ async def test_update_event_happy(events_tool_db):
     from utils import events as ev
     from tools.events import update_event
 
-    saved, _ = await ev.create_event("爬山", "trip", "2026-08-08")
+    saved, _ = await ev.create_event("爬山", "trip", _d(10))
     result = await update_event.ainvoke({
-        "event_id": saved["id"], "event_date": "2026-08-15",
+        "event_id": saved["id"], "event_date": _d(17),
     })
-    assert "改好啦" in result and "2026-08-15" in result
+    assert "改好啦" in result and _d(17) in result
 
 
 async def test_update_event_not_found_and_readonly(events_tool_db):
@@ -225,7 +240,7 @@ async def test_delete_event_happy(events_tool_db):
     from utils import events as ev
     from tools.events import delete_event, list_events
 
-    saved, _ = await ev.create_event("不去了的约", "appointment", "2026-08-20")
+    saved, _ = await ev.create_event("不去了的约", "appointment", _d(22))
     result = await delete_event.ainvoke({"event_id": saved["id"]})
     assert "划掉" in result
 
