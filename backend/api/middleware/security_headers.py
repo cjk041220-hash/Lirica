@@ -14,10 +14,15 @@ _SECURITY_HEADERS = [
     (b"referrer-policy", b"strict-origin-when-cross-origin"),
     # 现代浏览器已弃用内置 XSS 审计器，显式关闭避免它误伤（OWASP 现行建议）
     (b"x-xss-protection", b"0"),
+    # 字体两域名（fonts.googleapis.com 样式表 / fonts.gstatic.com 字体文件）
+    # 是展示体 ZCOOL KuaiLe 的加载链路（web/index.html 引用）——不放行则
+    # 生产 :8000 托管下字体永远加载失败、静默回落系统圆体（dev 无 CSP
+    # 不发作，体检 T1-3 实锤）。自托管字体落地后应回收这两域名收紧 CSP。
     (b"content-security-policy",
-     b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-     b"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
-     b"frame-ancestors 'none'; base-uri 'self'; object-src 'none'"),
+     b"default-src 'self'; script-src 'self'; "
+     b"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+     b"img-src 'self' data:; font-src 'self' data: https://fonts.gstatic.com; "
+     b"connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"),
 ]
 
 
