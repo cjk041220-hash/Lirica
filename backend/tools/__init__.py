@@ -18,7 +18,7 @@ from tools.diary import write_diary, read_diary, set_db_conn as set_diary_db_con
 from tools.tarot import tarot
 from tools.events import create_event, list_events, update_event, delete_event
 from tools.cycle import (
-    log_period, amend_period,
+    get_period_status, log_period, amend_period,
     set_prompt_refresh_callback as set_cycle_prompt_refresh_callback,
 )
 
@@ -68,6 +68,7 @@ def get_all_tools() -> list:
         list_events,
         update_event,
         delete_event,
+        get_period_status,
         log_period,
         amend_period,
     ]

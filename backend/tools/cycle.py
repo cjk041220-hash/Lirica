@@ -64,6 +64,46 @@ _BAD_DATE_MSG = "呜，日期格式好像不对……要用 YYYY-MM-DD 哦，比
 
 
 @tool
+async def get_period_status() -> str:
+    """查询小汐记着的生理期账本：最近几次开始日期、平均周期、预测的下次日期。
+
+    冷冷主动问生理期时用——「我上次什么时候来的」「下次大概什么时候」
+    「你记没记我的生理期」。如实报账本，记着就是记着，不要说自己没记过；
+    记录不足两条时照实说还推算不了。只读不改，账本的修改永远走
+    log_period / amend_period（冷冷明确给日期才动）。
+
+    背景：账本是唯一数据源（cycle_records），日历事件只在预测窗口内存在，
+    窗口外不调用本工具的话小汐对账本一无所知——「没记过」是事实错误。
+    """
+    try:
+        records = await cycle_tracker.get_records()
+        stats = await cycle_tracker.get_cycle_stats()
+    except Exception as e:
+        log_tool_error("get_period_status", e)
+        return "呜，小汐翻账本的时候手滑了……过一会儿再问问小汐好不好？"
+
+    if not records:
+        return "小汐的账本上还没有生理期记录哦。冷冷告诉我开始的日子，小汐就记下来，以后的日子小汐自己推算。"
+
+    lines = ["小汐的账本上记着这些日子："]
+    for r in records:
+        suffix = f"（{r['note']}）" if r.get("note") else ""
+        lines.append(f"- {r['start_date']}{suffix}")
+    if stats:
+        if stats["days_until_next"] >= 0:
+            near = f"还有 {stats['days_until_next']} 天"
+        else:
+            near = f"预测日已过 {-stats['days_until_next']} 天"
+        lines.append(
+            f"按规律平均 {stats['avg_cycle']} 天一次，最近一次 {stats['last_start']}，"
+            f"下次预计 {stats['next_predicted']}（{near}）。"
+        )
+    else:
+        lines.append("记录还不到两次，小汐暂时推算不了规律哦。")
+    return "\n".join(lines)
+
+
+@tool
 async def log_period(date: str, note: str = "") -> str:
     """记下冷冷生理期开始的日期。小汐会自己推算以后的日子，到时候自然关心她。
 

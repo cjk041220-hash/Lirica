@@ -11,7 +11,9 @@ import database.core as db_core
 from utils.timezone import HKT as _HKT
 
 from tools import get_all_tools
-from tools.cycle import amend_period, log_period, set_prompt_refresh_callback
+from tools.cycle import (
+    amend_period, get_period_status, log_period, set_prompt_refresh_callback,
+)
 
 
 def _date(offset: int) -> str:
@@ -30,10 +32,55 @@ async def _records(db):
 
 
 def test_tools_registered():
-    """两枚工具进了全局工具列表（get_all_tools 静态注册回归）。"""
+    """生理期三枚工具进了全局工具列表（get_all_tools 静态注册回归）。"""
     names = [t.name for t in get_all_tools()]
+    assert "get_period_status" in names
     assert "log_period" in names
     assert "amend_period" in names
+
+
+# ── get_period_status ─────────────────────────────────────────
+
+
+async def test_get_period_status_empty_account(tmp_db):
+    """空账本：如实说还没有记录（别让小汐硬编「没记过」以外的说法）。"""
+    db_core._db = tmp_db
+    result = await get_period_status.ainvoke({})
+    assert "还没有生理期记录" in result
+
+
+async def test_get_period_status_reports_records_and_prediction(tmp_db):
+    """账本 3 条：日期、备注、平均周期、预测日如实报出。"""
+    db_core._db = tmp_db
+    await log_period.ainvoke({"date": _date(-90)})
+    await log_period.ainvoke({"date": _date(-60)})
+    await log_period.ainvoke({"date": _date(-30), "note": "这次很痛"})
+    result = await get_period_status.ainvoke({})
+    assert _date(-90) in result and _date(-60) in result and _date(-30) in result
+    assert "这次很痛" in result
+    assert "30 天一次" in result            # 平均周期（-90/-60/-30 间隔 30）
+    assert _date(0) in result               # 预测日 = 最近一次 + 30 = 今天
+    assert "下次预计" in result
+
+
+async def test_get_period_status_too_few_records(tmp_db):
+    """不足两次：展示已有记录，同时如实说推算不了规律。"""
+    db_core._db = tmp_db
+    await log_period.ainvoke({"date": _date(-30)})
+    result = await get_period_status.ainvoke({})
+    assert _date(-30) in result
+    assert "推算不了" in result
+
+
+async def test_get_period_status_readonly(tmp_db):
+    """只读不改：调用后账本原样，不触发任何写路径（无刷新回调调用）。"""
+    db_core._db = tmp_db
+    await log_period.ainvoke({"date": _date(-30)})
+    cb = AsyncMock()
+    set_prompt_refresh_callback(cb)
+    await get_period_status.ainvoke({})
+    cb.assert_not_awaited()
+    assert await _records(tmp_db) == [(_date(-30), "")]
 
 
 # ── log_period ────────────────────────────────────────────────
