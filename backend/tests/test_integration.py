@@ -49,6 +49,16 @@ def _clean_rate_buckets(monkeypatch):
     monkeypatch.setattr(auth_mod, "_rate_buckets", {})
 
 
+@pytest.fixture(autouse=True)
+def _clean_location_cache():
+    """每个用例前后清空 GPS 会话缓存——location_store 是进程级全局，
+    GPS 用例留下的坐标会污染其他用例（如早安天气路径的 get_any）。"""
+    from memory import location_store
+    location_store._location_cache.clear()
+    yield
+    location_store._location_cache.clear()
+
+
 @pytest.fixture
 async def integration_app(tmp_db):
     """创建完整的 FastAPI 测试实例（带中间件、路由、mock 组件）。"""
@@ -510,6 +520,84 @@ async def test_chat_stream_archive_never_stores_gps_suffix(client):
     ).json()["messages"]
     assert messages[0]["content"] == "今天天气怎么样"
     assert "[系统信息" not in messages[0]["content"]
+
+
+# ── GPS 流式端点回归（体检「关了还在用」：修复曾只落在 REST 辅助函数，
+#    前端实际走的 SSE 端点内联副本漏了 gps_enabled 分支，测试全绿但
+#    生产路径开关失效。以下用例直接打真实端点、捕获图输入，钉死闭环）──
+
+
+def _install_capturing_stream(app):
+    """把 app.state.agent.astream_events 换成输入捕获版，返回 captured dict。
+
+    复用现有 fake_stream 的事件形状（on_chat_model_stream + 逐字 chunk），
+    额外记录 endpoint 实际喂给图的 input_data。
+    """
+    captured = {}
+
+    async def capturing_stream(input_data, config=None, **kwargs):
+        captured["input"] = input_data
+        for char in "好":
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": type("Chunk", (), {"content": char})()},
+            }
+
+    app.state.agent.astream_events = capturing_stream
+    return captured
+
+
+async def test_chat_stream_gps_disabled_clears_cache_and_skips_injection(
+    client, integration_app
+):
+    """SSE 端点收到 gps_enabled=false：清缓存 + 图输入不带坐标后缀。
+
+    预置 8h TTL 旧缓存模拟「用户刚关掉 GPS」，断言三件事：
+    ① 图输入 content == 原始消息（无 [系统信息 后缀）；
+    ② 本会话缓存被清；
+    ③ get_any() 也读不到——钉死早安问候天气的降级契约
+       （heartbeat 用 get_any 读坐标，关 GPS 后应自动降级默认坐标文案）。
+    """
+    from memory import location_store
+
+    await location_store.update("s-stream-off", 22.3, 114.17)
+    captured = _install_capturing_stream(integration_app)
+
+    resp = await client.post("/api/chat/stream", json={
+        "message": "陪我说说话",
+        "session_id": "s-stream-off",
+        "gps_enabled": False,
+    })
+    events, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert content == "陪我说说话"
+    assert "[系统信息" not in content
+    assert await location_store.get("s-stream-off") is None
+    assert await location_store.get_any() is None
+
+
+async def test_chat_stream_gps_enabled_updates_and_injects(client, integration_app):
+    """SSE 端点 gps_enabled=true 带坐标：更新缓存 + 图输入含坐标后缀。"""
+    from memory import location_store
+
+    captured = _install_capturing_stream(integration_app)
+
+    resp = await client.post("/api/chat/stream", json={
+        "message": "附近有什么好玩的",
+        "session_id": "s-stream-on",
+        "latitude": 22.3,
+        "longitude": 114.17,
+        "gps_enabled": True,
+    })
+    events, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "GPS 坐标" in content
+    assert "114.17,22.3" in content
+    assert await location_store.get("s-stream-on") == (22.3, 114.17)
 
 
 async def test_chat_survives_archive_failure(client, monkeypatch):

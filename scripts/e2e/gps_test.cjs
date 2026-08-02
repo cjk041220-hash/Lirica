@@ -88,6 +88,51 @@ fs.mkdirSync(SHOTS, { recursive: true });
   console.log(reply.slice(0, 500) || '(未等到回复)');
 
   await page.screenshot({ path: path.join(SHOTS, 'gps-e2e.png') });
+
+  // ── 第二阶段：关掉「位置辅助」后，请求体必须带 gps_enabled=false
+  //    且不再携带坐标（体检「GPS 关了还在用」回归：后端 8h TTL 旧缓存
+  //    曾持续注入流式对话，前端关开关形同虚设。严格断言打在请求体上——
+  //    回复文本有 LLM 随机性，只作软断言）──────────────────────
+  await page.locator('button[aria-label="设置"]').click();
+  await page.waitForTimeout(500);
+  await page.locator('button[aria-label="位置辅助开关"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('button[aria-label="关闭设置"]').click();
+  await page.waitForTimeout(500);
+
+  chatReqBody = null;
+  await input.fill('那现在陪我说说话吧～');
+  await page.locator('button[aria-label="发送"]').click();
+  await page.waitForTimeout(4000);
+
+  if (!chatReqBody) {
+    failed = true;
+    console.log('[FAIL] 第二阶段 /api/chat/stream 请求未发出');
+  } else {
+    console.log('第二阶段请求体:', JSON.stringify({
+      message: chatReqBody.message, gps_enabled: chatReqBody.gps_enabled,
+      latitude: chatReqBody.latitude, longitude: chatReqBody.longitude,
+    }));
+    if (chatReqBody.gps_enabled === false &&
+        chatReqBody.latitude === undefined && chatReqBody.longitude === undefined) {
+      console.log('[PASS] 关闭 GPS 后请求体带 gps_enabled=false 且无坐标');
+    } else {
+      failed = true;
+      console.log('[FAIL] 关闭 GPS 后请求体未带 gps_enabled=false 或仍携带坐标');
+    }
+  }
+
+  // 软断言：回复不含尖沙咀坐标字面量（后端已清缓存则注入无从发生；
+  // LLM 回复有随机性，失败仅告警不计入 failed）
+  await page.waitForTimeout(6000);
+  const reply2 = await page.evaluate(() => document.body.innerText);
+  if (reply2.includes('114.1694') || reply2.includes('22.3193')) {
+    console.log('[WARN] 第二阶段回复出现坐标字面量，疑似后端仍在注入旧缓存');
+  } else {
+    console.log('[PASS] 第二阶段回复无坐标字面量');
+  }
+  await page.screenshot({ path: path.join(SHOTS, 'gps-e2e-off.png') });
+
   if (consoleErrors.length) console.log('console errors:', consoleErrors.slice(0, 5));
   await ctx.close();
   if (failed) {

@@ -136,29 +136,42 @@ def _location_suffix(lat: float, lon: float) -> str:
     )
 
 
-async def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:
-    """构建带 GPS 上下文的用户消息，并将坐标存入缓存。
+async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -> str:
+    """GPS 副作用 + 上下文后缀的**单一入口**（REST 与 SSE 两条路径共用）。
 
-    v2 重构：不再注入记忆叙事。记忆由 pre_model_hook 通过
-    llm_input_messages 动态注入，不进入 checkpoint。
+    体检回归教训：此逻辑曾在本文件两处各存一份，修复「GPS 关不净」时
+    只改了 REST 辅助函数，漏了 SSE 端点的内联副本——前端实际只走 SSE，
+    开关在生产路径上失效而测试全绿（测的是没人调的抽象层）。凡请求
+    预处理需要「两端口共用」的逻辑，一律收敛到本函数，禁止内联副本。
+
+    语义：gps_enabled=False → 清本会话缓存 + 跳过注入（关即消失）；
+    带坐标 → 更新缓存；有缓存 → 追加 _location_suffix。
     """
     if req.gps_enabled is False:
         # 显式关闭信号：立即清掉本会话缓存坐标（体检「GPS 关不净」：
         # 此前前端开关只写 localStorage，后端缓存按 TTL 最长 8h 持续
         # 注入旧坐标——关了还在用。清缓存 + 跳过注入，关即消失）。
         await location_store.forget(sid)
-        return {"messages": [HumanMessage(content=user_message)]}
+        return user_message
 
     if req.latitude is not None and req.longitude is not None:
         await location_store.update(sid, req.latitude, req.longitude)
 
-    location_context = ""
     cached = await location_store.get(sid)
     if cached:
         lat, lon = cached
-        location_context = _location_suffix(lat, lon)
+        return user_message + _location_suffix(lat, lon)
+    return user_message
 
-    return {"messages": [HumanMessage(content=user_message + location_context)]}
+
+async def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:
+    """构建带 GPS 上下文的图输入（REST /chat 用）。薄包装，逻辑见
+    _resolve_user_content。
+
+    v2 重构：不再注入记忆叙事。记忆由 pre_model_hook 通过
+    llm_input_messages 动态注入，不进入 checkpoint。
+    """
+    return {"messages": [HumanMessage(content=await _resolve_user_content(user_message, req, sid))]}
 
 
 def _build_config(session_id: str) -> dict:
@@ -293,16 +306,10 @@ async def chat_stream(req: ChatRequest, request: Request):
             yield "data: [DONE]\n\n"
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
-    # 构建带 GPS 坐标的用户消息（记忆由 pre_model_hook 注入，不在此处）
-    user_content = req.message
-
-    # 合并 GPS 坐标
-    if req.latitude is not None and req.longitude is not None:
-        await location_store.update(sid, req.latitude, req.longitude)
-    cached = await location_store.get(sid)
-    if cached:
-        lat, lon = cached
-        user_content += _location_suffix(lat, lon)
+    # 构建带 GPS 坐标的用户消息（记忆由 pre_model_hook 注入，不在此处）。
+    # 与 REST /chat 共用 _resolve_user_content 单一入口——此前这里是一份
+    # 内联副本，漏了 gps_enabled=False 清缓存分支（关了还在用回归根因）。
+    user_content = await _resolve_user_content(req.message, req, sid)
 
     # 助手回复累积器：generate 闭包共享，在会话锁内的 finally 统一落库。
     # 正常收尾 / 流内异常时归档用户实际看到的那份文本；客户端硬断开

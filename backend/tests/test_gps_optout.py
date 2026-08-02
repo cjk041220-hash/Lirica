@@ -4,7 +4,18 @@
 最长 8h 保留旧坐标并持续向每条对话注入「系统信息：冷冷当前 GPS 坐标」
 ——关了还在用。修复：请求体带 gps_enabled=false → 后端清缓存 + 不注入。
 """
+import pytest
+
 from memory import location_store
+
+
+@pytest.fixture(autouse=True)
+def _clean_location_cache():
+    """location_store 是进程级全局：用例间互相留坐标会污染他处
+    （如心跳早安天气的 get_any）。每例前后清空。"""
+    location_store._location_cache.clear()
+    yield
+    location_store._location_cache.clear()
 
 
 async def test_forget_removes_cached_coords():
