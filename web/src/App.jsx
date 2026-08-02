@@ -109,18 +109,21 @@ export default function App() {
 
       {/* 顶栏控制台：四个入口收进顶部居中的一条磨砂胶囊。
           四图标用 2+2 分组（回望类「对话/记忆」| 打点类「日历/设置」），
-          组间一条细线——偶数图标靠分组线保持胶囊的对称平衡 */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(110,74,86,0.22)]">
+          组间一条细线——偶数图标靠分组线保持胶囊的对称平衡。
+          top 叠加 env(safe-area-inset-top)：viewport-fit=cover + iOS PWA
+          black-translucent 状态栏下页面画到刘海/灵动岛后面，胶囊须让出
+          顶部安全区（浏览器内与桌面 env()=0，偏移自然不生效） */}
+      <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(110,74,86,0.22)]">
         <button
           onClick={() => setShowSessions(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry"
+          className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="以往的对话"
         >
           <IconHistory size={16} />
         </button>
         <button
           onClick={() => setShowMemories(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry"
+          className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="小汐的记忆"
         >
           <IconBook size={16} />
@@ -128,14 +131,14 @@ export default function App() {
         <span aria-hidden className="w-px h-3.5 bg-plum/15 mx-0.5" />
         <button
           onClick={() => setShowCalendar(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry"
+          className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="小汐的日历"
         >
           <IconCalendar size={16} />
         </button>
         <button
           onClick={() => setShowConfig(true)}
-          className="btn-press w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry"
+          className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="设置"
         >
           <IconSettings size={16} />

@@ -10,6 +10,23 @@ export function usePush() {
     'serviceWorker' in navigator &&
     'PushManager' in window
   )
+  // iOS 16.4+ 的 Web Push 只对「已添加到主屏幕」的 standalone PWA 生效：
+  // 普通 Safari 标签页里 PushManager 存在（supported 为 true）但
+  // subscribe() 必抛 NotAllowedError。检测出来换成「添加到主屏幕」引导，
+  // 而不是让开关点了静默失败
+  const [iosInstallNeeded] = useState(() => {
+    if (typeof navigator === 'undefined') return false
+    const ua = navigator.userAgent
+    const isIos = /iP(hone|od|ad)/.test(ua) ||
+      // iPadOS 13+ 伪装成 Mac UA，靠触控点数量识破
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    if (!isIos) return false
+    const standalone = ('standalone' in navigator && navigator.standalone) ||
+      window.matchMedia('(display-mode: standalone)').matches
+    return !standalone
+  })
+  // 通知权限被拒（系统级 denied / subscribe 抛 NotAllowedError）→ 引导去设置里开
+  const [permissionDenied, setPermissionDenied] = useState(false)
 
   // 检查未读消息
   const checkUnread = useCallback(async () => {
@@ -31,7 +48,19 @@ export function usePush() {
 
   // 订阅推送
   const subscribe = useCallback(async () => {
-    if (!supported) return false
+    if (!supported || iosInstallNeeded) return false
+    // Safari 规范要求「先请求通知权限、再 subscribe」，且权限请求必须
+    // 留在用户手势闭包内——故放在本函数第一个 await 之前（开关点击
+    // onClick → 本调用是同步直进，手势链未断）。Chrome 系靠
+    // userVisibleOnly 订阅代弹权限框侥幸可用，Safari 不先请求会直接
+    // NotAllowedError——这是 iOS 推送链路最容易静默断掉的一环
+    if (typeof Notification === 'undefined') return false
+    let perm = Notification.permission
+    if (perm === 'default') perm = await Notification.requestPermission()
+    if (perm !== 'granted') {
+      if (perm === 'denied') setPermissionDenied(true)
+      return false
+    }
     try {
       const vapidRes = await apiFetch('/api/push/vapid-key')
       if (!vapidRes.ok) return false
@@ -58,10 +87,12 @@ export function usePush() {
       setSubscribed(true)
       return true
     } catch (e) {
+      // iOS 普通标签页 / 权限被系统撤回：subscribe 抛 NotAllowedError
+      if (e?.name === 'NotAllowedError') setPermissionDenied(true)
       console.warn('[usePush] subscribe failed:', e)
       return false
     }
-  }, [supported])
+  }, [supported, iosInstallNeeded])
 
   // 取消订阅
   const unsubscribe = useCallback(async () => {
@@ -157,5 +188,8 @@ export function usePush() {
     }
   }, [checkUnread])
 
-  return { supported, subscribed, unread, subscribe, unsubscribe, markRead, checkUnread }
+  return {
+    supported, iosInstallNeeded, permissionDenied,
+    subscribed, unread, subscribe, unsubscribe, markRead, checkUnread,
+  }
 }

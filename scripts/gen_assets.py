@@ -29,15 +29,20 @@ CREAM = (255, 246, 248)       # cream      #FFF6F8
 HONEY = (233, 180, 76)        # honey      #E9B44C
 
 
-def make_icon(size: int, out: Path):
-    """圆角草莓粉底（草莓→树莓）+ 奶油'汐'字 + 右上蜂蜜金四芒星。"""
+def make_icon(size: int, out: Path, rounded: bool = True):
+    """草莓粉底（草莓→树莓）+ 奶油'汐'字 + 右上蜂蜜金四芒星。
+
+    rounded=True：圆角透明底（标准 PWA 图标，浏览器自裁）。
+    rounded=False：不透明满铺方图——apple-touch-icon 专用，iOS 自己裁
+    超椭圆圆角，图标带透明边会在深色壁纸上露白边。
+    """
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    radius = int(size * 0.23)
+    radius = int(size * 0.23) if rounded else 0
     d.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=STRAWBERRY)
 
-    # 底部树莓渐变感（简单叠加一个半透明深色圆角矩形下半部）
+    # 底部树莓渐变感（简单叠加一个半透明深色矩形下半部）
     shade = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shade)
     sd.rounded_rectangle(
@@ -94,5 +99,7 @@ def sprites_to_webp():
 if __name__ == "__main__":
     make_icon(192, PUBLIC / "icon-192.png")
     make_icon(512, PUBLIC / "icon-512.png")
+    # iOS 主屏幕图标：Apple 文档尺寸 180×180，不透明满铺（iOS 自裁圆角）
+    make_icon(180, PUBLIC / "apple-touch-icon.png", rounded=False)
     sprites_to_webp()
     print("done")

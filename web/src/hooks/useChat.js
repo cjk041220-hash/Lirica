@@ -1,6 +1,23 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { apiFetch } from '../api/client'
+import { apiFetch, getToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { getGpsCoords, isGpsEnabled } from '../api/location'
+
+// iOS Safari <17.4 的 fetch + ReadableStream 会整段缓冲、生成完毕才
+// 一次性吐出（WebKit 17.4 起才真增量）——打字机效果全毁，用户盯着
+// 冻结界面十几秒。此情形改走 XHR onprogress 增量读取（该 API WebKit
+// 一直支持）。无可靠特性检测（旧版有 ReadableStream 但不增量吐），
+// 只能 UA 判版本。ua 可注入，留给将来单测。
+export function needsXhrStreaming(ua = typeof navigator !== 'undefined' ? navigator.userAgent : '') {
+  const isIOS = /iP(hone|od|ad)/.test(ua) ||
+    // iPadOS 13+ 伪装成 Mac UA，靠触控点数量识破
+    (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  if (!isIOS) return false
+  if (/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua)) return false  // 第三方 iOS 浏览器不在本次兜底范围
+  if (!/Safari/.test(ua)) return false
+  const m = ua.match(/OS (\d+)_(\d+)/)
+  if (!m) return false
+  return (+m[1] + +m[2] / 100) < 17.4
+}
 
 let msgId = 0
 const nextId = () => `msg-${++msgId}-${Date.now()}`
@@ -140,49 +157,25 @@ export function useChat() {
 
     try {
       setCharacterState('thinking')
-      const res = await apiFetch('/api/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text,
-          session_id: sessionIdRef.current,
-          ...(coords || {}),
-          // GPS 开关信号随请求下发：关闭时后端立即清掉缓存坐标
-          // （否则旧坐标按 TTL 最长 8h 仍在注入——「关了还在用」）
-          gps_enabled: isGpsEnabled(),
-        }),
-        signal: controller.signal,
+
+      // 请求体（fetch / XHR 两传输共用）
+      const body = JSON.stringify({
+        message: text,
+        session_id: sessionIdRef.current,
+        ...(coords || {}),
+        // GPS 开关信号随请求下发：关闭时后端立即清掉缓存坐标
+        // （否则旧坐标按 TTL 最长 8h 仍在注入——「关了还在用」）
+        gps_enabled: isGpsEnabled(),
       })
 
-      // 401：需要访问令牌
-      if (res.status === 401) {
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantId
-              ? { ...m, content: '呜……门没开。先在右上角设置里填一下访问令牌，再来找小汐玩吧。' }
-              : m
-          )
-        )
-        return
-      }
-
-      // 非 2xx（含限流 429 等）直接走错误兜底
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status}`)
-      }
-
-      setCharacterState('talking')
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
       let buffer = ''
       let streamDone = false
       let streamError = false  // 收到 type=error 事件 → 本轮不算成功
 
-      while (!streamDone) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
+      // 共享行解析：fetch（增量 reader）与 XHR（onprogress 增量）都把
+      // 文本片段喂进来，SSE 行语义一处维护，两传输行为完全一致
+      const feed = (chunkText) => {
+        buffer += chunkText
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
 
@@ -266,6 +259,87 @@ export function useChat() {
             // 非 JSON 行，忽略
             console.warn('[useChat] SSE parse error:', e)
           }
+        }
+      }
+
+      // 401 提示（fetch 路径经 apiFetch 已广播 UNAUTHORIZED_EVENT，
+      // XHR 绕过统一请求层，需手工补发同一事件）
+      const showUnauthorized = (dispatchEvent) => {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantId
+              ? { ...m, content: '呜……门没开。先在右上角设置里填一下访问令牌，再来找小汐玩吧。' }
+              : m
+          )
+        )
+        if (dispatchEvent) window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+      }
+
+      if (needsXhrStreaming()) {
+        // iOS Safari <17.4 fetch 流式整段缓冲 → XHR onprogress 增量兜底。
+        // 生命周期仍挂在 controller 上（用户停止 / 切会话 abortRef 语义不变）
+        let unauthorized = false
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          xhr.open('POST', '/api/chat/stream', true)
+          xhr.setRequestHeader('Content-Type', 'application/json')
+          const token = getToken()
+          if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+          let seen = 0
+          let xhrStopped = false  // [DONE] 早停 / 401 / 错误中止 → 区别于用户停止
+          let talking = false
+          xhr.onprogress = () => {
+            if (xhr.status === 401) { unauthorized = true; xhrStopped = true; xhr.abort(); return }
+            if (xhr.status >= 400) {
+              // reject 必须先于 abort：abort 在个别浏览器同步触发 onabort，
+              // 若顺序颠倒 Promise 会先被 resolve 吞掉错误
+              xhrStopped = true
+              reject(new Error(`HTTP ${xhr.status}`))
+              xhr.abort()
+              return
+            }
+            if (!talking) { setCharacterState('talking'); talking = true }
+            feed(xhr.responseText.slice(seen))
+            seen = xhr.responseText.length
+            if (streamDone) { xhrStopped = true; xhr.abort() }  // [DONE] 后早停，不等关流
+          }
+          xhr.onload = () => {
+            if (xhrStopped) return
+            feed(xhr.responseText.slice(seen))  // 收尾残段
+            resolve()
+          }
+          xhr.onerror = () => reject(new Error('network'))
+          xhr.onabort = () => {
+            // 用户停止（controller.abort）→ 等价 fetch 的 AbortError，
+            // catch 分支据此不误报错误文案；其余中止原因已在上面各有归宿
+            if (xhrStopped) resolve()
+            else reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          }
+          controller.signal.addEventListener('abort', () => xhr.abort())
+          xhr.send(body)
+        })
+        if (unauthorized) { showUnauthorized(true); return }
+      } else {
+        const res = await apiFetch('/api/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal,
+        })
+
+        // 401：需要访问令牌
+        if (res.status === 401) { showUnauthorized(false); return }
+
+        // 非 2xx（含限流 429 等）直接走错误兜底
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+
+        setCharacterState('talking')
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        while (!streamDone) {
+          const { done, value } = await reader.read()
+          if (done) break
+          feed(decoder.decode(value, { stream: true }))
         }
       }
       // 当流因异常断开（非 [DONE] 收尾）时，buffer 里可能残留最后一条

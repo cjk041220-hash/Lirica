@@ -3,14 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <!-- iOS 主屏幕图标用专用 180×180（Apple 文档尺寸；192 会被降采样发虚）。
+         不透明满铺方图——iOS 自裁超椭圆圆角，透明边在深色壁纸上出白边 -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#F2789F" />
     <!-- 展示体「站酷快乐体」已自托管（fontsource 分片包，main.jsx 引入）：
          不再外链 Google Fonts——隐私陪伴应用不该每次加载送出访客 IP，
          且同源字体可进 SW 缓存，离线时展示体照常工作 -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- black-translucent：standalone PWA 下状态栏透明、房间天空透到刘海后，
+         页面内容上移——顶栏胶囊已叠 env(safe-area-inset-top) 避让（App.jsx）。
+         仅「添加到主屏幕」后生效，浏览器内访问不受影响 -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="小汐的房间" />
     <link rel="manifest" href="/manifest.json" />
     <!-- 预取聊天高频立绘链（listening→thinking→speaking→happy），弱网切状态不闪旧图；idle/sleeping 由首帧正常加载不重复预取 -->

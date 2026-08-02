@@ -46,7 +46,10 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           placeholder="和小汐说说话……"
-          className="flex-1 bg-transparent text-[15px] text-plum placeholder:text-plum/25 outline-none leading-relaxed"
+          /* 16px 是 iOS 聚焦不自动缩放页面的阈值（15px 会触发整页放大）；
+             enterkeyhint 让软键盘回车键显示「发送」而非通用换行 */
+          enterKeyHint="send"
+          className="flex-1 bg-transparent text-[16px] text-plum placeholder:text-plum/25 outline-none leading-relaxed"
         />
 
         {isStreaming ? (

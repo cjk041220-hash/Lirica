@@ -195,6 +195,16 @@ body::before {
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
 }
+/* 「固定底衬 + 安全区」取大者：底部面板过 iPhone Home 指示条。
+   用于替换（不是叠加）Tailwind 的 pb-*——未分层样式永远胜过 @layer
+   utilities（见上方分层纪律注释），叠用会把固定衬垫吃掉。
+   先给固定值兜底，支持 max()+env() 的环境再升级取大 */
+.pb-safe-9 { padding-bottom: 2.25rem; }
+.pb-safe-6 { padding-bottom: 1.5rem; }
+@supports (padding-bottom: max(1rem, env(safe-area-inset-bottom))) {
+  .pb-safe-9 { padding-bottom: max(2.25rem, env(safe-area-inset-bottom)); }
+  .pb-safe-6 { padding-bottom: max(1.5rem, env(safe-area-inset-bottom)); }
+}
 
 /* 滚动条 */
 .chat-scroll::-webkit-scrollbar { width: 2.5px; }

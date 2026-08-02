@@ -94,7 +94,7 @@ export default function ConfigPanel({ config, push, onClose }) {
               value={tokenInput}
               onChange={e => setTokenInput(e.target.value)}
               placeholder="本机使用可留空；部署后填 XIAOXI_API_TOKEN"
-              className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-plum/3 text-[12px] text-plum/80 placeholder:text-plum/25 outline-none focus:bg-plum/5"
+              className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-plum/3 text-[16px] text-plum/80 placeholder:text-plum/25 outline-none focus:bg-plum/5"
               aria-label="访问令牌"
             />
             <button
@@ -185,11 +185,11 @@ export default function ConfigPanel({ config, push, onClose }) {
               role="switch"
               aria-checked={push.subscribed}
               aria-label="消息通知开关"
-              disabled={!push.supported}
+              disabled={!push.supported || push.iosInstallNeeded}
               onClick={() => (push.subscribed ? push.unsubscribe() : push.subscribe())}
               className={`btn-press relative w-11 h-6.5 rounded-full transition-colors duration-200 shrink-0 ${
                 push.subscribed ? 'bg-strawberry' : 'bg-plum/10'
-              } ${push.supported ? '' : 'opacity-40 cursor-not-allowed'}`}
+              } ${push.supported && !push.iosInstallNeeded ? '' : 'opacity-40 cursor-not-allowed'}`}
               style={{ width: 44, height: 26 }}
             >
               <span
@@ -198,9 +198,14 @@ export default function ConfigPanel({ config, push, onClose }) {
               />
             </button>
           </div>
-          {!push.supported && (
+          {/* 三档引导：iOS 未装主屏幕（平台限制订阅必失败）> 权限被拒 > 环境不支持 */}
+          {push.iosInstallNeeded ? (
+            <p className="text-[10px] text-plum/25 mt-1.5 leading-relaxed">iPhone 上先用 Safari 的「分享 → 添加到主屏幕」把小汐装好，就能收到她主动找你的通知啦</p>
+          ) : push.permissionDenied ? (
+            <p className="text-[10px] text-plum/25 mt-1.5 leading-relaxed">没拿到通知权限——在浏览器或系统设置里允许通知后，再打开这个开关</p>
+          ) : !push.supported ? (
             <p className="text-[10px] text-plum/25 mt-1.5">当前浏览器或环境不支持推送通知</p>
-          )}
+          ) : null}
         </div>
 
         {/* 位置辅助 */}

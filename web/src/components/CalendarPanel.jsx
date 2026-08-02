@@ -189,7 +189,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
             <IconCalendar size={16} className="text-strawberry/70" />
             <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">小汐的日历</h2>
           </div>
-          <button onClick={onClose} aria-label="关闭日历" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
+          <button onClick={onClose} aria-label="关闭日历" className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2">
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
@@ -197,7 +197,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {/* 月份栏 */}
         <div key={monthKey} className="animate-fade-in-up flex items-center justify-center gap-3 px-5 py-2">
           <button onClick={() => shiftMonth(-1)} aria-label="上个月" title="上个月"
-            className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">‹</button>
+            className="btn-press relative w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none after:content-[''] after:absolute after:-inset-2">‹</button>
           <div className="flex items-baseline gap-1.5 min-w-[7.5rem] justify-center">
             <span className="font-display text-[20px] text-plum/85 leading-tight">
               {CN_MONTHS[month.m - 1]}
@@ -205,7 +205,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
             <span className="text-[11px] font-semibold text-raspberry tracking-[0.2em]">{month.y}</span>
           </div>
           <button onClick={() => shiftMonth(1)} aria-label="下个月" title="下个月"
-            className="btn-press w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none">›</button>
+            className="btn-press relative w-7 h-7 rounded-full bg-plum/5 text-plum/55 text-[15px] leading-none after:content-[''] after:absolute after:-inset-2">›</button>
           <button onClick={() => { const t = hktTodayISO(); setMonth({ y: t.slice(0, 4) * 1, m: t.slice(5, 7) * 1 }) }}
             className="btn-press text-[11px] px-2.5 py-1 rounded-full bg-strawberry/15 text-raspberry">今天</button>
         </div>
@@ -267,7 +267,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {selectedDay && !formOpen && (
           <div className="absolute inset-0 z-[5] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => setSelectedDay(null)} />
-            <div className="panel-surface-solid panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+            <div className="panel-surface-solid panel-enter relative w-full max-h-[80%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-safe-6"
               ref={daySheetRef} tabIndex={-1}
               role="dialog" aria-modal="true" aria-label={`${selectedDay} 的安排`}>
               <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
@@ -335,7 +335,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         {formOpen && (
           <div className="absolute inset-0 z-[6] flex items-end rounded-t-[24px] overflow-hidden">
             <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={() => { setFormOpen(false); setEditing(null); setSimilar(null) }} />
-            <div className="panel-surface-solid panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-6"
+            <div className="panel-surface-solid panel-enter relative w-full max-h-[84%] rounded-t-[20px] overflow-y-auto chat-scroll px-5 pt-3 pb-safe-6"
               ref={formSheetRef} tabIndex={-1}
               role="dialog" aria-modal="true" aria-label={editing ? '修改这件事' : '记一件事'}>
               <div className="w-9 h-1 rounded-full bg-blush mx-auto mb-3" />
@@ -346,7 +346,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
               <input type="text" value={form.title} maxLength={60}
                 onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                 placeholder="例如：期中考试"
-                className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[16px] text-plum/85 outline-none focus:border-strawberry" />
 
               {!editing && (
                 <>
@@ -373,7 +373,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                   <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">回来的日子（可选）</label>
                   <input type="date" value={form.end_date} min={editing ? editing.event_date : selectedDay}
                     onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
-                    className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                    className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[16px] text-plum/85 outline-none focus:border-strawberry" />
                 </>
               )}
 
@@ -395,7 +395,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
               <textarea value={form.memo} maxLength={300}
                 onChange={e => setForm(f => ({ ...f, memo: e.target.value }))}
                 placeholder="例如：考完想去吃顿好的"
-                className="w-full h-14 resize-none rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[13px] text-plum/85 outline-none focus:border-strawberry" />
+                className="w-full h-14 resize-none rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[16px] text-plum/85 outline-none focus:border-strawberry" />
 
               {/* 相似合并提示：后端 409 → 给冷冷选择，而不是静默并存两条 */}
               {similar && (

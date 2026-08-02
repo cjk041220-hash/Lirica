@@ -87,7 +87,8 @@ export default function MemoriesPanel({ onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+      {/* safe-bottom：面板底部让出 iPhone Home 指示条（env()=0 的环境无影响） */}
+      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
         ref={dialogRef} tabIndex={-1}
         role="dialog" aria-modal="true" aria-label="小汐的记忆">
 
@@ -96,7 +97,7 @@ export default function MemoriesPanel({ onClose }) {
             <IconWhale size={16} className="text-strawberry/70" />
             <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">小汐的记忆</h2>
           </div>
-          <button onClick={onClose} aria-label="关闭记忆" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
+          <button onClick={onClose} aria-label="关闭记忆" className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2">
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
@@ -185,7 +186,7 @@ export default function MemoriesPanel({ onClose }) {
                           onChange={e => setEditText(e.target.value)}
                           rows={2}
                           aria-label="编辑记忆内容"
-                          className="w-full text-[13px] text-plum/75 leading-[1.8] bg-plum/3 border border-strawberry/25 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:border-strawberry/60"
+                          className="w-full text-[16px] text-plum/75 leading-[1.8] bg-plum/3 border border-strawberry/25 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:border-strawberry/60"
                         />
                         <div className="flex gap-2">
                           <button

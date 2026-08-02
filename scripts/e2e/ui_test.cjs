@@ -45,6 +45,10 @@ const apiFails = [];
   const ctx = await chromium.launchPersistentContext(profileDir, {
     channel: 'msedge', headless: true,
     viewport: { width: 430, height: 900 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+    // 预授通知权限：usePush.subscribe() 现会显式 Notification.requestPermission()
+    //（iOS Safari 规范要求先请求权限再 subscribe），不预授则 headless 下
+    // 权限请求可能回绝、弄红推送开关断言
+    permissions: ['notifications'],
   });
   const page = ctx.pages()[0] || await ctx.newPage();
   page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
@@ -85,7 +89,8 @@ const apiFails = [];
     const pro = page.locator('button', { hasText: 'V4 Pro' }).first();
     if (await pro.count()) {
       await pro.click(); await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(200);
-      (await pro.evaluate(el => el.className.includes('border-healing-aqua'))) ? ok('切换模型 → Pro（高亮 + POST 200）') : bad('切换模型 Pro', '未高亮');
+      // 高亮类随主题变迁：旧青系 border-healing-aqua → 现草莓粉 border-strawberry/40
+      (await pro.evaluate(el => el.className.includes('border-strawberry'))) ? ok('切换模型 → Pro（高亮 + POST 200）') : bad('切换模型 Pro', '未高亮');
     } else bad('模型卡片', '未找到 V4 Pro');
 
     // v0.4.5：「思考强度」已更名为「回复风格」，档位文案 轻柔/适中/深度/全力

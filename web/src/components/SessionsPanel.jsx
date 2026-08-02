@@ -81,7 +81,8 @@ export default function SessionsPanel({ chat, onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col"
+      {/* safe-bottom：面板底部让出 iPhone Home 指示条（env()=0 的环境无影响） */}
+      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
         ref={dialogRef} tabIndex={-1}
         role="dialog" aria-modal="true" aria-label="以往的对话">
 
@@ -90,7 +91,7 @@ export default function SessionsPanel({ chat, onClose }) {
             <IconHistory size={16} className="text-strawberry/70" />
             <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">以往的对话</h2>
           </div>
-          <button onClick={onClose} aria-label="关闭对话列表" className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center">
+          <button onClick={onClose} aria-label="关闭对话列表" className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2">
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
@@ -151,7 +152,9 @@ export default function SessionsPanel({ chat, onClose }) {
                       <button
                         aria-label={confirmId === s.id ? '再点一次确认删除' : '删除这段对话'}
                         onClick={(e) => handleDelete(e, s.id)}
-                        className={`btn-press shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors ${
+                        /* 20px 视觉 + 透明伪元素扩到 44px 点击区（HIG 拇指目标），
+                           伪元素属按钮自身，点击仍命中删除而非行容器 */
+                        className={`btn-press relative shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors after:content-[''] after:absolute after:-inset-3 ${
                           confirmId === s.id
                             ? 'bg-red-400/15 text-red-500 text-[9px]'
                             : 'text-plum/20 hover:text-plum/50 hover:bg-plum/5'
