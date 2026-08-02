@@ -83,6 +83,32 @@ async def test_db_rotation_missing_siblings_tolerated(tmp_path):
     assert len(list(bdir.glob("userdata_backup_*.db"))) == 5
 
 
+async def test_orphan_sidecars_swept_after_backup(tmp_path):
+    """P0-05 回归：早已失去基础 .db 的历史孤儿 sidecar（修复前不会
+    再进轮换列表、永久累积）在每次备份后被清扫；有主 sidecar 保留。"""
+    src = tmp_path / "src.db"
+    await _make_tiny_source(src)
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+
+    # 孤儿：基础 .db 已不存在（模拟历史遗留，实测生产目录 14 个）
+    (bdir / "userdata_backup_20260101_000000.db-wal").write_bytes(b"wal")
+    (bdir / "userdata_backup_20260101_000000.db-shm").write_bytes(b"shm")
+    # 有主：基础 .db 还在 → sidecar 必须保留
+    owned = bdir / "userdata_backup_20260102_000000.db"
+    owned.write_bytes(b"old")
+    Path(str(owned) + "-wal").write_bytes(b"wal")
+
+    fake = SimpleNamespace(backup_scrub_sensitive=False)
+    with patch("config.settings.get_settings", return_value=fake):
+        result = await backup_database(source_path=src, backup_dir=bdir)
+
+    assert result is not None
+    assert not (bdir / "userdata_backup_20260101_000000.db-wal").exists()
+    assert not (bdir / "userdata_backup_20260101_000000.db-shm").exists()
+    assert (bdir / "userdata_backup_20260102_000000.db-wal").exists()
+
+
 async def test_json_backup_rotation_keeps_five(tmp_db, tmp_path):
     """memories_backup_*.json 保留最近 5 份（修复前无轮换无限累积）。"""
     mgr = MemoryManager(tmp_db)

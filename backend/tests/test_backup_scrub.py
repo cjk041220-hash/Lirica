@@ -173,3 +173,52 @@ async def test_no_scrub_marker_bytes_remain_in_file(tmp_path):
         )
 
     assert _MARKER.encode() in backup_path.read_bytes()
+
+
+# ── P0-04 回归：脱敏失败必须 fail-closed ──
+
+class _FailingScrubConn:
+    """脱敏连接替身：任何 SQL 都抛异常（模拟 DELETE/VACUUM 阶段失败）。
+
+    注：aiosqlite.connect 是同步函数返回带 __aenter__ 的连接（实测
+    iscoroutinefunction=False），注入替身必须是同形态的同步对象——
+    此前误写成 async 函数，第一个连接就坏，测试假阳性地没走到脱敏路径。
+    """
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def execute(self, *args, **kwargs):
+        raise RuntimeError("simulated scrub failure")
+
+
+async def test_scrub_failure_removes_unscrubbed_backup(tmp_path):
+    """脱敏开启且删除/VACUUM 阶段失败：本次未脱敏备份必须删除、返回
+    None——修复前只记 warning，完整库照常保留并宣称「备份已保存」，
+    与开启脱敏的语义直接冲突（完整对话档案被同步去网盘/他人）。"""
+    src = tmp_path / "src.db"
+    await _make_source_db(src)
+    bdir = tmp_path / "backups"
+    fake_settings = SimpleNamespace(backup_scrub_sensitive=True)
+
+    real_connect = aiosqlite.connect
+    calls = {"n": 0}
+
+    def _flaky_connect(path, *args, **kwargs):
+        # 前两次调用是 Online Backup 的 src/dst 连接；第三次是脱敏连接
+        calls["n"] += 1
+        if calls["n"] == 3:
+            return _FailingScrubConn()
+        return real_connect(path, *args, **kwargs)
+
+    with patch("config.settings.get_settings", return_value=fake_settings), \
+         patch("aiosqlite.connect", side_effect=_flaky_connect):
+        result = await backup_database(source_path=src, backup_dir=bdir)
+
+    assert result is None
+    # 未脱敏副本已成功拷出、随后必须被删除——不得留下任何文件
+    # （含可能残留的 -wal/-shm sidecar）
+    assert list(bdir.glob("userdata_backup_*")) == []

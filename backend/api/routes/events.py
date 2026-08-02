@@ -19,8 +19,10 @@
 方法注记：更新用 POST 而非 PATCH——CORS allow_methods 仅 GET/POST/DELETE
 （server.py），浏览器预检会拒 PATCH。
 """
+import re
+
 from fastapi import APIRouter, HTTPException, Path, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from utils import events as events_mgr
 from utils.logger import get_logger
@@ -51,9 +53,21 @@ class EventUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=60)
     event_type: str | None = None
     event_date: str | None = Field(default=None, pattern=_DATE_PATTERN)
-    end_date: str | None = Field(default=None, pattern=_DATE_PATTERN)
+    end_date: str | None = None
     severity: str | None = None
     memo: str | None = Field(default=None, max_length=300)
+
+    @field_validator("end_date")
+    @classmethod
+    def _validate_end_date(cls, v):
+        # P0-03 回归：清空语义走 manager 约定（None=不改，空串=显式清空）。
+        # 此前挂 pattern=_DATE_PATTERN 会在路由前拒掉 ""——业务层明明
+        # 支持清空，请求却到不了业务层，日历「清掉结束日期」永远 422。
+        if v is None or v == "":
+            return v
+        if not re.fullmatch(_DATE_PATTERN, v):
+            raise ValueError("日期格式应为 YYYY-MM-DD，如 2026-08-01")
+        return v
 
 
 async def _refresh_prompt(app) -> None:

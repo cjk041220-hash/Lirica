@@ -193,6 +193,32 @@ async def test_update_bad_date_422_and_not_found_404(client, tmp_db):
     assert (await client.post("/api/events/ffffffffffffffff", json={"title": "x"})).status_code == 404
 
 
+async def test_update_clears_end_date_with_empty_string(client, tmp_db):
+    """P0-03 回归：清空结束日期的语义是空串（manager 约定 None=不改、
+    空串=显式清空）。修复前 pattern 在路由前拒掉 "" → 日历「清掉结束
+    日期」永远 422，清空操作到不了业务层。"""
+    r = await client.post("/api/events", json={
+        "title": "旅行", "event_date": _d(12), "end_date": _d(14),
+    })
+    eid = r.json()["event"]["id"]
+    assert r.json()["event"]["end_date"] == _d(14)
+
+    r2 = await client.post(f"/api/events/{eid}", json={"end_date": ""})
+    assert r2.status_code == 200
+    assert r2.json()["event"]["end_date"] is None
+
+    cursor = await tmp_db.execute("SELECT end_date FROM events WHERE id = ?", (eid,))
+    assert (await cursor.fetchone())[0] is None
+
+
+async def test_update_end_date_bad_format_still_422(client, tmp_db):
+    """清空语义放开后，非法日期仍然拒收（422 不回归）。"""
+    r = await client.post("/api/events", json={"title": "x", "event_date": _d(10)})
+    eid = r.json()["event"]["id"]
+    assert (await client.post(f"/api/events/{eid}", json={"end_date": "下周三"})).status_code == 422
+    assert (await client.post(f"/api/events/{eid}", json={"end_date": "2026-8-1"})).status_code == 422
+
+
 # ── DELETE 软删 ───────────────────────────────────────────────
 
 

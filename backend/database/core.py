@@ -383,7 +383,18 @@ async def backup_database(
                 await scrub_conn.execute("VACUUM")
             log.info("备份已脱敏：cycle_records + 周期推算事件 + 对话档案已剔除（含 VACUUM 清页）")
     except Exception as e:
-        log.warning("备份脱敏失败（备份本身仍保留）：%s", e)
+        # P0-04 回归：脱敏是隐私承诺，必须 fail-closed——修复前只记
+        # warning，未脱敏的完整库照常保留并宣称「备份已保存」，与
+        # 开启脱敏的语义直接冲突（完整对话档案被同步去网盘/他人）。
+        # 失败即删掉本次备份（含可能残留的 sidecar），返回 None。
+        backup_path.unlink(missing_ok=True)
+        for sibling in (
+            backup_path.parent / (backup_path.name + "-wal"),
+            backup_path.parent / (backup_path.name + "-shm"),
+        ):
+            sibling.unlink(missing_ok=True)
+        log.error("备份脱敏失败，已删除未脱敏备份：%s", e)
+        return None
 
     # 只保留最近 _MAX_BACKUPS 份。淘汰时同删 -wal/-shm 兄弟文件
     # （体检 D-1）：Online Backup 拷出的文件继承 WAL 模式位，脱敏/
@@ -401,6 +412,16 @@ async def backup_database(
             old_backup.parent / (old_backup.name + "-shm"),
         ):
             sibling.unlink(missing_ok=True)
+
+    # P0-05 回归：孤儿 sidecar 清扫。上面的轮换只删「被淘汰 .db」的
+    # 兄弟文件，早已失去基础 .db 的 -wal/-shm（生产备份目录实测 14 个）
+    # 不会再次进入轮换列表，永久累积。每次备份后全量扫一遍：基础 .db
+    # 已不存在则删除（对象限定为 userdata_backup_*.db-{wal,shm} 且无主，
+    # 不会误伤仍被引用的 sidecar）。
+    for sidecar in backup_dir.glob("userdata_backup_*.db-*"):
+        base = backup_dir / sidecar.name.rsplit("-", 1)[0]
+        if not base.exists():
+            sidecar.unlink(missing_ok=True)
 
     log.info("数据库备份已保存：%s", backup_path)
     return backup_path
