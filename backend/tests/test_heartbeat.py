@@ -415,7 +415,7 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
     async def mock_get_db():
         return tmp_db
 
-    async def always_send():
+    async def always_send(now_dt=None):
         return True  # 跳过 4h 间隔 / 50% 概率 / 深夜判断，保证确定性
 
     async def fake_generate(mood, daily_event, hour, now_dt=None):
@@ -480,6 +480,62 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
         hb._generate_proactive_message = saved["generate"]
         hb._periodic_maintenance = saved["maintenance"]
         wp.send_push = saved["push"]
+
+
+# ── _should_send_proactive 闸门逻辑（时间只取一次，对齐本文件纪律）──
+
+
+async def _should_send_at(tmp_db, monkeypatch, now_dt, seed_offset=None):
+    """固定 now_dt + 概率门常开，按 offset 种入上条主动消息（None=无历史）。"""
+    import datetime as dt
+    from types import SimpleNamespace
+    import heartbeat as hb
+
+    if seed_offset is not None:
+        last = (now_dt - seed_offset).strftime(hb._TIME_FMT)
+        await tmp_db.execute(
+            "INSERT INTO proactive_messages (id, content, created_at, status) "
+            "VALUES (?, ?, ?, ?)",
+            (f"t-{now_dt:%H%M}", "测试消息", last, "stored"),
+        )
+
+    async def mock_get_db():
+        return tmp_db
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    monkeypatch.setattr(hb, "random", SimpleNamespace(random=lambda: 0.1))
+    return await hb._should_send_proactive(now_dt=now_dt)
+
+
+async def test_should_send_respects_min_interval(tmp_db, monkeypatch):
+    """距上条 3h59m < 4h：白天 + 概率门常开也不发。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 2, 15, 0, tzinfo=hb._HKT)
+    assert await _should_send_at(
+        tmp_db, monkeypatch, now_dt, dt.timedelta(hours=3, minutes=59)
+    ) is False
+
+
+async def test_should_send_after_min_interval(tmp_db, monkeypatch):
+    """距上条 4h01m ≥ 4h：白天 + 概率门常开 → 发。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 2, 15, 0, tzinfo=hb._HKT)
+    assert await _should_send_at(
+        tmp_db, monkeypatch, now_dt, dt.timedelta(hours=4, minutes=1)
+    ) is True
+
+
+async def test_should_send_quiet_hours(tmp_db, monkeypatch):
+    """早 7 点前安静时段：无历史消息也不发（深夜不打扰）。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 2, 6, 30, tzinfo=hb._HKT)
+    assert await _should_send_at(tmp_db, monkeypatch, now_dt) is False
 
 
 # ── 周末感知（批次 A）──────────────────────────────────────────

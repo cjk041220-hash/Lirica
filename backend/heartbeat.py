@@ -199,12 +199,16 @@ _MIN_INTERVAL_HOURS = 4
 _PROACTIVE_PROBABILITY = 0.5
 
 
-async def _should_send_proactive() -> bool:
-    """判断当前是否适合主动发消息。"""
-    hour = datetime.datetime.now(_HKT).hour
+async def _should_send_proactive(now_dt: datetime.datetime | None = None) -> bool:
+    """判断当前是否适合主动发消息。
+
+    时间只取一次沿链复用（对齐本文件 :64-66 纪律：两次 now() 之间
+    可能跨整点——此前本函数在 hour 判断与间隔计算各取一次，违反纪律）。
+    """
+    now_dt = now_dt or datetime.datetime.now(_HKT)
 
     # 深夜不打扰
-    if hour < _QUIET_END:
+    if now_dt.hour < _QUIET_END:
         return False
 
     # 检查距上次主动消息的时间间隔
@@ -216,8 +220,7 @@ async def _should_send_proactive() -> bool:
         row = await cursor.fetchone()
         if row and row[0]:
             last_time = datetime.datetime.strptime(row[0], _TIME_FMT).replace(tzinfo=_HKT)
-            now = datetime.datetime.now(_HKT)
-            hours_since = (now - last_time).total_seconds() / 3600
+            hours_since = (now_dt - last_time).total_seconds() / 3600
             if hours_since < _MIN_INTERVAL_HOURS:
                 return False
     except Exception:
@@ -401,7 +404,7 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int,
                                  now_dt: datetime.datetime | None = None):
     """尝试生成并推送一条主动消息。"""
     try:
-        if not await _should_send_proactive():
+        if not await _should_send_proactive(now_dt=now_dt):
             return
 
         # 生成消息

@@ -31,9 +31,9 @@ _PUBLIC_PATHS = ("/api/push/vapid-key", "/api/health")
 # 简单的内存限流器（每 IP）
 _rate_buckets: dict[str, list[float]] = {}
 
-# 注意：_check_rate 对字典做「首个前缀匹配即 break」，更长/更具体的前缀
-# 必须排在更短的前面——否则 /api/chat/history 会被 /api/chat 先吃掉，
-# 共用聊天的 10 次/分钟桶（实测复现：页面刷新+连聊即误触 429）。
+# 前缀匹配由 _RATE_PREFIXES_LONGEST_FIRST 保证「最长前缀优先」——
+# /api/chat/history 不会被 /api/chat 先吃掉共用聊天的 10 次/分钟桶
+#（实测复现过的 429 误触）。新增前缀无需再记得手工摆顺序。
 _RATE_LIMITS = {
     "/api/chat/history": 60,  # 历史只读：独立桶，不与聊天 LLM 成本桶相争
     "/api/chat": 10,          # 聊天：10 次/分钟（LLM 成本防线，不放宽）
@@ -53,6 +53,9 @@ _RATE_LIMITS = {
     # Docker/监控探针走容器内 127.0.0.1 独立桶，不受此限
     "/api/health": 120,
 }
+
+# 最长前缀优先的遍历序（结构保证，不再依赖字典字面量插入顺序）
+_RATE_PREFIXES_LONGEST_FIRST = tuple(sorted(_RATE_LIMITS, key=len, reverse=True))
 
 
 # ── 限流器定期清理 ──────────────────────────────────────────
@@ -121,12 +124,12 @@ def _check_rate(path: str, ip: str) -> bool:
         _cleanup_counter = 0
         _cleanup_stale_buckets()
 
-    # 精确匹配限流规则
+    # 精确匹配限流规则（最长前缀优先，见 _RATE_PREFIXES_LONGEST_FIRST）
     limit = 0
     matched_prefix = ""
-    for prefix, lim in _RATE_LIMITS.items():
+    for prefix in _RATE_PREFIXES_LONGEST_FIRST:
         if path.startswith(prefix):
-            limit = lim
+            limit = _RATE_LIMITS[prefix]
             matched_prefix = prefix
             break
     if limit == 0:
