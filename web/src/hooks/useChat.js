@@ -143,19 +143,27 @@ export function useChat() {
     // 添加空的助手消息占位
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', streaming: true }])
 
-    // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null
-    const coords = await getGpsCoords()
-
-    // GPS 窗口期间用户切了会话或点了停止 → 放弃本次发送。
-    // 不拦截的话，await 返回后代码会继续把这条消息发给（新的）
-    // sessionIdRef.current，用户切会话前输入的话会幽灵般窜进新会话
-    if (controller.signal.aborted) return
-
     // 只有流正常读完才算「聊成功」—— 401 / 网络错误 / 中断都不算，
-    // 失败时立绘不演开心（气泡报错 + 立绘卖萌是情绪错位）
+    // 失败时立绘不演开心（气泡报错 + 立绘卖萌是情绪错位）。
+    // 声明必须在 try 外：finally 要引用它，try 块内的 let 在 finally
+    // 里不可见（ReferenceError，P0-02 单测实锤过一次）
     let succeeded = false
 
     try {
+      // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null。
+      // P0-02 回归：GPS await 必须住在 try/finally 里——修复前它在
+      // try 之外，用户在定位窗口点停止会走「abort 即 return」提前退出，
+      // finally 不执行：abortRef 永久锁死（后续发送全被吞）、isStreaming
+      // 与空助手占位卡 streaming、立绘卡 listening，页面永远「正在发送」。
+      // 现在提前 return 仍会进 finally 按纪元身份收尾，与流中停止同语义
+      //（无内容气泡留空、立绘难过一阵回平静）。
+      const coords = await getGpsCoords()
+
+      // GPS 窗口期间用户切了会话或点了停止 → 放弃本次发送。
+      // 不拦截的话，await 返回后代码会继续把这条消息发给（新的）
+      // sessionIdRef.current，用户切会话前输入的话会幽灵般窜进新会话
+      if (controller.signal.aborted) return
+
       setCharacterState('thinking')
 
       // 请求体（fetch / XHR 两传输共用）
