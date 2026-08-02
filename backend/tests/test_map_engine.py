@@ -125,6 +125,28 @@ async def test_search_nearby_google_dispatch_and_render(monkeypatch):
     assert gn.call_args.args[0] == (22.28, 114.15)   # latlon 原样下传
 
 
+async def test_search_nearby_amap_converts_to_gcj02(monkeypatch):
+    """内地坐标 + 高德分支：实发 location 必须是 GCJ-02 转换值。
+
+    回归：前端 GPS 报 WGS-84，曾原样喂给高德（要 GCJ-02）→ 内地
+    iPhone「附近」搜索整体偏几百米（安卓系统常代转反而「侥幸正确」）。
+    """
+    from utils.geo import wgs84_to_gcj02
+
+    monkeypatch.setattr(get_settings(), "amap_api_key", "fake-key")
+    amap = AsyncMock(return_value={"status": "1", "pois": []})
+    with patch("tools.map_tools._amap_request", amap):
+        await search_nearby.ainvoke({
+            "keywords": "咖啡", "location": "114.0579,22.5431",  # 深圳·福田（WGS-84）
+        })
+
+    amap.assert_awaited_once()
+    sent = amap.call_args.args[1]["location"]
+    glat, glon = wgs84_to_gcj02(22.5431, 114.0579)
+    assert sent == f"{glon},{glat}"
+    assert sent != "114.0579,22.5431"  # 确实转了，不是原值穿透
+
+
 async def test_fuzzy_search_google_dispatch(monkeypatch):
     """用户位置在港 → 模糊搜索走谷歌 text_search。"""
     monkeypatch.setattr(get_settings(), "google_maps_api_key", "")

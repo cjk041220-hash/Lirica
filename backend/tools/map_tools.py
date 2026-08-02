@@ -17,6 +17,7 @@ from tools.google_places import (
     nearby_search as _google_nearby, text_search as _google_text,
 )
 from utils.errors import log_tool_error
+from utils.geo import wgs84_to_gcj02
 from utils.retry import with_retry
 from utils.timezone import DEFAULT_LAT, DEFAULT_LON
 
@@ -186,17 +187,18 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
     Args:
         keywords: 搜索关键词，如「咖啡店」「餐厅」
         radius: 搜索半径（米），默认 1000m
-        location: 中心点坐标，格式「经度,纬度」，如「114.17,22.30」。可以不传，自动使用 GPS。
+        location: 中心点坐标（WGS-84，移动端 GPS 原值），格式「经度,纬度」，
+            如「114.17,22.30」。可以不传，自动使用 GPS。入高德时内部转 GCJ-02。
     """
     try:
+        # 坐标全程以 WGS-84（浏览器 GPS 原值）持有，仅在入高德 API
+        # 的最后一步转 GCJ-02——引擎判定 _pick_engine 必须用真坐标
         latlon = _parse_latlon(location) if location else None
         if latlon is None:
             # 没有可用坐标 → 尝试会话缓存的 GPS
             cached = await location_store.get_any()
             if cached:
-                lat, lon = cached
-                latlon = (lat, lon)
-                location = f"{lon},{lat}"
+                latlon = cached
 
         if latlon is None:
             return "小汐不知道冷冷现在在哪里呢……告诉小汐你的位置，或者开启 GPS 定位好不好？"
@@ -204,8 +206,11 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
         if _pick_engine(*latlon) == "google":
             pois = await _google_nearby(latlon, keywords, radius)
         else:
+            # 高德用 GCJ-02 加偏坐标系：WGS-84 原值直传会偏出几百米
+            #（内地 iPhone 必现；安卓系统常代转 GCJ-02 反而「侥幸正确」）
+            glat, glon = wgs84_to_gcj02(latlon[0], latlon[1])
             data = await _amap_request("/v3/place/around", {
-                "location": location, "keywords": keywords,
+                "location": f"{glon},{glat}", "keywords": keywords,
                 "radius": radius, "offset": 10,
             })
             if data.get("status") != "1":
