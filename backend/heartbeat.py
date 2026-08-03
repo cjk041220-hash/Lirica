@@ -43,55 +43,129 @@ _TIME_FMT = "%Y-%m-%d %H:%M"
 
 scheduler = AsyncIOScheduler()
 
+# 心情最小停留时长（小时，v2 多时间尺度）：日内换词需距上次切换 ≥6h。
+# 早晨锚定（6-8 点首次心跳）不受限——那是每天一次正式的「新心情」。
+_MIN_MOOD_HOLD_HOURS = 6
+
+# 早晨锚定窗口（v2 多时间尺度）：每日 6-8 点的第一次心跳重置当日心情
+_MORNING_RESET_HOURS = (6, 7, 8)
+
+
+def _is_morning_reset(hour: int, mood_changed_at: str | None, now: str) -> bool:
+    """纯函数：当前心跳是否属于「早晨锚定」触发点。
+
+    条件：时间在 6-8 点窗口内，且当日尚未重置过心情（mood_changed_at
+    不是今天）。无历史切换时间（首次 / v16 前旧库）→ 视为可重置。
+    now 是 "%Y-%m-%d %H:%M" 格式（字典序前 10 位即日期）。
+    """
+    if hour not in _MORNING_RESET_HOURS:
+        return False
+    if not mood_changed_at:
+        return True
+    return mood_changed_at[:10] != now[:10]
+
+
+def _should_hold_mood(current_mood: str | None, new_mood: str, is_morning_reset: bool,
+                      mood_changed_at: str | None, now_dt: datetime.datetime) -> bool:
+    """纯函数：日内换词是否被最小停留（6h）拦住。
+
+    放行换词（返回 False）：词没变 / 早晨锚定 / 无历史切换时间 /
+    时间戳异常（放行不阻塞）。时间戳格式异常由调用方兜底——已发生
+    换词时 mood_changed_at 会被刷新为 now，不会长期异常。
+    """
+    if new_mood == current_mood or is_morning_reset or not mood_changed_at:
+        return False
+    try:
+        last_change = datetime.datetime.strptime(
+            mood_changed_at, _TIME_FMT
+        ).replace(tzinfo=_HKT)
+        return (now_dt - last_change).total_seconds() / 3600 < _MIN_MOOD_HOLD_HOURS
+    except (ValueError, TypeError):
+        return False
+
 # ── 再导出：纯数据/纯逻辑（定义见 heartbeat_moods）──────────────
 # 保持 from heartbeat import … 与 heartbeat.X 直读契约不变。
+# v2（2026-08-03）：_mood_weights 被数值化的 _gauss_weights /
+# _apply_signal_offsets 取代（情绪视觉空间模型，见 heartbeat_moods 模块头）。
 from heartbeat_moods import (
     LATE_NIGHT, MORNING, DAYTIME, EVENING, TIME_PERIODS,
     get_current_period, weekend_label,
-    _mood_weights, _choose_mood,
+    MOOD_VECTORS, _gauss_weights, _apply_signal_offsets, _choose_mood,
 )
 
 
 # ── 心跳任务 ──────────────────────────────────────────────────
 
-async def check_and_proactive_message(app=None):
+async def check_and_proactive_message(app=None, now_dt: datetime.datetime | None = None):
     """根据当前时间段更新小汐的生命状态（时间加权心情 + 日常事件）。
 
     Args:
         app: FastAPI 应用实例。传入时会在更新后自动刷新 system prompt，
              确保小汐的心情与实际状态同步。
+        now_dt: 测试注入用时间点；生产不传（取真实当前时间）。
     """
     # 只取一次当前时间：两次 now() 之间可能跨整点，
     # 导致落库时间戳（06:59）与心情时段池（7 点档）错位
-    now_dt = datetime.datetime.now(_HKT)
+    now_dt = now_dt or datetime.datetime.now(_HKT)
     now = now_dt.strftime("%Y-%m-%d %H:%M")
     hour = now_dt.hour
 
     period = get_current_period(hour)
-    daily_event = random.choice(period["events"])
 
     try:
         conn = await get_db()
         # UPSERT：更新 id=1，不存在则插入。
-        # 顺手取回当前 mood 作心情涟漪的惯性信号，不多查一次库
-        cursor = await conn.execute("SELECT id, mood FROM life_state WHERE id = 1")
+        # 顺手取回当前 mood / mood_changed_at / daily_event（v2 心情节奏
+        # 需要：最小停留 + 早晨锚定 + 日级碎碎念），不多查一次库
+        cursor = await conn.execute(
+            "SELECT id, mood, mood_changed_at, daily_event FROM life_state WHERE id = 1"
+        )
         existing = await cursor.fetchone()
         current_mood = existing[1] if existing else None
+        mood_changed_at = existing[2] if existing else None
+        current_event = existing[3] if existing else None
 
-        # 心情涟漪：时段池内加权抽样（关心/开心信号 + 周末 + 惯性），
-        # 任何环节失败都优雅退回均匀随机
+        # ── 早晨锚定（v2 多时间尺度）────────────────────────────
+        # 每日 6-8 点的第一次心跳：允许「新的一天新心情」的较大跳变
+        #（_choose_mood 从基线出发，不继承昨天心情的惯性）。当天已
+        # 重置过（mood_changed_at 是今天）则降级为普通小步。
+        is_morning_reset = _is_morning_reset(hour, mood_changed_at, now)
+
+        # 心情数值化：有界游走 + 基线吸引 + 事件偏移 → 高斯采样
         mood = await _choose_mood(period, app=app, now_dt=now_dt,
-                                  current_mood=current_mood)
+                                  current_mood=current_mood,
+                                  allow_reset=is_morning_reset)
+
+        # ── 最小停留（v2）：日内换词需距上次切换 ≥6h ────────────
+        # 早晨锚定不受限（那是每天一次正式的「新心情」）；其余心跳
+        # 只允许相邻词的小步过渡，且 6h 内不换——mood 是「弥漫几小时
+        # 的背景」，不该被 2h 心跳的频率带着跳
+        if _should_hold_mood(current_mood, mood, is_morning_reset,
+                             mood_changed_at, now_dt):
+            mood = current_mood
+
+        # ── 日常事件日级（v2）：仅早晨锚定时刷新，日内保持 ──────
+        # 碎碎念「今天经历了：xxx」是日级叙事，不该每 2h 变一次
+        if is_morning_reset or not current_event:
+            daily_event = random.choice(period["events"])
+        else:
+            daily_event = current_event
+
+        # 换词时刷新 mood_changed_at（供下次最小停留判定）
+        if mood != current_mood:
+            mood_changed_at = now
 
         if existing:
             await conn.execute(
-                "UPDATE life_state SET mood = ?, daily_event = ?, updated_at = ? WHERE id = 1",
-                (mood, daily_event, now),
+                "UPDATE life_state SET mood = ?, daily_event = ?, mood_changed_at = ?, "
+                "updated_at = ? WHERE id = 1",
+                (mood, daily_event, mood_changed_at, now),
             )
         else:
             await conn.execute(
-                "INSERT INTO life_state (id, mood, daily_event, updated_at) VALUES (1, ?, ?, ?)",
-                (mood, daily_event, now),
+                "INSERT INTO life_state (id, mood, daily_event, mood_changed_at, updated_at) "
+                "VALUES (1, ?, ?, ?, ?)",
+                (mood, daily_event, mood_changed_at, now),
             )
         await conn.commit()
 

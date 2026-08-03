@@ -53,13 +53,14 @@ async def tmp_db(tmp_path):
     await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     await conn.executescript(MEMORIES_INDEX_SQL)
     await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
-    # 插入初始生命状态行（与 database/core.py init_db 保持一致）
+    # 插入初始生命状态行（与 database/core.py init_db 保持一致，v16 含 mood_changed_at）
     from datetime import datetime
     from utils.timezone import HKT as _HKT
     _now = datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
     await conn.execute(
-        "INSERT OR IGNORE INTO life_state (id, mood, daily_event, updated_at) VALUES (1, ?, ?, ?)",
-        ("开心", "刚刚醒来，映海还很安静", _now),
+        "INSERT OR IGNORE INTO life_state (id, mood, daily_event, mood_changed_at, updated_at) "
+        "VALUES (1, ?, ?, ?, ?)",
+        ("开心", "刚刚醒来，映海还很安静", _now, _now),
     )
     await conn.commit()
     yield conn

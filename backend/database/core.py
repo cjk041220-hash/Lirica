@@ -197,12 +197,15 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针
+    # v16：mood_changed_at 初始为 now（首次插入即视为「刚切换」，最小
+    # 停留判定从创建时刻起算）
     cursor = await conn.execute("SELECT id FROM life_state WHERE id = 1")
     if not await cursor.fetchone():
         now = datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
         await conn.execute(
-            "INSERT INTO life_state (id, mood, daily_event, updated_at) VALUES (1, ?, ?, ?)",
-            ("开心", "刚刚醒来，映海还很安静", now),
+            "INSERT INTO life_state (id, mood, daily_event, mood_changed_at, updated_at) "
+            "VALUES (1, ?, ?, ?, ?)",
+            ("开心", "刚刚醒来，映海还很安静", now, now),
         )
         await conn.commit()
 

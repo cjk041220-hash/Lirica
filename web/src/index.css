@@ -43,6 +43,17 @@
   0%, 100% { transform: translateY(0) scale(1); }
   50% { transform: translateY(-8px) scale(1.005); }
 }
+/* 立绘真 crossfade（2026-08-03）：双 img 叠放、旧图淡出新图淡入同时进行，
+   消除「先隐藏→换图→再显示」伪 crossfade 的空白帧（观感是「闪一下」）。
+   时长由组件按转移表动态注入（站姿↔趴下 800ms / 表情 400ms / 聊天 200ms）。 */
+@keyframes spriteIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes spriteOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(12px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }

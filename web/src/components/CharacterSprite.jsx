@@ -28,10 +28,31 @@ const POKE_COOLDOWN_MS = 6000    // 冷却：防连戳刷屏
 const BUBBLE_MS = 2800           // 气泡停留
 const SLEEPY_OVERRIDE_MS = 4000  // 沉睡被戳 → halfawake 的临时覆盖时长
 
+// 状态切换过渡时长（ms）——真 crossfade 的转移表（2026-08-03 系统性优化）。
+// 替代此前「一律 180ms 先隐藏→换图→再显示」的伪 crossfade（中间有空白帧，
+// 观感是「闪一下」而非「融一下」）。按语义距离分级：
+// - 站姿↔趴下（sleepy/halfawake 进出）是大语义跳变：800ms，halfawake 中间帧顶住；
+// - 心情表情切换（happy/thinking/sad/exploring…）：400ms；
+// - 进聊天 talking 是即时反应：200ms（可打断）。
+const transitionDurationFor = (from, to) => {
+  if (from === 'sleepy' || from === 'halfawake' || to === 'sleepy' || to === 'halfawake') return 800
+  if (to === 'talking') return 200
+  return 400
+}
+
+// 立绘布局：睡姿是横躺画幅（要按宽度平铺在地板上，不能像站姿那样按 92vh
+// 竖撑——否则横躺图被竖撑→飘在半空，正是之前的浮空方块观感来源之一）
+const spriteLayout = (state) => {
+  const lying = state === 'sleepy'
+  return `${lying ? 'w-full h-auto max-h-[60vh]' : 'h-[92vh] w-auto'} object-contain select-none cursor-pointer`
+}
+
 // memo：props 皆原始值；流式聊天逐 token 的 App 重渲染不再穿透进来
 export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', pokeable = true }) {
-  const [displayState, setDisplayState] = useState(state)
-  const [transitioning, setTransitioning] = useState(false)
+  // crossfade 状态：curr = 当前显示状态；prev = 淡出中的旧状态（两图并存）
+  const [curr, setCurr] = useState(state)
+  const [prev, setPrev] = useState(null)
+  const [duration, setDuration] = useState(400)
   const [bubble, setBubble] = useState(null)           // { id, text }
   const [burst, setBurst] = useState([])               // 戳一戳爱心迸发（自清理）
   const [pokeOverride, setPokeOverride] = useState(null) // 深夜戳醒的临时立绘
@@ -41,26 +62,36 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
   const bubbleTimerRef = useRef(null)
   const overrideTimerRef = useRef(null)
   const wiggleTimerRef = useRef(null)
+  const crossfadeTimerRef = useRef(null)
+  // curr 的镜像 ref：crossfade effect 只应响应 state 变化（App 的显示状态），
+  // 用 ref 读「当前状态」避免把 setCurr 结果塞进依赖数组造成空跑
+  const currRef = useRef(curr)
 
+  // 真 crossfade：state 变化时旧图就地淡出（spriteOut）、新图淡入
+  // （spriteIn），两图同时在场、无空白帧。时长按转移表配置。
+  // 连续快速切换（如 talking→thinking→talking）时 prev 会被刷新为
+  // 上一帧、curr 为最新帧，中间帧被跳过——过渡期短，可接受。
   useEffect(() => {
-    if (state !== displayState) {
-      setTransitioning(true)
-      const timer = setTimeout(() => {
-        setDisplayState(state)
-        setTransitioning(false)
-      }, 180)
-      return () => clearTimeout(timer)
-    }
-  }, [state, displayState])
+    if (state === currRef.current) return
+    const d = transitionDurationFor(currRef.current, state)
+    setPrev(currRef.current)
+    setCurr(state)
+    currRef.current = state
+    setDuration(d)
+    clearTimeout(crossfadeTimerRef.current)
+    crossfadeTimerRef.current = setTimeout(() => setPrev(null), d)
+    return () => clearTimeout(crossfadeTimerRef.current)
+  }, [state])
 
   // 立绘文件恢复（或状态切换）后重试加载
-  useEffect(() => { setBroken(false) }, [displayState])
+  useEffect(() => { setBroken(false) }, [curr])
 
   // 卸载清理全部定时器（App 根组件永不卸载，但组件要保持自洽）
   useEffect(() => () => {
     clearTimeout(bubbleTimerRef.current)
     clearTimeout(overrideTimerRef.current)
     clearTimeout(wiggleTimerRef.current)
+    clearTimeout(crossfadeTimerRef.current)
   }, [])
 
   // 戳一戳：纯本地交互。pokeOverride 只是局部视觉层，
@@ -77,7 +108,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
     }
     cooldownRef.current = now
 
-    const effective = pokeOverride || displayState
+    const effective = pokeOverride || curr
     const pool = POKE_LINES[effective] || POKE_LINES.default
     const text = pool[Math.floor(Math.random() * pool.length)]
     setBubble({ id: now, text })
@@ -105,13 +136,18 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
       clearTimeout(overrideTimerRef.current)
       overrideTimerRef.current = setTimeout(() => setPokeOverride(null), SLEEPY_OVERRIDE_MS)
     }
-  }, [pokeable, pokeOverride, displayState])
+  }, [pokeable, pokeOverride, curr])
 
-  const effectiveState = pokeOverride || displayState
+  const effectiveState = pokeOverride || curr
   const src = broken ? spriteMap.idle : (spriteMap[effectiveState] || spriteMap.idle)
   // 睡姿是横躺画幅：要按宽度平铺在地板上，不能像站姿那样按 92vh 竖撑
-  //（否则横躺图被竖撑→飘在半空，正是之前的浮空方块观感来源之一）
   const lying = effectiveState === 'sleepy'
+  const prevLying = prev === 'sleepy'
+  // 站姿脚部渐隐融入地板；睡姿整身在底部，不能再做底部渐隐
+  const standingMask = {
+    maskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
+    WebkitMaskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
+  }
 
   return (
     <div className={`absolute z-20 left-1/2 -translate-x-1/2 ${lying ? 'bottom-[36%] w-[72%]' : 'bottom-[8%]'}`}>
@@ -167,48 +203,64 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
       )}
 
       {/* 立绘 + 呼吸（睡觉时呼吸放慢）。睡姿的 Zzz 已烘进立绘原图、
-          位置随呼吸一起动，故不再由 RoomScene 额外叠加（避免重复+错位） */}
+          位置随呼吸一起动，故不再由 RoomScene 额外叠加（避免重复+错位）。
+          真 crossfade：旧图淡出 + 新图淡入双图叠放，无空白帧 */}
       <div className={
         `${wiggle ? 'animate-wiggle ' : ''}` +
         (effectiveState === 'sleepy' ? 'animate-breathe-slow relative'
         : effectiveState === 'halfawake' ? 'animate-breathe-slower relative'
         : 'animate-breathe relative')
       }>
-        <img
-          src={src}
-          alt="小汐"
-          data-testid="sprite-img"
-          role="button"
-          aria-label={pokeable ? '戳一下小汐' : '小汐'}
-          tabIndex={pokeable ? 0 : -1}
-          onClick={handlePoke}
-          onKeyDown={(e) => {
-            // 键盘可达性：Enter / 空格触发戳一戳（与鼠标 onClick 等价）
-            if (!pokeable) return
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              handlePoke()
-            }
-          }}
-          onError={(e) => {
-            // 裂图防线：任何立绘加载失败 → 回退 idle；idle 本身也裂
-            // 就不再重试（避免死循环），靠 alt 兜底
-            if (e.currentTarget.src.indexOf('idle.webp') === -1) setBroken(true)
-          }}
-          className={`${lying ? 'w-full h-auto max-h-[60vh]' : 'h-[92vh] w-auto'} object-contain select-none cursor-pointer transition-opacity duration-300 ease-out ${
-            transitioning ? 'opacity-0 scale-[0.99]' : 'opacity-100 scale-100'
-          }`}
-          style={{
-            filter: 'drop-shadow(0 8px 20px rgba(110,74,86,0.12)) drop-shadow(0 2px 6px rgba(242,120,159,0.15))',
-            // 站姿脚部渐隐融入地板；睡姿整身在底部，不能再做底部渐隐
-            ...(lying ? {} : {
-              maskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
-              WebkitMaskImage: 'linear-gradient(to bottom, black 90%, transparent 100%)',
-            }),
-            transition: 'opacity 0.3s ease, transform 0.3s ease',
-          }}
-          draggable={false}
-        />
+        <div className="relative">
+          {prev && (
+            <img
+              src={broken ? spriteMap.idle : (spriteMap[prev] || spriteMap.idle)}
+              alt=""
+              aria-hidden
+              draggable={false}
+              // 旧图必须 absolute 叠在当前图之上（`inset` 由当前图撑起容器）：
+              // 否则两张 inline 图在文档流里并排/堆叠，过渡期出现「分身」，
+              // 淡出完成后布局才回弹——正是伪 crossfade 的观感残留。
+              // bottom-0 对齐脚底：站姿↔睡姿切换时旧图双脚仍落在同一地面线。
+              className={`absolute bottom-0 left-1/2 -translate-x-1/2 pointer-events-none ${spriteLayout(prev)}`}
+              style={{
+                animation: `spriteOut ${duration}ms ease forwards`,
+                filter: 'drop-shadow(0 8px 20px rgba(110,74,86,0.12)) drop-shadow(0 2px 6px rgba(242,120,159,0.15))',
+                ...(prevLying ? {} : standingMask),
+              }}
+            />
+          )}
+          <img
+            src={src}
+            alt="小汐"
+            data-testid="sprite-img"
+            role="button"
+            aria-label={pokeable ? '戳一下小汐' : '小汐'}
+            tabIndex={pokeable ? 0 : -1}
+            onClick={handlePoke}
+            onKeyDown={(e) => {
+              // 键盘可达性：Enter / 空格触发戳一戳（与鼠标 onClick 等价）
+              if (!pokeable) return
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                handlePoke()
+              }
+            }}
+            onError={(e) => {
+              // 裂图防线：任何立绘加载失败 → 回退 idle；idle 本身也裂
+              // 就不再重试（避免死循环），靠 alt 兜底
+              if (e.currentTarget.src.indexOf('idle.webp') === -1) setBroken(true)
+            }}
+            className={spriteLayout(effectiveState)}
+            style={{
+              filter: 'drop-shadow(0 8px 20px rgba(110,74,86,0.12)) drop-shadow(0 2px 6px rgba(242,120,159,0.15))',
+              ...(lying ? {} : standingMask),
+              // 新图从 spriteIn 淡入（prev 在场时）；平时无动画、正常显示
+              animation: prev ? `spriteIn ${duration}ms ease forwards` : undefined,
+            }}
+            draggable={false}
+          />
+        </div>
       </div>
     </div>
   )

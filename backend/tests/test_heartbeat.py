@@ -672,32 +672,83 @@ async def test_morning_prompt_mentions_weekend(tmp_db):
 # ── 心情涟漪（批次 C）──────────────────────────────────────────
 
 
-def test_mood_weights_signals():
-    """纯函数权重：信号抬升目标 mood，所有权重 >= 0.2，池约束优先。"""
-    from heartbeat import _mood_weights
+def test_gauss_weights_neighbors_preferred():
+    """高斯权重：目标点近邻词权重高，远词（跨对径）权重趋零。"""
+    from heartbeat_moods import _gauss_weights, MOOD_VECTORS
 
-    evening = ["满足", "发呆", "期待", "担心", "困倦"]
-    base = _mood_weights(evening, care=False, joy=False, talked_recently=False,
-                         is_weekend=False, current_mood=None)
-    assert base == [1.0] * 5
+    happy = MOOD_VECTORS["开心"]
+    weights = _gauss_weights(happy, ["开心", "活泼", "期待", "困倦", "担心"])
+    assert weights[0] > weights[1]         # 自身（距离 0）权重最高
+    assert weights[1] > weights[3]         # 近邻活泼 >> 困倦
+    assert weights[1] > weights[4]         # 近邻活泼 >> 担心
+    assert weights[4] < 0.01               # 跨对径词（担心）几乎不可达
 
-    cared = _mood_weights(evening, care=True, joy=False, talked_recently=False,
-                          is_weekend=False, current_mood=None)
-    assert cared[evening.index("担心")] > 1.0
-    assert all(w >= 0.2 for w in cared)
 
-    # 池里没有「担心」→ care 信号不会凭空造出它，只抑制池内的活泼/兴奋类
-    morning = ["好奇", "期待", "活泼", "开心"]
-    m_cared = _mood_weights(morning, care=True, joy=False, talked_recently=False,
-                            is_weekend=False, current_mood=None)
-    assert "担心" not in morning
-    assert m_cared[morning.index("活泼")] < 1.0
-    assert m_cared[morning.index("好奇")] == 1.0  # 未列出的 mood 恒 1.0
+def test_apply_signal_offsets_directions():
+    """信号偏移方向：care 压低 valence、joy 抬升 valence、talked/weekend 压 arousal。"""
+    from heartbeat_moods import _apply_signal_offsets
 
-    # 惯性：当前 mood 乘 1.3
-    inertial = _mood_weights(evening, care=False, joy=False, talked_recently=False,
-                             is_weekend=False, current_mood="困倦")
-    assert inertial[evening.index("困倦")] == pytest.approx(1.3)
+    base = (0.0, 0.0)
+    cared = _apply_signal_offsets(base, care=True, joy=False, talked=False, is_weekend=False)
+    assert cared[0] < 0  # care → 向「担心」方向（valence 减）
+    joyed = _apply_signal_offsets(base, care=False, joy=True, talked=False, is_weekend=False)
+    assert joyed[0] > 0  # joy → 向「开心」方向（valence 加）
+    talked = _apply_signal_offsets(base, care=False, joy=False, talked=True, is_weekend=False)
+    assert talked[1] < 0  # talked → 向「满足/期待」（arousal 减）
+    weekend = _apply_signal_offsets(base, care=False, joy=False, talked=False, is_weekend=True)
+    assert weekend[1] < 0  # weekend → 向「懒洋洋」（arousal 减）
+    # 钳制：叠加后仍在 [-1, 1]
+    far = _apply_signal_offsets((1.0, 1.0), care=True, joy=True, talked=True, is_weekend=True)
+    assert all(-1.0 <= x <= 1.0 for x in far)
+
+
+async def test_choose_mood_walk_stays_adjacent(tmp_db):
+    """数值化游走：从「满足」出发 100 次，不落「担心/困倦」（跨对径跳变被断层）。"""
+    import datetime as dt
+    import heartbeat
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    with patch("utils.events.get_active_events", return_value=[]):
+        for _ in range(100):
+            mood = await heartbeat._choose_mood(
+                heartbeat.TIME_PERIODS[heartbeat.EVENING],
+                now_dt=dt.datetime.now(HKT),
+                current_mood="满足",
+            )
+            assert mood not in ("担心", "困倦"), f"从满足游走竟落到了 {mood}"
+
+
+def test_is_morning_reset():
+    """早晨锚定判定：6-8 点且当日未重置 → True；其余 False。"""
+    import datetime as dt
+    from heartbeat import _is_morning_reset
+
+    now = dt.datetime(2026, 8, 3, 8, 0).strftime("%Y-%m-%d %H:%M")
+    assert _is_morning_reset(7, "2026-08-02 07:00", now) is True   # 昨天切过 → 可重置
+    assert _is_morning_reset(8, "2026-08-03 07:00", now) is False  # 今天已重置 → 不再
+    assert _is_morning_reset(6, None, now) is True                 # 无历史 → 可重置
+    assert _is_morning_reset(14, "2026-08-02 07:00", now) is False  # 非窗口 → 否
+    assert _is_morning_reset(9, "2026-08-02 07:00", now) is False   # 9 点不在窗口
+
+
+def test_should_hold_mood():
+    """最小停留：6h 内换词 → 拦；6h 外 / 早晨锚定 / 同词 / 无历史 → 放行。"""
+    import datetime as dt
+    import heartbeat as hb
+    from heartbeat import _should_hold_mood
+
+    # 时间戳与 now 同用 _HKT（函数内部按 HKT 解析 mood_changed_at，
+    # 换别的时区会算出错误的时差）
+    now = dt.datetime(2026, 8, 3, 10, 0, tzinfo=hb._HKT)
+    changed_2h = (now - dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    changed_8h = (now - dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
+    assert _should_hold_mood("满足", "开心", False, changed_2h, now) is True
+    assert _should_hold_mood("满足", "开心", False, changed_8h, now) is False
+    assert _should_hold_mood("满足", "开心", True, changed_2h, now) is False  # 早晨锚定豁免
+    assert _should_hold_mood("满足", "满足", False, changed_2h, now) is False  # 同词
+    assert _should_hold_mood("满足", "开心", False, None, now) is False        # 无历史
+    assert _should_hold_mood("满足", "开心", False, "垃圾时间戳", now) is False  # 异常放行
 
 
 async def test_choose_mood_fallback_on_event_failure(tmp_db):
@@ -754,6 +805,110 @@ async def test_choose_mood_reads_recent_memories(tmp_db):
     # 被动性护栏：recent() 不刷计数器（choose 路径同样不刷）
     cursor = await tmp_db.execute("SELECT access_count FROM memories")
     assert (await cursor.fetchone())[0] == 0
+
+
+# ── 心情节奏（v2 多时间尺度，2026-08-03 系统性优化）────────────
+
+
+async def _run_heartbeat_at(tmp_db, monkeypatch, now_dt, fake_mood):
+    """注入时间点 + 假 _choose_mood 跑一次心跳，返回 (row, 调用观测)。
+
+    row = (mood, daily_event, mood_changed_at)；seen 记录 _choose_mood
+    收到的 allow_reset。首位：最小停留 / 早晨锚定 / 日级事件全在
+    check_and_proactive_message 的决策节奏里，测试从整条链路断言。
+    """
+    import heartbeat as hb
+
+    async def mock_get_db():
+        return tmp_db
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    seen = {}
+
+    async def fake_choose_mood(period, *, app=None, now_dt=None,
+                               current_mood=None, allow_reset=False):
+        seen["allow_reset"] = allow_reset
+        return fake_mood
+
+    monkeypatch.setattr(hb, "_choose_mood", fake_choose_mood)
+    await hb.check_and_proactive_message(now_dt=now_dt)
+    cursor = await tmp_db.execute(
+        "SELECT mood, daily_event, mood_changed_at FROM life_state WHERE id = 1"
+    )
+    return await cursor.fetchone(), seen
+
+
+async def test_morning_reset_allows_mood_change_and_refreshes_event(tmp_db, monkeypatch):
+    """早晨 7 点且昨天切过 → allow_reset=True；换词、刷新 daily_event、更新 mood_changed_at。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 3, 7, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', daily_event = '昨天的旧事', "
+        "mood_changed_at = '2026-08-02 07:00' WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    (mood, daily_event, changed_at), seen = await _run_heartbeat_at(
+        tmp_db, monkeypatch, now_dt, "期待"
+    )
+    assert seen["allow_reset"] is True
+    assert mood == "期待"
+    assert daily_event != "昨天的旧事"  # 早晨锚定刷新碎碎念
+    assert changed_at.startswith("2026-08-03")
+
+
+async def test_morning_already_reset_skips_allow_reset(tmp_db, monkeypatch):
+    """早晨 7 点但今天已重置过 → 不传 allow_reset（早晨锚定一天一次）。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 3, 7, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood_changed_at = '2026-08-03 06:30' WHERE id = 1"
+    )
+    await tmp_db.commit()
+    _, seen = await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+    assert seen["allow_reset"] is False
+
+
+async def test_min_hold_blocks_intraday_mood_change(tmp_db, monkeypatch):
+    """日内 2h 前换过词 → 换词被 6h 最小停留拦回；日级事件与时间戳保持。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 3, 10, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', daily_event = '今天的碎碎念', "
+        "mood_changed_at = '2026-08-03 08:00' WHERE id = 1"
+    )
+    await tmp_db.commit()
+    (mood, daily_event, changed_at), _ = await _run_heartbeat_at(
+        tmp_db, monkeypatch, now_dt, "开心"
+    )
+    assert mood == "满足"             # 2h 前换过 → 6h 最小停留拦住
+    assert daily_event == "今天的碎碎念"  # 非早晨 → 日级事件保持
+    assert changed_at == "2026-08-03 08:00"  # 未换词不改时间戳
+
+
+async def test_min_hold_passes_after_six_hours(tmp_db, monkeypatch):
+    """日内 8h 前换过词 → 允许换词；mood_changed_at 刷新；daily_event 仍保持。"""
+    import datetime as dt
+    import heartbeat as hb
+
+    now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', daily_event = '今天的碎碎念', "
+        "mood_changed_at = '2026-08-03 08:00' WHERE id = 1"
+    )
+    await tmp_db.commit()
+    (mood, daily_event, changed_at), _ = await _run_heartbeat_at(
+        tmp_db, monkeypatch, now_dt, "开心"
+    )
+    assert mood == "开心"             # 8h 前换过 → 放行
+    assert daily_event == "今天的碎碎念"  # 非早晨 → 日级事件保持
+    assert changed_at.startswith("2026-08-03 16:0")  # 换词刷新
 
 
 # ── 看门狗段间隔离（批次 D 接线回归）───────────────────────────

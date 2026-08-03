@@ -54,7 +54,11 @@ log = get_logger(__name__)
 #       remember 为 NULL）：「小汐为什么记得这个」可追溯（D6）；
 #     prev_content —— 覆盖前的旧文本（单层快照）：矛盾纠正后能回看
 #       旧说法（D5 的轻量版本，不做完整版本链）。
-SCHEMA_VERSION = 15
+# v16: 心情节奏 — life_state 新增 mood_changed_at（上次心情切换时间）。
+#     心情数值化重构（2026-08-03 系统性优化）引入多时间尺度：早晨锚定
+#     （每日 6-8 点首次心跳重置当日心情）+ 最小停留（日内换词需距上次
+#     切换 ≥6h）。mood_changed_at 支撑这两条节奏的判定，跨重启持久。
+SCHEMA_VERSION = 16
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -346,15 +350,17 @@ _migrations[6] = _migrate_v6
 
 # ── v7 迁移：相识纪念日 ──────────────────────────────────────
 
-# life_state 完整 DDL（v7：新增 first_met_on）。init_db / 迁移 / 测试
-# 夹具三处共享此常量，保证 schema 永不漂移（同 EVENTS_SCHEMA_SQL 模式）。
+# life_state 完整 DDL（v7：新增 first_met_on；v16：新增 mood_changed_at）。
+# init_db / 迁移 / 测试夹具三处共享此常量，保证 schema 永不漂移
+# （同 EVENTS_SCHEMA_SQL 模式）。
 LIFE_STATE_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS life_state (
         id              INTEGER PRIMARY KEY DEFAULT 1,
         mood            TEXT,
         daily_event     TEXT,
         updated_at      TEXT,
-        first_met_on    TEXT
+        first_met_on    TEXT,
+        mood_changed_at TEXT
     );
 """
 
@@ -695,6 +701,40 @@ async def _migrate_v15(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[15] = _migrate_v15
+
+
+# ── v16 迁移：心情节奏 ────────────────────────────────────────
+
+async def _migrate_v16(conn: aiosqlite.Connection) -> None:
+    """v16: life_state 新增 mood_changed_at（上次心情切换时间）。
+
+    背景（2026-08-03 系统性优化）：心情数值化重构引入多时间尺度——
+    早晨锚定（每日 6-8 点首次心跳重置当日心情，允许「新的一天新心情」）
+    与最小停留（日内换词需距上次切换 ≥6h，mood 是弥漫几小时的背景，
+    不该被 2h 心跳频率带着跳）。mood_changed_at 支撑这两条节奏的判定，
+    跨重启持久。
+
+    ALTER TABLE ADD COLUMN 幂等守卫（表不存在则用完整 DDL 建出含新列的
+    表，同 v7 模式）。不回填旧值——老库 mood 无历史切换时间，首次心跳
+    自然重置（mood_changed_at 为 NULL 时 `_choose_mood` 从基线出发），
+    无需迁移数据。
+    """
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='life_state'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(LIFE_STATE_SCHEMA_SQL)
+    else:
+        cursor = await conn.execute("PRAGMA table_info(life_state)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "mood_changed_at" not in columns:
+            await conn.execute("ALTER TABLE life_state ADD COLUMN mood_changed_at TEXT")
+
+    await conn.commit()
+    log.info("迁移 v16 完成：life_state.mood_changed_at 已就绪")
+
+
+_migrations[16] = _migrate_v16
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
