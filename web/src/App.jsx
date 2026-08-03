@@ -35,10 +35,9 @@ const moodToSprite = {
 }
 
 export default function App() {
-  const [showConfig, setShowConfig] = useState(false)
-  const [showMemories, setShowMemories] = useState(false)
-  const [showSessions, setShowSessions] = useState(false)
-  const [showCalendar, setShowCalendar] = useState(false)
+  // 面板互斥（P1-16）：单个枚举替代四个布尔——同一时刻至多一个面板挂载，
+  // 天然互斥；再点同一按钮 = 关闭（toggle）
+  const [activePanel, setActivePanel] = useState(null)
   // 页面打开时即判定深夜——即使立绘状态后续因聊天流改变，
   // 深夜侧初始沉睡的判断基准是"打开页面的那一刻是不是深夜"。
   const [openedAtLateNight] = useState(isLateNight)
@@ -119,14 +118,14 @@ export default function App() {
           顶部安全区（浏览器内与桌面 env()=0，偏移自然不生效） */}
       <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[60] flex items-center gap-0.5 rounded-full glass-panel px-1 py-1 shadow-[0_6px_24px_rgba(110,74,86,0.22)]">
         <button
-          onClick={() => setShowSessions(true)}
+          onClick={() => setActivePanel(p => (p === 'sessions' ? null : 'sessions'))}
           className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="以往的对话"
         >
           <IconHistory size={16} />
         </button>
         <button
-          onClick={() => setShowMemories(true)}
+          onClick={() => setActivePanel(p => (p === 'memories' ? null : 'memories'))}
           className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="小汐的记忆"
         >
@@ -134,14 +133,14 @@ export default function App() {
         </button>
         <span aria-hidden className="w-px h-3.5 bg-plum/15 mx-0.5" />
         <button
-          onClick={() => setShowCalendar(true)}
+          onClick={() => setActivePanel(p => (p === 'calendar' ? null : 'calendar'))}
           className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="小汐的日历"
         >
           <IconCalendar size={16} />
         </button>
         <button
-          onClick={() => setShowConfig(true)}
+          onClick={() => setActivePanel(p => (p === 'config' ? null : 'config'))}
           className="btn-press relative w-8 h-8 rounded-full flex items-center justify-center text-plum/55 transition-colors hover:bg-strawberry/10 hover:text-strawberry after:content-[''] after:absolute after:-inset-1.5"
           aria-label="设置"
         >
@@ -150,10 +149,10 @@ export default function App() {
       </div>
 
       <ChatPanel chat={chat} status={status} displayState={displayState} />
-      {showConfig && <ConfigPanel config={config} push={push} onClose={() => setShowConfig(false)} />}
-      {showMemories && <MemoriesPanel onClose={() => setShowMemories(false)} />}
-      {showSessions && <SessionsPanel chat={chat} onClose={() => setShowSessions(false)} />}
-      {showCalendar && <CalendarPanel onClose={() => setShowCalendar(false)} lastDoneAt={chat.lastDoneAt} />}
+      {activePanel === 'config' && <ConfigPanel config={config} push={push} onClose={() => setActivePanel(null)} />}
+      {activePanel === 'memories' && <MemoriesPanel onClose={() => setActivePanel(null)} />}
+      {activePanel === 'sessions' && <SessionsPanel chat={chat} onClose={() => setActivePanel(null)} />}
+      {activePanel === 'calendar' && <CalendarPanel onClose={() => setActivePanel(null)} lastDoneAt={chat.lastDoneAt} />}
     </div>
   )
 }
