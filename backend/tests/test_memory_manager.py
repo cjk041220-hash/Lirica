@@ -740,3 +740,39 @@ def test_relevance_recency_uses_last_mention_ts():
         now, "",
     )
     assert fresh > stale
+
+
+# ── I1 importance 因子（schema v17）────────────────────────────
+
+
+async def test_importance_stored_and_default(memory_mgr):
+    """I1：add 显式传 importance 落库；不传默认 5（中性）。"""
+    hi = await memory_mgr.add("重要的事", "第一次约会", importance=10)
+    assert hi["importance"] == 10
+    plain = await memory_mgr.add("日常", "今天吃了饭")
+    assert plain["importance"] == 5
+
+
+async def test_importance_clamped_to_1_10(memory_mgr):
+    """I1：LLM 手滑超界 → 钳制回 1-10。"""
+    assert (await memory_mgr.add("a", "x", importance=99))["importance"] == 10
+    assert (await memory_mgr.add("a", "y", importance=0))["importance"] == 1
+    assert (await memory_mgr.add("a", "z", importance="7"))["importance"] == 7
+    assert (await memory_mgr.add("a", "w", importance="abc"))["importance"] == 5
+
+
+async def test_importance_boosts_ranking(memory_mgr, tmp_db):
+    """I1 核心回归：同等时近下，高重要性记忆浮到前面。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("喜好", "日常流水", importance=1)   # 先加（同分时 rowid 靠前）
+    await memory_mgr.add("喜好", "重要的事", importance=10)
+    old = (datetime.datetime.now(HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_mention_ts = ?", (old, old)
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.recall(limit=2, passive=True)
+    assert result[0]["content"] == "重要的事"  # 修复前同分按 rowid → 日常流水在前

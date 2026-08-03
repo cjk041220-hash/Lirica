@@ -532,3 +532,35 @@ async def test_health_report_normal_logs_info(tmp_db, monkeypatch):
     result = await extract.check_and_report_memory_health(tmp_db)
     assert result["warned"] is False
     assert any("记忆健康" in str(c) for c in calls)
+
+
+# ── I1 importance 打分（schema v17）────────────────────────────
+
+
+async def test_extract_passes_importance(tmp_db, fake_llm):
+    """I1：提取 LLM 的 add 动作带 importance → 落库。"""
+    await _seed_messages(tmp_db, ["冷冷说她最喜欢的是夏天"])
+    fake_llm(text='[{"action": "add", "category": "冷冷喜欢的", '
+                  '"content": "冷冷最喜欢夏天", "importance": 9}]')
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["added"] == 1
+    cursor = await tmp_db.execute(
+        "SELECT importance FROM memories WHERE status IN ('active', 'core')"
+    )
+    assert (await cursor.fetchone())[0] == 9
+
+
+async def test_extract_importance_defaults_five(tmp_db, fake_llm):
+    """I1：LLM 没打分 → 默认 5（中性）。"""
+    await _seed_messages(tmp_db, ["冷冷说她喜欢下雨天"])
+    fake_llm(text='[{"action": "add", "category": "冷冷喜欢的", '
+                  '"content": "冷冷喜欢下雨天"}]')
+
+    await extract.extract_new_memories(tmp_db)
+
+    cursor = await tmp_db.execute(
+        "SELECT importance FROM memories WHERE status IN ('active', 'core')"
+    )
+    assert (await cursor.fetchone())[0] == 5

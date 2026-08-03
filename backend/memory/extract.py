@@ -62,7 +62,7 @@ _MAX_PARSE_FAILURES = 3
 # 与 remember 工具（tools/memory.py）及 soul.py 档案边界纪律保持一致。
 _EXTRACT_SYSTEM = """你是小汐的记忆管家。从对话中提炼「值得长期记住的关于冷冷的新事实或变化」，只输出 JSON 数组，不要任何解释。
 
-格式：[{"action": "add|update|noop", "category": "类别", "content": "内容", "memory_id": "可选"}]
+格式：[{"action": "add|update|noop", "category": "类别", "content": "内容", "memory_id": "可选", "importance": 1-10}]
 
 规则：
 1. 只提取确定的事实与变化；猜测、闲聊、寒暄、情绪化的临时说法不要记（noop 最常见）。
@@ -73,7 +73,8 @@ _EXTRACT_SYSTEM = """你是小汐的记忆管家。从对话中提炼「值得�
    - add：新事实；
    - update：与某条现有记忆矛盾或需合并——填该记忆的 memory_id，content 写新内容（变化就合并成「以前……最近……」一句话）；
    - noop：没有值得长期记住的。
-6. 最多 5 条 add、3 条 update；宁缺毋滥。"""
+6. 最多 5 条 add、3 条 update；宁缺毋滥。
+7. importance 只对 add 生效：1-10 打分（1=日常流水一句，5=一般，10=人生大事/重大变化）。update 与 noop 不填。"""
 
 
 def _create_llm():
@@ -266,7 +267,10 @@ async def _dispatch(mgr: MemoryManager, actions: list[dict],
                 skipped += 1
                 continue
             try:
-                await mgr.add(category, content, source=source)
+                # I1：LLM 顺带打 1-10 分（mgr.add 内部 _coerce_importance
+                # 兜底：None/非法 → 5，超界钳回 1-10）
+                await mgr.add(category, content, source=source,
+                              importance=act.get("importance"))
                 added += 1
             except ValueError:
                 skipped += 1
