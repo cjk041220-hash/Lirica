@@ -53,8 +53,11 @@ async def test_build_query_surfaces_topic_memory(memory_mgr, tmp_db):
 
     await memory_mgr.add("去过的地方", "冷冷去年去过台北")
     old = (datetime.datetime.now(HKT) - datetime.timedelta(days=20)).strftime(_TIME_FMT)
+    # O1：created_at 与 last_mention_ts 一起拨——「旧记忆」= 20 天没被提及
     await tmp_db.execute(
-        "UPDATE memories SET created_at = ? WHERE content LIKE '%台北%'", (old,)
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? "
+        "WHERE content LIKE '%台北%'",
+        (old, old),
     )
     await tmp_db.commit()
     for i in range(6):

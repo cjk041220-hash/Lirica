@@ -105,9 +105,11 @@ async def test_recall_shows_most_relevant_top10(injected_mgr):
         await injected_mgr.add("测试类别", f"记忆条目{i}号")
 
     # 把「记忆条目0号」「记忆条目1号」回拨到 200 天前 → 相关性垫底
+    # （O1：created_at 与 last_mention_ts 一起拨——「旧」= 多久没被提及）
     await injected_mgr._db.execute(
-        "UPDATE memories SET created_at = ? WHERE content IN (?, ?)",
-        ("2026-01-01 10:00", "记忆条目0号", "记忆条目1号"),
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? "
+        "WHERE content IN (?, ?)",
+        ("2026-01-01 10:00", "2026-01-01 10:00", "记忆条目0号", "记忆条目1号"),
     )
     await injected_mgr._db.commit()
 
@@ -140,9 +142,11 @@ async def test_recall_tool_query_surfaces_old_topic(injected_mgr):
     from tools.memory import recall
 
     await injected_mgr.add("冷冷喜欢的", "冷冷喜欢喝椰子水")
+    # O1：created_at 与 last_mention_ts 一起拨——「旧而冷门」= 很久没被提及
     await injected_mgr._db.execute(
-        "UPDATE memories SET created_at = ? WHERE content = '冷冷喜欢喝椰子水'",
-        ("2026-01-01 10:00",),
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? "
+        "WHERE content = '冷冷喜欢喝椰子水'",
+        ("2026-01-01 10:00", "2026-01-01 10:00"),
     )
     await injected_mgr._db.commit()
     for i in range(12):

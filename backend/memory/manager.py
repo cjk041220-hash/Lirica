@@ -73,6 +73,15 @@ def _cap_content(content: str, context: str) -> str:
     return content
 
 
+def _coerce_importance(value) -> int:
+    """importance 归一化到 1-10（LLM 手滑/缺失兜底为 5，I1）。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 5
+    return max(1, min(10, n))
+
+
 def _char_bigrams(text: str) -> set[str]:
     """字符 2-gram 集合（去空白）。中文短文本的话题指纹，无需分词。"""
     t = "".join((text or "").split())
@@ -97,15 +106,18 @@ def _bigram_overlap(query: str, content: str) -> float:
 def _relevance_score(memory: dict, now: datetime.datetime, query: str = "") -> float:
     """计算记忆相关性分数。
 
-    四因子加权：
-    - 时间衰减（created_at，半衰期 ≈ 7 天）
+    五因子加权（O1/I1，schema v17）：
+    - 时间衰减（last_mention_ts，半衰期 ≈ 7 天——O1：统一提及时钟，
+      被 add/update/hit 过的记忆续命，created_at 不再兼职衰减）
     - 访问热度（access_count，对数衰减防止老热门垄断）
     - 最近使用（last_used_at，半衰期 ≈ 3.5 天）
+    - 重要性（importance 1-10，LLM 打分，权重 0.3 档——I1）
     - 话题命中（query 与 content+category 的字面重叠，B1 新增，权重 1.0）
     """
-    # 时间衰减
-    created = _parse_time(memory.get("created_at"))
-    days_old = max(0, (now - created).total_seconds() / 86400)
+    # 时间衰减（O1：基于 last_mention_ts，缺失回退 created_at——
+    # 被 add/update/hit 过的记忆续命，created_at 不再兼职衰减时钟）
+    last_mention = memory.get("last_mention_ts") or memory.get("created_at")
+    days_old = max(0, (now - _parse_time(last_mention)).total_seconds() / 86400)
     recency = math.exp(-0.1 * days_old)
 
     # 访问热度
@@ -120,6 +132,9 @@ def _relevance_score(memory: dict, now: datetime.datetime, query: str = "") -> f
     else:
         usage_recency = 0.0
 
+    # 重要性（I1：LLM 提取时打分 1-10，权重 0.3 档——与 usage_recency 同档）
+    importance_boost = _coerce_importance(memory.get("importance")) * 0.03
+
     # 话题加分（权重 1.0）：层内排序用——同为话题命中时，重叠比例高的
     # 靠前。（层间「命中优先」由 recall 的二段排序保证，不靠这个权重硬扛
     # 新记忆的 recency+usage 双加成。）
@@ -129,7 +144,7 @@ def _relevance_score(memory: dict, now: datetime.datetime, query: str = "") -> f
     else:
         topic = 0.0
 
-    return recency + access_boost + usage_recency + topic
+    return recency + access_boost + usage_recency + importance_boost + topic
 
 
 class MemoryManager:
@@ -170,10 +185,11 @@ class MemoryManager:
         placeholders = ",".join("?" for _ in ids)
         await self._db.execute(
             f"""UPDATE memories
-                SET hit_count = hit_count + 1, last_hit_date = ?
+                SET hit_count = hit_count + 1, last_hit_date = ?,
+                    last_mention_ts = ?   -- O1：被浮现也是一次提及，续命衰减钟
                 WHERE id IN ({placeholders})
                   AND COALESCE(last_hit_date, '') != ?""",
-            (today, *ids, today),
+            (today, _now(), *ids, today),
         )
         await self._db.commit()
 
@@ -184,12 +200,19 @@ class MemoryManager:
         category: str,
         content: str,
         source: str | None = None,
+        importance: int = 5,
     ) -> dict:
         """添加一条记忆（原子去重）。返回实际生效的记忆条目。
 
         去重规则：同一 category 下已有完全相同的 content（活跃行）时，
-        不重复添加，只刷新 created_at 和 last_used_at（以及 updated_at，
+        不重复添加，只刷新 last_mention_ts 和 last_used_at（以及 updated_at，
         v12 语义：再次想起也视为一次内容刷新；source 保留首次来源）。
+        **created_at 严格不可变**（O1，schema v17）：它是「第一次记住」
+        的时间，去重刷新不再触碰——否则被反复 add 的记忆衰减时钟被重置，
+        与被反复 update 的记忆老化形成两套矛盾时钟。
+
+        importance（I1，schema v17）：提取时 LLM 打 1-10 分，进相关性
+        排序权重 0.3 档；agentic remember 不传默认 5（中性）。
 
         source（v12）：来源追踪——后台提取传 ``chat:{session_id}``，
         agentic remember 不传（NULL）。「小汐为什么记得这个」可追溯。
@@ -208,20 +231,21 @@ class MemoryManager:
         if not content:
             raise ValueError("content 不能为空")
         content = _cap_content(content, "add")
+        importance = _coerce_importance(importance)
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
         await self._db.execute(
             """INSERT INTO memories
                (id, content, category, created_at, last_used_at, access_count,
-                status, updated_at, source)
-               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?)
+                status, updated_at, source, last_mention_ts, importance)
+               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?)
                ON CONFLICT(category, content) WHERE status IN ('active', 'core')
                DO UPDATE SET
-                   created_at = excluded.created_at,
                    last_used_at = excluded.last_used_at,
-                   updated_at = excluded.updated_at""",
-            (mem_id, content, category, now, now, now, source),
+                   updated_at = excluded.updated_at,
+                   last_mention_ts = excluded.last_mention_ts""",
+            (mem_id, content, category, now, now, now, source, now, importance),
         )
         await self._db.commit()
 
@@ -278,9 +302,10 @@ class MemoryManager:
         )
         cursor = await self._db.execute(
             """UPDATE memories
-               SET content = ?, updated_at = ?, prev_content = ?, last_used_at = ?
+               SET content = ?, updated_at = ?, prev_content = ?, last_used_at = ?,
+                   last_mention_ts = ?   -- O1：覆盖也是一次提及，续命衰减钟
                WHERE id = ? AND status IN ('active', 'core')""",
-            (new_content, now, old_content, now, memory_id),
+            (new_content, now, old_content, now, now, memory_id),
         )
         await self._db.commit()
         return cursor.rowcount > 0
@@ -481,9 +506,10 @@ class MemoryManager:
                             WHEN COALESCE(last_hit_date, '') != ? THEN 1 ELSE 0 END,
                         last_hit_date = CASE
                             WHEN COALESCE(last_hit_date, '') != ? THEN ?
-                            ELSE last_hit_date END
+                            ELSE last_hit_date END,
+                        last_mention_ts = ?   -- O1：主动想起也是提及
                     WHERE id IN ({placeholders})""",
-                (_now(), today, today, today, *ids),
+                (_now(), today, today, today, _now(), *ids),
             )
             await self._db.commit()
 
@@ -517,8 +543,8 @@ class MemoryManager:
             """SELECT * FROM (
                    SELECT * FROM memories
                    WHERE status IN ('active', 'core')
-                   ORDER BY created_at DESC LIMIT ?
-               ) ORDER BY created_at ASC""",
+                   ORDER BY COALESCE(last_mention_ts, created_at) DESC LIMIT ?   -- O1
+               ) ORDER BY COALESCE(last_mention_ts, created_at) ASC""",
             (limit,),
         )
         rows = await cursor.fetchall()
@@ -548,7 +574,8 @@ class MemoryManager:
             placeholders = ",".join("?" for _ in exclude)
             cursor = await self._db.execute(
                 f"""SELECT * FROM memories
-                    WHERE status IN ('active', 'core') AND created_at <= ?
+                    WHERE status IN ('active', 'core')
+                      AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
                       AND id NOT IN ({placeholders})
                     ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, *exclude, limit),
@@ -556,7 +583,8 @@ class MemoryManager:
         else:
             cursor = await self._db.execute(
                 """SELECT * FROM memories
-                   WHERE status IN ('active', 'core') AND created_at <= ?
+                   WHERE status IN ('active', 'core')
+                     AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
                    ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, limit),
             )
@@ -630,6 +658,10 @@ class MemoryManager:
           旧事时 add() 插新行开始新生命周期（archived 已释放 v10 唯一
           索引槽位）；
         - 晋升先于归档执行（顺序为语义清晰，两条 SQL 互不干涉）；
+        - 晋升年龄闸看 created_at（存在 ≥30 天——「爆发一周即晋升」的
+          防线是「存在多久」，不是「多久没提」）；归档年龄闸看
+          last_mention_ts（O1：多久没被提及——被反复 update 但未重复
+          add 的记忆不再因 created_at 老而误归档）；
         - 「重要的事」类别豁免归档——高重要事实永不自动冷藏，只允许
           手动删除/覆盖（类别名与提取 prompt 的类别表一致）；
         - archived 从一切读面消失（recall/recent/count/… 谓词只含
@@ -660,7 +692,7 @@ class MemoryManager:
             f"""UPDATE memories SET status = 'archived'
                 WHERE status = 'active'
                   AND (access_count + hit_count) <= ?
-                  AND created_at <= ?
+                  AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
                   AND category NOT IN ({exempt})""",
             (_ARCHIVE_MAX_ACCESSES, archive_cutoff, *_ARCHIVE_EXEMPT_CATEGORIES),
         )
@@ -682,7 +714,11 @@ class MemoryManager:
         - 距上次写入超过 _HEALTH_WARN_DAYS 天 → 记忆已停滞。
         """
         cursor = await self._db.execute(
-            "SELECT COUNT(*), MAX(created_at) FROM memories WHERE status IN ('active', 'core')"
+            # O1：created_at 不可变后，写时钟看 MAX(COALESCE(updated_at,
+            # created_at))——add/update 刷新 updated_at，hit 不刷，「距上次
+            # 写入」该看它；只 update 不新增的记忆系统不该误报停滞
+            "SELECT COUNT(*), MAX(COALESCE(updated_at, created_at)) "
+            "FROM memories WHERE status IN ('active', 'core')"
         )
         row = await cursor.fetchone()
         count, newest = (row[0], row[1]) if row else (0, None)

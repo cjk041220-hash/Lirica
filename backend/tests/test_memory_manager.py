@@ -418,9 +418,10 @@ async def test_recall_query_promotes_topic_memory(memory_mgr, tmp_db):
     ten_days_ago = (
         datetime.datetime.now(HKT) - datetime.timedelta(days=10)
     ).strftime(_TIME_FMT)
+    # O1：created_at 与 last_mention_ts 一起拨——「旧记忆」= 10 天没被提及
     await tmp_db.execute(
-        "UPDATE memories SET created_at = ? WHERE content LIKE '%澳门%'",
-        (ten_days_ago,),
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? WHERE content LIKE '%澳门%'",
+        (ten_days_ago, ten_days_ago),
     )
     await tmp_db.commit()
 
@@ -522,13 +523,15 @@ async def test_recall_category_surfaces_old_frequent_memory(memory_mgr, tmp_db):
 
 
 async def _age_memory(tmp_db, content: str, days_ago: int):
-    """把指定记忆的 created_at 拨到 N 天前（绕过 add 的 now 时间戳）。"""
+    """把指定记忆拨到 N 天前（O1：created_at 与 last_mention_ts 一起拨——
+    「久远」= 多久没被提及，不是多久前创建）。"""
     import datetime
     from utils.timezone import HKT, _TIME_FMT
 
     ts = (datetime.datetime.now(HKT) - datetime.timedelta(days=days_ago)).strftime(_TIME_FMT)
     await tmp_db.execute(
-        "UPDATE memories SET created_at = ? WHERE content = ?", (ts, content)
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? WHERE content = ?",
+        (ts, ts, content),
     )
     await tmp_db.commit()
 
@@ -671,3 +674,69 @@ async def test_backup_before_clear_includes_archived(memory_mgr, tmp_db, tmp_pat
     await memory_mgr.clear()
     cursor = await tmp_db.execute("SELECT COUNT(*) FROM memories")
     assert (await cursor.fetchone())[0] == 0
+
+
+# ── O1 双时钟：created_at 不可变 + last_mention_ts（schema v17）────────
+
+
+async def test_add_dedup_does_not_refresh_created_at(memory_mgr, tmp_db):
+    """O1 核心回归：add 去重刷新 last_mention_ts，绝不刷新 created_at。
+
+    修复前 add 去重把 created_at 刷成现在——被反复 add 的记忆衰减时钟
+    被重置，而反复 update 的记忆老化，同一衰减体系两套矛盾时钟。
+    """
+    first = await memory_mgr.add("喜好", "喜欢吃芒果")
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = '2026-01-01 10:00', "
+        "last_mention_ts = '2026-01-01 10:00' WHERE id = ?",
+        (first["id"],),
+    )
+    await tmp_db.commit()
+
+    second = await memory_mgr.add("喜好", "喜欢吃芒果")
+    assert second["id"] == first["id"]
+    assert second["created_at"] == "2026-01-01 10:00"  # 不可变
+    assert second["last_mention_ts"] != "2026-01-01 10:00"  # 提及时钟照常刷新
+
+
+async def test_update_content_refreshes_last_mention_ts(memory_mgr, tmp_db):
+    """O1：update 也刷新 last_mention_ts——被反复 update 的记忆不再老化。"""
+    saved = await memory_mgr.add("喜好", "爱吃火锅")
+    await tmp_db.execute(
+        "UPDATE memories SET last_mention_ts = '2026-01-01 10:00' WHERE id = ?",
+        (saved["id"],),
+    )
+    await tmp_db.commit()
+
+    await memory_mgr.update_content(saved["id"], "不爱吃火锅了")
+
+    cursor = await tmp_db.execute(
+        "SELECT created_at, last_mention_ts FROM memories WHERE id = ?",
+        (saved["id"],),
+    )
+    created, last_mention = await cursor.fetchone()
+    assert created != "2026-01-01 10:00"  # created_at 是首次创建（今天）
+    assert last_mention != "2026-01-01 10:00"  # 覆盖后提及时钟已刷新
+
+
+def test_relevance_recency_uses_last_mention_ts():
+    """O1：衰减时钟是 last_mention_ts 而非 created_at（公式级单测）。"""
+    import datetime
+    from memory.manager import _relevance_score
+    from utils.timezone import HKT
+
+    now = datetime.datetime.now(HKT)
+    old = (now - datetime.timedelta(days=100)).strftime("%Y-%m-%d %H:%M")
+    today = now.strftime("%Y-%m-%d %H:%M")
+
+    # 100 天前创建、今天提及 → 新鲜（修复前只看 created_at 会认为老透）
+    fresh = _relevance_score(
+        {"created_at": old, "last_mention_ts": today, "access_count": 0, "importance": 5},
+        now, "",
+    )
+    # 今天创建、100 天前提及 → 老化（修复前会被误判为新鲜）
+    stale = _relevance_score(
+        {"created_at": today, "last_mention_ts": old, "access_count": 0, "importance": 5},
+        now, "",
+    )
+    assert fresh > stale

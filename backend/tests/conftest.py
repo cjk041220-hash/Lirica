@@ -18,7 +18,9 @@ async def tmp_db(tmp_path):
             hit_count INTEGER DEFAULT 0, last_hit_date TEXT,
             status TEXT DEFAULT 'active',
             updated_at TEXT, source TEXT, prev_content TEXT,
-            superseded_by TEXT
+            superseded_by TEXT,
+            last_mention_ts TEXT,
+            importance INTEGER DEFAULT 5
         );
         CREATE TABLE IF NOT EXISTS diaries (
             date TEXT PRIMARY KEY, title TEXT, content TEXT

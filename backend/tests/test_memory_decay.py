@@ -379,3 +379,75 @@ async def test_periodic_maintenance_runs_decay():
         await heartbeat._periodic_maintenance()
 
     decay.assert_awaited_once()
+
+
+# ── O1：衰减与归档统一基于 last_mention_ts（schema v17）──────────────
+
+
+async def test_archive_uses_last_mention_ts_not_created_at(memory_mgr, tmp_db):
+    """O1 归档回归：90 天冷藏看「多久没被提及」，不是「多久前创建」。
+
+    修复前看 created_at——创建于 200 天前、但 50 天前还被 update 过的
+    记忆会被误归档（它明明还活着）。
+    """
+    await _insert_raw(tmp_db, "m1", "老但最近提过", "日常", _days_ago(200))
+    await tmp_db.execute(
+        "UPDATE memories SET last_mention_ts = ? WHERE id = 'm1'", (_days_ago(50),)
+    )
+    await _insert_raw(tmp_db, "m2", "老且久不提", "日常", _days_ago(200))
+    await tmp_db.execute(
+        "UPDATE memories SET last_mention_ts = ? WHERE id = 'm2'", (_days_ago(100),)
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.apply_status_decay()
+
+    assert result["archived"] == 1
+    cursor = await tmp_db.execute(
+        "SELECT id FROM memories WHERE status = 'archived'"
+    )
+    assert (await cursor.fetchone())[0] == "m2"
+
+
+async def test_recent_orders_by_last_mention(memory_mgr, tmp_db):
+    """O1 一致：recent() 的「最近」是最近被提及（last_mention_ts），
+    不是最近被创建。"""
+    await memory_mgr.add("日常", "旧但最近活跃")   # created 今天，last_mention 今天
+    await memory_mgr.add("日常", "新但从未再提")   # created 今天，last_mention 今天
+    old = (datetime.datetime.now(HKT) - datetime.timedelta(days=100)).strftime(_TIME_FMT)
+    # 让两列的语义分歧：新但从未再提 last_mention 100 天前（created 保持今天）；
+    # 旧但最近活跃 created_at 100 天前（last_mention 保持今天）
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? "
+        "WHERE content = '新但从未再提'",
+        (old, old),
+    )
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ? WHERE content = '旧但最近活跃'",
+        (old,),
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.recent(limit=5)
+    # ASC 正序（最旧在前）：按 last_mention，「新但从未再提」100 天前 → 最前；
+    # 「旧但最近活跃」今天被提及 → 最后。修复前按 created_at 正好相反。
+    assert result[0]["content"] == "新但从未再提"
+    assert result[-1]["content"] == "旧但最近活跃"
+
+
+async def test_health_uses_updated_at_as_write_clock(memory_mgr, tmp_db):
+    """O1 连带：created_at 不可变后，健康检查的「距上次写入」改看
+    updated_at（add/update 刷新）——只 update 不新增的记忆系统不该误报停滞。"""
+    saved = await memory_mgr.add("日常", "一条记忆")
+    old = (datetime.datetime.now(HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, updated_at = ? WHERE id = ?",
+        (old, old, saved["id"]),
+    )
+    await tmp_db.commit()
+
+    await memory_mgr.update_content(saved["id"], "新内容")  # updated_at 刷到今天
+
+    health = await memory_mgr.check_memory_health()
+    assert health["days_since_write"] is not None
+    assert health["days_since_write"] < 7  # 不报停滞

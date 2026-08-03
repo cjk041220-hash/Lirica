@@ -58,7 +58,12 @@ log = get_logger(__name__)
 #     心情数值化重构（2026-08-03 系统性优化）引入多时间尺度：早晨锚定
 #     （每日 6-8 点首次心跳重置当日心情）+ 最小停留（日内换词需距上次
 #     切换 ≥6h）。mood_changed_at 支撑这两条节奏的判定，跨重启持久。
-SCHEMA_VERSION = 16
+# v17: 记忆双时钟 + 重要性 — memories 新增 last_mention_ts（O1：统一
+#     提及时钟，add/update/hit 刷新；created_at 自此严格不可变）与
+#     importance（I1：提取时 LLM 打 1-10 分，进相关性排序权重 0.3 档）。
+#     存量回填 last_mention_ts = MAX(created_at, updated_at, last_used_at)，
+#     importance 默认 5（中性）。
+SCHEMA_VERSION = 17
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -735,6 +740,50 @@ async def _migrate_v16(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[16] = _migrate_v16
+
+
+# ── v17 迁移：双时钟 + 重要性 ─────────────────────────────────
+
+
+async def _migrate_v17(conn: aiosqlite.Connection) -> None:
+    """v17: memories.last_mention_ts（统一提及时钟）+ importance（重要性打分）。
+
+    背景（2026-08-03 记忆库诊断 O1/I1）：
+    - O1：add 去重刷新 created_at、update_content 保留——同一衰减体系
+      两套矛盾时钟。被反复 add 的记忆续命、被反复 update 但未重复 add
+      的记忆老化。拆为 created_at 严格不可变（add 不再刷新）+ 新列
+      last_mention_ts（add/update/active-recall/hit 统一刷新），衰减与
+      90 天归档统一基于 last_mention_ts（mem0 三时间戳范式）；
+    - I1：排序缺 importance 因子。提取时 LLM 顺带打 1-10 分存本列，
+      进 _relevance_score（权重 0.3 档）。
+
+    存量回填：last_mention_ts 取 MAX(created_at, updated_at, last_used_at)
+    ——三者任一都是「提及/写入」信号，取最新即最接近真实最近提及的估计
+    （幂等：重跑时 MAX 结果不变）。importance 默认 5——老记忆无打分
+    记录，按中性处理。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    mem_cols = {row[1] for row in await cursor.fetchall()}
+    if "last_mention_ts" not in mem_cols:
+        await conn.execute("ALTER TABLE memories ADD COLUMN last_mention_ts TEXT")
+    if "importance" not in mem_cols:
+        await conn.execute(
+            "ALTER TABLE memories ADD COLUMN importance INTEGER DEFAULT 5"
+        )
+
+    await conn.execute(
+        """UPDATE memories SET last_mention_ts = MAX(
+               created_at,
+               COALESCE(updated_at, created_at),
+               COALESCE(last_used_at, created_at))"""
+    )
+    await conn.execute("UPDATE memories SET importance = 5 WHERE importance IS NULL")
+
+    await conn.commit()
+    log.info("迁移 v17 完成：memories.last_mention_ts + importance（双时钟 + 重要性）")
+
+
+_migrations[17] = _migrate_v17
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
