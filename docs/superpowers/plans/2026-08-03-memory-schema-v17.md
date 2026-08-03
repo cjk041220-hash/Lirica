@@ -46,7 +46,7 @@
 - `test_recall_passive_does_not_update_counters`：只查 access_count / last_used_at，不查 last_mention_ts ✓
 - `test_archive_uses_last_mention_ts`（新）：旧代码用 created_at 归档 → 新测试失败（m1 该留下的被归档）✓
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 **A. 迁移测试** `backend/tests/test_migrations_v17.py`（新建，自建 v16 时代裸库，测迁移 SQL 本身）：
 
@@ -282,12 +282,12 @@ async def test_health_uses_updated_at_as_write_clock(memory_mgr, tmp_db):
         assert "importance" in columns       # v17 I1 重要性打分
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_migrations_v17.py tests/test_memory_manager.py tests/test_memory_decay.py tests/test_init_db_upgrade.py -q`
 Expected: 新用例全部 FAIL——`last_mention_ts` 列不存在（conftest 未加列）、`add` 仍刷新 created_at、`_relevance_score` 仍用 created_at、归档仍看 created_at、健康检查仍看 created_at。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **3a. 迁移** `backend/database/migrations.py`：
 
@@ -485,12 +485,12 @@ def _coerce_importance(value) -> int:
 
 - `check_memory_health`（684-687 行）：`MAX(created_at)` → `MAX(COALESCE(updated_at, created_at))`（写时钟：created_at 不可变后，add/update 刷新 updated_at，hit 不刷——「距上次写入」该看它）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_migrations_v17.py tests/test_memory_manager.py tests/test_memory_decay.py tests/test_init_db_upgrade.py -q`
 Expected: 全部 PASS（新增迁移测试 4 例 + manager 3 例 + decay 3 例 + 既有用例不破）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/database/migrations.py backend/database/core.py backend/tests/conftest.py backend/memory/manager.py backend/tests/test_migrations_v17.py backend/tests/test_memory_manager.py backend/tests/test_memory_decay.py backend/tests/test_init_db_upgrade.py
@@ -512,7 +512,7 @@ git commit -m "feat(memory): schema v17 双时钟 — last_mention_ts 统一提�
 
 **背景：** 诊断 I1：排序缺 importance 因子——「第一次约会」与「今天吃了饭」同权衰减。Generative Agents 为 `0.5·recency + 0.3·importance + 0.2·relevance`。修复：提取时 LLM 顺带打 1-10 分存 importance 列，进 `_relevance_score`（权重 0.3 档，即 `importance * 0.03`，1→0.03 / 10→0.3）。**agentic remember 工具不加参**（文档明示「提取时打分」，且工具「宁多勿少」哲学不配打分负担）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `backend/tests/test_memory_manager.py`：
 
@@ -588,14 +588,14 @@ async def test_extract_importance_defaults_five(tmp_db, fake_llm):
     assert (await cursor.fetchone())[0] == 5
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_memory_manager.py tests/test_memory_extract.py -q`
 Expected: `test_importance_boosts_ranking` FAIL（`_relevance_score` 已含 importance？——不，Task 1 已实现 `_coerce_importance` 与 `importance_boost`！）——注意：**Task 1 的 `_relevance_score` 已含 importance 因子**，故本测试在 Task 1 后即绿。真正失败的是 extract 两例（`importance` 字段被 dispatch 忽略 → 默认 5）。
 
 > 说明：Task 1 与 Task 2 都改 `_relevance_score`——Task 1 的 diff 已把 importance 因子一并写入（`_coerce_importance` 是两任务共享的辅助函数）。因此本 Task 的失败测试是 extract 两例（重要性字段未透传）；manager 三例是 Task 1 结构的一部分，在 Task 1 步骤 4 已绿。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `backend/memory/extract.py`：
 
@@ -632,12 +632,12 @@ _EXTRACT_SYSTEM = """你是小汐的记忆管家。从对话中提炼「值得�
 
 （mgr.add 内部 `_coerce_importance` 兜底：None/非法 → 5；超界钳回 1-10。）
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_memory_manager.py tests/test_memory_extract.py -q`
 Expected: 全部 PASS（含 extract 新 2 例 + manager 新 3 例）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/memory/extract.py backend/tests/test_memory_extract.py
@@ -659,7 +659,7 @@ git commit -m "feat(memory): importance 因子 — 提取 LLM 打分 1-10 进相
 
 **背景：** 诊断 O2：`_choose_mood` 的 talked 信号读 `recent(10)` 记忆（`heartbeat_moods.py:171-175`）——「近 24h 有记忆活动」≈「近 24h 有值得记住的对话」，纯闲聊（无记忆产生）不触发。2026-08-03 心情重构后顺带评估：改从 `chat_messages` 按 `created_at` 判断真实对话时间。失败语义保持 v2 不变：任何信号获取失败 → 保持当前词。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `backend/tests/test_heartbeat.py` 中改写/新增（替换 769-808 行的两个旧用例）：
 
@@ -758,12 +758,12 @@ async def test_choose_mood_calls_has_recent_chat(tmp_db):
     assert mgr.has_recent_chat.await_count == 1
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_heartbeat.py -q`
 Expected: 旧用例 `test_choose_mood_memory_failure_graceful`（patch `recent`）仍绿但已过时——新用例 `test_choose_mood_calls_has_recent_chat` FAIL（`mgr.has_recent_chat` 不存在，`_choose_mood` 仍调 `recent`）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **3a. manager.py** 查询区（`count` 之后）新增：
 
@@ -797,12 +797,12 @@ Expected: 旧用例 `test_choose_mood_memory_failure_graceful`（patch `recent`�
             talked = await mgr.has_recent_chat(24, now=now_dt)
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_heartbeat.py -q`
 Expected: 全部 PASS（新 4 例 + 既有用例不破）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/memory/manager.py backend/heartbeat_moods.py backend/tests/test_heartbeat.py
@@ -831,7 +831,7 @@ git commit -m "fix(heartbeat): talked 信号改读真实对话时间，不再看
 - 合并按 `rowid ASC`（插入序）——superseded 行的 created_at 全是本记忆最初创建时间（时序诚实），同值无法排序，必须用插入序。
 - consolidate 的 `_apply_merge` 会把兄弟行直接置 superseded（绕过 update_content）→ 也调一次 `compress_history` 纳入上限。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `backend/tests/test_superseded.py`：
 
@@ -917,12 +917,12 @@ async def test_export_include_superseded(client, tmp_db):
     assert {"旧说法", "新说法"} <= contents
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_superseded.py tests/test_memory_routes.py -q`
 Expected: 新用例 FAIL——`history` 无上限（6 行）且无 digest；`export_json` 无 `include_superseded` 参数（TypeError）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 **3a. manager.py** 常量区（`_MAX_JSON_BACKUPS` 附近）加：
 
@@ -1064,12 +1064,12 @@ async def export_memories(
                                  include_superseded=include_superseded)
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_superseded.py tests/test_memory_routes.py tests/test_consolidate.py -q`
 Expected: 全部 PASS（新 6 例 + 既有 superseded 6 例 + routes 既有 + consolidate 既有不破）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/memory/manager.py backend/memory/consolidate.py backend/api/routes/chat.py backend/tests/test_superseded.py backend/tests/test_memory_routes.py

@@ -1,9 +1,18 @@
-# 记忆库诊断记录（2026-08-03）— 本轮不动代码，作为后续工作项
+# 记忆库诊断记录（2026-08-03）
 
 > 来源：2026-08-03 系统性优化中的记忆库通读 + 业界调研（Generative Agents /
 > mem0 / Zep-Graphiti / MemGPT-Letta / LangMem / A-MEM / MemoryBank）。
 > 结论：**8-01 评审的 P0/P1 已全部落地，记忆库无阻塞缺陷**。以下为
-> 「架构权衡 / 与业界差距」级别的观察项，按其影响排序。均未实施。
+> 「架构权衡 / 与业界差距」级别的观察项，按其影响排序。
+>
+> **状态（2026-08-03 晚）：O1 / O2 / I1 / O3 已作为 schema v17 全部落地**
+> （实施计划见 `docs/superpowers/plans/2026-08-03-memory-schema-v17.md`，
+> 全量 pytest 633 passed）：
+> - O1 → `227156d`：`last_mention_ts` 统一提及时钟，`created_at` 不可变
+> - I1 → `fa6d74c`：提取 LLM 打 1-10 分进 `_relevance_score`（权重 0.3 档）
+> - O2 → `f108782`：talked 信号改读 `chat_messages` 真实对话时间
+> - O3 → `c9ecb68`：superseded 链上限 5 代 + `export_json` 导出开关
+> 尚未实施的：O4（记录不修）、情绪联动、健康检查多指标。
 
 ## 核心判断
 
@@ -16,13 +25,13 @@
 
 ## 观察项
 
-| # | 观察 | 证据 | 业界对照 | 建议 |
-|---|---|---|---|---|
-| O1 | `add` 去重刷新 `created_at`，`update_content` 保留——**同一衰减体系两套矛盾时钟**：被反复 add 的记忆续命、被反复 update 但未重复 add 的记忆老化 | `manager.py:214-225`（add 的 ON CONFLICT 刷新 created_at）vs `manager.py:238-286`（update 保留 created_at） | mem0 三时间戳范式：`created_at` 不可变 + `last_accessed_at` 刷新；Generative Agents / MemoryBank 也以「访问/提及」重置时钟而非创建时间 | 拆 `create_ts`（不可变）/ `last_mention_ts`（add/update/hit 统一刷新），衰减与 90 天归档统一基于 `last_mention_ts`（schema v17） |
-| I1 | 排序缺 **importance 因子**（LLM 打分）——「第一次约会」与「今天吃了饭」同权衰减 | `manager.py:97-132`（_relevance_score 四因子：recency/access/usage/topic） | Generative Agents：`0.5·recency + 0.3·importance + 0.2·relevance`；mem0 三分等权 | 提取时 LLM 顺带打 1-10 分，存 importance 列，进 _relevance_score（权重 0.3 档） |
-| O2 | `_choose_mood` 的 `talked` 信号读 `recent(10)` **记忆**而非**对话**——「近 24h 有记忆活动」≈「近 24h 有值得记住的对话」，纯闲聊不触发 | `heartbeat_moods.py:171-175`（2026-08-03 重构后仍在） | 无直接对应 | 2026-08-03 心情重构后顺带评估：改从 chat_messages 按 created_at 判断真实对话时间 |
-| O3 | superseded 历史链**无上限、不入 JSON 导出**：`export_json(include_archived=True)` 谓词只含 active/core/archived，历史链仅存于整库快照备份 | `manager.py:377-378`（export 谓词） | Graphiti 时间图无限保留 + valid_at 时间旅行；mem0 覆盖不留链；LangMem/A-MEM 压缩折叠 | 每记忆保留 N 代（如 5），更旧合并为一行 digest；`export_json` 加可选开关 |
-| O4 | 提取批次「有界不回看」：单批超 50 条/4000 字从旧端丢弃，水位线推进到批尾，丢弃消息永久跳过 | `extract.py:163-184` | 设计有意（提取价值随对话变旧衰减） | 记录，不修 |
+| # | 观察 | 证据 | 业界对照 | 建议 | 状态 |
+|---|---|---|---|---|---|
+| O1 | `add` 去重刷新 `created_at`，`update_content` 保留——**同一衰减体系两套矛盾时钟**：被反复 add 的记忆续命、被反复 update 但未重复 add 的记忆老化 | `manager.py`（add 的 ON CONFLICT 曾刷新 created_at）vs update_content 保留 | mem0 三时间戳范式：`created_at` 不可变 + `last_accessed_at` 刷新；Generative Agents / MemoryBank 也以「访问/提及」重置时钟而非创建时间 | 拆 `create_ts`（不可变）/ `last_mention_ts`（add/update/hit 统一刷新），衰减与 90 天归档统一基于 `last_mention_ts`（schema v17） | ✅ `227156d` |
+| I1 | 排序缺 **importance 因子**（LLM 打分）——「第一次约会」与「今天吃了饭」同权衰减 | `manager.py` `_relevance_score`（原四因子） | Generative Agents：`0.5·recency + 0.3·importance + 0.2·relevance`；mem0 三分等权 | 提取时 LLM 顺带打 1-10 分，存 importance 列，进 _relevance_score（权重 0.3 档） | ✅ `fa6d74c` |
+| O2 | `_choose_mood` 的 `talked` 信号读 `recent(10)` **记忆**而非**对话**——「近 24h 有记忆活动」≈「近 24h 有值得记住的对话」，纯闲聊不触发 | `heartbeat_moods.py`（2026-08-03 重构后仍在） | 无直接对应 | 改从 chat_messages 按 created_at 判断真实对话时间 | ✅ `f108782` |
+| O3 | superseded 历史链**无上限、不入 JSON 导出**：`export_json(include_archived=True)` 谓词只含 active/core/archived，历史链仅存于整库快照备份 | `manager.py` export 谓词 | Graphiti 时间图无限保留 + valid_at 时间旅行；mem0 覆盖不留链；LangMem/A-MEM 压缩折叠 | 每记忆保留 N 代（如 5），更旧合并为一行 digest；`export_json` 加可选开关 | ✅ `c9ecb68` |
+| O4 | 提取批次「有界不回看」：单批超 50 条/4000 字从旧端丢弃，水位线推进到批尾，丢弃消息永久跳过 | `extract.py` | 设计有意（提取价值随对话变旧衰减） | 记录，不修 | — |
 
 ## 情绪联动（前沿空白，可做差异化）
 
