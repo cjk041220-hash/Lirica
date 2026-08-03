@@ -14,6 +14,7 @@ import { useConfig } from './hooks/useConfig'
 import { usePush } from './hooks/usePush'
 import { usePresence } from './hooks/usePresence'
 import { useStatus } from './hooks/useStatus'
+import { useDeferredMarkRead } from './hooks/useDeferredMarkRead'
 
 // 深夜判定（HKT 00:00–06:59）——与 SkyBackground 的天空时段共用
 // utils/time.js 的 HKT 钟，保证天色与小汐困不困来自同一时区
@@ -88,6 +89,7 @@ export default function App() {
   // 避免 push/chat 对象每次渲染换新引用导致 effect 空转
   const { receiveProactive } = chat
   const { markRead, unread } = push
+  const markReadWhenVisible = useDeferredMarkRead(markRead)
   useEffect(() => {
     const fresh = unread.filter(m => m.id != null && !injectedRef.current.has(m.id))
     if (fresh.length === 0) return
@@ -96,12 +98,14 @@ export default function App() {
     fresh.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
     fresh.forEach(m => injectedRef.current.add(m.id))
     receiveProactive(fresh)
-    // 已读同步失败 → 回滚 injectedRef，让下一轮 60s 轮询拉到未读时重试
-    //（边角：失败且下轮拉回时可能重复注入一条——发生条件苛刻，接受）
-    markRead(fresh.map(m => m.id)).then(ok => {
+    // 已读门控：后台标签页不标已读（用户没看到不算已读），回到前台
+    // 由 useDeferredMarkRead 补发。失败 → 回滚 injectedRef，让下一轮
+    // 60s 轮询拉到未读时重试（边角：失败且下轮拉回时可能重复注入——
+    // 发生条件苛刻，接受，同原注释）
+    markReadWhenVisible(fresh.map(m => m.id)).then(ok => {
       if (!ok) fresh.forEach(m => injectedRef.current.delete(m.id))
     })
-  }, [unread, receiveProactive, markRead])
+  }, [unread, receiveProactive, markReadWhenVisible])
 
   return (
     <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-cream select-none sm:shadow-[0_24px_90px_-16px_rgba(110,74,86,0.6),0_4px_24px_rgba(110,74,86,0.35)]">
