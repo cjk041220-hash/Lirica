@@ -148,6 +148,26 @@ export function useChat() {
     // 声明必须在 try 外：finally 要引用它，try 块内的 let 在 finally
     // 里不可见（ReferenceError，P0-02 单测实锤过一次）
     let succeeded = false
+    // P1-14：内容 token 缓冲也必须在 try 外——finally 的 flush() 要引用
+    // 它（同 succeeded 的教训）。40ms 定时批量提交，避免每 token 一次
+    // setMessages + 全列表重渲染 + Markdown 重渲染。
+    let contentBuffer = ''
+    let flushTimer = null
+    const flush = () => {
+      flushTimer = null
+      if (!contentBuffer) return
+      const chunk = contentBuffer
+      contentBuffer = ''
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === assistantId ? { ...m, content: m.content + chunk } : m
+        )
+      )
+    }
+    const scheduleFlush = () => {
+      if (flushTimer) return
+      flushTimer = setTimeout(flush, 40)
+    }
 
     try {
       // GPS 辅助（修复 P1-2）：带缓存的定位，拒绝/关闭时静默为 null。
@@ -242,6 +262,7 @@ export function useChat() {
             if (parsed.type === 'error') {
               streamError = true
               streamDone = true
+              flush()  // 先把缓冲的内容提交，再拼错误文案
               const msg = parsed.content || '……小汐好像遇到了什么问题。'
               setMessages(prev =>
                 prev.map(m =>
@@ -253,15 +274,10 @@ export function useChat() {
               break
             }
 
-            // 追加文本内容
+            // 追加文本内容（先入缓冲，40ms 批量提交）
             if (parsed.content) {
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === assistantId
-                    ? { ...m, content: m.content + parsed.content }
-                    : m
-                )
-              )
+              contentBuffer += parsed.content
+              scheduleFlush()
             }
           } catch (e) {
             // 非 JSON 行，忽略
@@ -358,13 +374,8 @@ export function useChat() {
         try {
           const parsed = JSON.parse(data)
           if (parsed.content) {
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, content: m.content + parsed.content }
-                  : m
-              )
-            )
+            contentBuffer += parsed.content
+            flush()
           }
           if (parsed.type === 'error') streamError = true
         } catch { /* 非完整 JSON 行，丢弃 */ }
@@ -375,6 +386,7 @@ export function useChat() {
       // 的 invariant（立绘还会对半句话演 6 秒开心）
       if (!streamDone && !streamError) {
         streamError = true
+        flush()  // 先提交已到内容，再拼中断文案
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantId
@@ -386,6 +398,7 @@ export function useChat() {
       // 流正常读完（收到 [DONE]）且无 error 事件才算成功
       succeeded = !streamError
     } catch (err) {
+      flush()  // 兜底：任何已到内容先提交（AbortError 也提交，不丢字）
       if (err.name !== 'AbortError') {
         // 已有部分文字时「追加」中断提示，而不是仅在内容为空时填兜底文案——
         // 否则用户看到一条被截断的回复却毫不知情
@@ -398,6 +411,8 @@ export function useChat() {
         )
       }
     } finally {
+      clearTimeout(flushTimer)
+      flush()  // 兜底：残留缓冲全量提交，再收尾
       // 锁按身份释放：只清自己的 controller。切换会话时 changeSession
       // 已同步置空并可能装上新会话的 controller，无条件置空会误废它
       if (abortRef.current === controller) abortRef.current = null
