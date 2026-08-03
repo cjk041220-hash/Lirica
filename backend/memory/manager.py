@@ -609,6 +609,24 @@ class MemoryManager:
         row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def has_recent_chat(self, hours: int = 24,
+                              now: datetime.datetime | None = None) -> bool:
+        """近 hours 小时内是否有真实对话（chat_messages 里 user 消息）。
+
+        O2（2026-08-03 心情重构后评估）：_choose_mood 的 talked 信号
+        先前读 recent(10) 记忆——「近 24h 有记忆活动」≈「近 24h 有值得
+        记住的对话」，纯闲聊（无记忆产生）不触发。改从 chat_messages
+        按 created_at 判断真实对话时间。纯只读，不碰任何计数器。
+        """
+        now = now or datetime.datetime.now(_HKT)
+        cutoff = (now - datetime.timedelta(hours=hours)).strftime(_TIME_FMT)
+        cursor = await self._db.execute(
+            "SELECT 1 FROM chat_messages "
+            "WHERE role = 'user' AND created_at >= ? LIMIT 1",
+            (cutoff,),
+        )
+        return await cursor.fetchone() is not None
+
     async def all(self, include_archived: bool = False) -> list[dict]:
         """返回全部活跃记忆列表。
 

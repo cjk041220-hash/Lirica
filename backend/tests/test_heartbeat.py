@@ -766,15 +766,70 @@ async def test_choose_mood_fallback_on_event_failure(tmp_db):
     assert mood in heartbeat.TIME_PERIODS[heartbeat.LATE_NIGHT]["moods"]
 
 
-async def test_choose_mood_memory_failure_graceful(tmp_db):
-    """memory_manager.recent 炸了 → 同样退回均匀随机。"""
+async def test_choose_mood_talked_signal_from_chat_messages(tmp_db):
+    """O2：talked 信号读 chat_messages（真实对话），不是记忆。"""
+    import datetime as dt
+    import heartbeat
+    from memory.manager import MemoryManager
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    now = dt.datetime.now(HKT)
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at) "
+        "VALUES ('s-1', 'user', '刚刚聊过天', ?)",
+        (now.strftime("%Y-%m-%d %H:%M"),),
+    )
+    await tmp_db.commit()
+    mgr = MemoryManager(tmp_db)
+    app = SimpleNamespace(state=SimpleNamespace(memory_manager=mgr))
+    with patch("utils.events.get_active_events", return_value=[]):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.DAYTIME],
+            app=app, now_dt=now,
+        )
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
+    # 记忆库不再被读：库是空的（旧实现读 recent(10) 记忆，这里必须不依赖）
+    cursor = await tmp_db.execute("SELECT COUNT(*) FROM memories")
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_choose_mood_no_recent_chat_ok(tmp_db):
+    """O2：无对话 / 对话超 24h → 不炸，仍正常采样。"""
+    import datetime as dt
+    import heartbeat
+    from memory.manager import MemoryManager
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from utils.timezone import HKT
+
+    old = (dt.datetime.now(HKT) - dt.timedelta(hours=25)).strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at) "
+        "VALUES ('s-1', 'user', '昨天聊过', ?)",
+        (old,),
+    )
+    await tmp_db.commit()
+    mgr = MemoryManager(tmp_db)
+    app = SimpleNamespace(state=SimpleNamespace(memory_manager=mgr))
+    with patch("utils.events.get_active_events", return_value=[]):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.LATE_NIGHT],
+            app=app, now_dt=dt.datetime.now(HKT),
+        )
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.LATE_NIGHT]["moods"]
+
+
+async def test_choose_mood_chat_query_failure_graceful(tmp_db):
+    """O2：has_recent_chat 炸了 → 保持当前词（失败语义同 v2）。"""
     import datetime as dt
     import heartbeat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
     from utils.timezone import HKT
 
-    broken_mgr = SimpleNamespace(recent=AsyncMock(side_effect=RuntimeError("db lost")))
+    broken_mgr = SimpleNamespace(has_recent_chat=AsyncMock(side_effect=RuntimeError("db lost")))
     app = SimpleNamespace(state=SimpleNamespace(memory_manager=broken_mgr))
     with patch("utils.events.get_active_events", return_value=[]):
         mood = await heartbeat._choose_mood(
@@ -784,27 +839,25 @@ async def test_choose_mood_memory_failure_graceful(tmp_db):
     assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
 
 
-async def test_choose_mood_reads_recent_memories(tmp_db):
-    """正常路径：读近 10 条记忆（被动）+ 活跃事件，返回池内词。"""
+async def test_choose_mood_calls_has_recent_chat(tmp_db):
+    """O2 接线：talked 信号来自 has_recent_chat（chat_messages 时间），
+    不再读 recent(10) 记忆。"""
     import datetime as dt
     import heartbeat
     from memory.manager import MemoryManager
     from types import SimpleNamespace
-    from unittest.mock import patch
+    from unittest.mock import AsyncMock, patch
     from utils.timezone import HKT
 
     mgr = MemoryManager(tmp_db)
-    await mgr.add("日常", "冷冷来聊过天")
+    mgr.has_recent_chat = AsyncMock(return_value=True)
     app = SimpleNamespace(state=SimpleNamespace(memory_manager=mgr))
     with patch("utils.events.get_active_events", return_value=[]):
-        mood = await heartbeat._choose_mood(
+        await heartbeat._choose_mood(
             heartbeat.TIME_PERIODS[heartbeat.DAYTIME],
             app=app, now_dt=dt.datetime.now(HKT),
         )
-    assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
-    # 被动性护栏：recent() 不刷计数器（choose 路径同样不刷）
-    cursor = await tmp_db.execute("SELECT access_count FROM memories")
-    assert (await cursor.fetchone())[0] == 0
+    assert mgr.has_recent_chat.await_count == 1
 
 
 # ── 心情节奏（v2 多时间尺度，2026-08-03 系统性优化）────────────

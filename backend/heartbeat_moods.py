@@ -249,9 +249,10 @@ async def _choose_mood(period: dict, *, app=None,
         care = joy = talked = False
         mgr = getattr(app.state, "memory_manager", None) if app is not None else None
         if mgr is not None:
-            recent = await mgr.recent(10)  # recent() 天生被动，不污染计数器
-            cutoff = (now_dt - datetime.timedelta(hours=24)).strftime(_TIME_FMT)
-            talked = any((m.get("created_at") or "") >= cutoff for m in recent)
+            # O2（2026-08-03）：talked 读真实对话（chat_messages 近 24h
+            # 有 user 消息），不再读 recent(10) 记忆——纯闲聊（不产生
+            # 记忆）也算说过话
+            talked = await mgr.has_recent_chat(24, now=now_dt)
         from utils import events as events_mgr
         active = await events_mgr.get_active_events(limit=5)
         types = {e.get("event_type") for e in active}
