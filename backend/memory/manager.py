@@ -64,6 +64,10 @@ _MAX_CONTENT_LEN = 500
 # 5 份策略对齐）。
 _MAX_JSON_BACKUPS = 5
 
+# superseded 历史链上限（O3）：单条记忆保留最新 5 代，更旧合并为一行
+# digest——链无上限时历史行与活跃行同量级增长，且导出/备份无谓携带。
+_MAX_SUPERSEDED_GENERATIONS = 5
+
 
 def _cap_content(content: str, context: str) -> str:
     """截断超长记忆内容（500 字），超限部分替换为省略号并记日志。"""
@@ -307,6 +311,7 @@ class MemoryManager:
                WHERE id = ? AND status IN ('active', 'core')""",
             (new_content, now, old_content, now, now, memory_id),
         )
+        await self.compress_history(memory_id)  # O3：链上限压缩（不独立 commit）
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -319,11 +324,52 @@ class MemoryManager:
         cursor = await self._db.execute(
             """SELECT * FROM memories
                WHERE superseded_by = ? AND status = 'superseded'
-               ORDER BY created_at ASC""",
+               ORDER BY created_at ASC, rowid ASC""",  # rowid：同 created_at 时按插入序
             (memory_id,),
         )
         rows = await cursor.fetchall()
         return rows_to_dicts(cursor, rows)
+
+    async def compress_history(self, memory_id: str) -> None:
+        """superseded 链上限：每记忆保留最新 N 代，更旧合并为一行 digest。
+
+        O3（2026-08-03 记忆库诊断）：单条记忆被覆盖几十次时，历史行
+        与活跃行同量级增长，导出/备份无谓携带失控。上限 5 代：最新 4 代
+        保留逐行，更旧的合并为一行 digest（内容以「；」连接，超长从旧端
+        截断、起始补「…」），链恒 ≤5 行。digest 是概念摘要——「这条
+        记忆改过很多次」仍可追溯，逐代细节让位于上限。
+
+        合并按 rowid ASC（插入序）：superseded 行的 created_at 全是本
+        记忆最初创建时间（时序诚实），同值无法排序，必须用插入序。
+
+        本方法不 commit（调用方统一提交）：update_content 与
+        consolidate._apply_merge 都在各自事务内调用。
+        """
+        cursor = await self._db.execute(
+            """SELECT id, content, rowid FROM memories
+               WHERE superseded_by = ? AND status = 'superseded'
+               ORDER BY rowid ASC""",
+            (memory_id,),
+        )
+        rows = await cursor.fetchall()
+        if len(rows) <= _MAX_SUPERSEDED_GENERATIONS:
+            return
+        keep = _MAX_SUPERSEDED_GENERATIONS - 1  # 末位留给 digest
+        to_merge = rows[:-keep]
+        digest = "；".join(r[1] for r in to_merge)
+        if len(digest) > _MAX_CONTENT_LEN:
+            # 超长从旧端截断（保留最新端），起始补省略号标记不完整
+            digest = "…" + digest[-(_MAX_CONTENT_LEN - 1):]
+        keep_id = to_merge[0][0]  # 合并进最旧行（digest 在那行）
+        drop_ids = [r[0] for r in to_merge[1:]]
+        await self._db.execute(
+            "UPDATE memories SET content = ? WHERE id = ?", (digest, keep_id)
+        )
+        if drop_ids:
+            placeholders = ",".join("?" for _ in drop_ids)
+            await self._db.execute(
+                f"DELETE FROM memories WHERE id IN ({placeholders})", drop_ids
+            )
 
     # ── 删除 ────────────────────────────────────────────────
 
@@ -365,7 +411,9 @@ class MemoryManager:
         """
         from database.core import restrict_backup_permissions
 
-        data = await self.export_json(include_archived=True)
+        # include_superseded=True（O3）：完整快照——历史链与冷藏行一样
+        # 属于记忆账本，清空后应从备份可回看
+        data = await self.export_json(include_archived=True, include_superseded=True)
 
         if backup_dir is None:
             backup_dir = Path(__file__).parent.parent / "data" / "backups"
@@ -392,15 +440,23 @@ class MemoryManager:
         log.info("记忆备份已保存：%s", backup_path)
         return backup_path
 
-    async def export_json(self, include_archived: bool = False) -> str:
+    async def export_json(self, include_archived: bool = False,
+                          include_superseded: bool = False) -> str:
         """导出记忆为 JSON 字符串（用于下载）。
 
         include_archived=False 时只含活跃+core（默认导出语义）；
         True 时连同冷藏的 archived 一并导出（D8：冷库可回看——
         否则「冷藏」对用户就是永久丢失）。
+        include_superseded=True 时连同 superseded 历史链一并导出
+        （O3：历史链此前只存于整库快照备份，加开关后用户可完整回看
+        「这条记忆改过哪些说法」）。
         """
-        status_filter = "IN ('active', 'core')" if not include_archived \
-            else "IN ('active', 'core', 'archived')"
+        statuses = ["'active'", "'core'"]
+        if include_archived:
+            statuses.append("'archived'")
+        if include_superseded:
+            statuses.append("'superseded'")
+        status_filter = f"IN ({', '.join(statuses)})"
         cursor = await self._db.execute(
             f"SELECT * FROM memories WHERE status {status_filter} ORDER BY created_at DESC"
         )

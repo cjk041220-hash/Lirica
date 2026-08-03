@@ -129,6 +129,7 @@ async def _apply_merge(mgr: MemoryManager, conn, merge: dict) -> bool:
             "UPDATE memories SET status = 'superseded', superseded_by = ? WHERE id = ?",
             (survivor[0], other[0]),
         )
+    await mgr.compress_history(survivor[0])  # O3：合并兄弟行也纳入链上限
     await conn.commit()
     return True
 

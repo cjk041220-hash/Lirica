@@ -554,12 +554,15 @@ async def delete_memory(memory_id: str, request: Request):
 async def export_memories(
     request: Request,
     include_archived: bool = Query(False, description="是否包含已归档（冷藏）记忆"),
+    include_superseded: bool = Query(False, description="是否包含已被覆盖的历史说法（superseded 历史链）"),
 ):
-    """导出记忆为 JSON。include_archived=true 时含冷藏记忆（D8：冷库可回看）。"""
+    """导出记忆为 JSON。include_archived=true 时含冷藏记忆（D8：冷库可回看）；
+    include_superseded=true 时含覆盖历史链（O3：此前只存于整库快照备份）。"""
     mem = getattr(request.app.state, "memory_manager", None)
     if mem is None:
         raise HTTPException(503, "记忆系统未就绪")
-    data = await mem.export_json(include_archived=include_archived)
+    data = await mem.export_json(include_archived=include_archived,
+                                 include_superseded=include_superseded)
     # export_json 已产出序列化好的 JSON——直接 Response 回字节，
     # 不再 json.loads 回 dict 交 JSONResponse 双重序列化（体检杂项）
     return Response(

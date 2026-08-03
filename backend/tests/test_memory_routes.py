@@ -172,6 +172,18 @@ async def test_delete_memory_not_found(client, tmp_db):
 # ── /memories（列表）──────────────────────────────────────────
 
 
+async def test_export_include_superseded(client, tmp_db):
+    """O3：导出路由支持 include_superseded=true（历史链可回看）。"""
+    mgr = MemoryManager(tmp_db)
+    saved = await mgr.add("冷冷的信息", "旧说法")
+    await mgr.update_content(saved["id"], "新说法")
+
+    r = await client.get("/api/memories/export", params={"include_superseded": True})
+
+    contents = {m["content"] for m in r.json()["memories"]}
+    assert {"旧说法", "新说法"} <= contents
+
+
 async def test_list_default_excludes_archived(client, tmp_db):
     """面板默认视图不含冷藏。"""
     await _seed_active_and_archived(tmp_db)
