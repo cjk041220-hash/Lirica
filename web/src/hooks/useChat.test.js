@@ -47,10 +47,12 @@ describe('useChat GPS 停止（P0-02 回归）', () => {
 
     expect(result.current.isStreaming).toBe(false)
     expect(result.current.characterState).not.toBe('listening')
-    // 空助手占位不再流式（留空即可，与流中停止同语义）
+    // 空助手占位不再流式，且补上「已停止生成」文案（P0-02 尾巴：
+    // 修复前留空气泡，用户看到一条什么都没有的回复，像 bug）
     const assistant = result.current.messages.find(m => m.role === 'assistant')
     expect(assistant).toBeTruthy()
     expect(assistant.streaming).toBe(false)
+    expect(assistant.content).toBe('已停止生成')
 
     // 核心回归：abortRef 已释放——修复前它永久锁死，
     // 第二次发送被「防双重发送」守卫静默吞掉

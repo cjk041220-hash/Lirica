@@ -405,7 +405,17 @@ export function useChat() {
       // 跳过（消息追加本就按 id map，对新列表是 no-op）
       if (epochRef.current === myEpoch) {
         setMessages(prev =>
-          prev.map(m => m.id === assistantId ? { ...m, streaming: false } : m)
+          prev.map(m =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  streaming: false,
+                  // P0-02 尾巴：停止且尚未生成内容 → 空占位补「已停止生成」。
+                  // 只有「用户停止」会命中（错误/401/早断路径都已写内容）
+                  content: (!succeeded && !m.content) ? '已停止生成' : m.content,
+                }
+              : m
+          )
         )
         setIsStreaming(false)
         // 聊成功 → 小汐开心一阵再归于平静；失败 → 难过一阵再归于平静
