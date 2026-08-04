@@ -478,16 +478,18 @@ async def test_update_content_empty_returns_false(tmp_db):
 
 
 async def test_health_abnormal_no_memories_with_chats(tmp_db):
-    """有足够对话量（≥10 条）却零记忆 → 写路径异常信号。"""
+    """有足够对话量（≥10 条）却零记忆 → 写路径异常信号（从未写入）。"""
     await _seed_messages(tmp_db, ["在吗"] * 10)
     health = await MemoryManager(tmp_db).check_memory_health()
     assert health["active_count"] == 0
     assert health["chat_count"] == 10
     assert health["abnormal"] is True
+    assert health["chats_7d"] == 10
+    assert health["added_7d"] == 0
 
 
-async def test_health_abnormal_stale(tmp_db):
-    """距上次写入 ≥7 天 → 记忆停滞信号。"""
+async def test_health_abnormal_stale_with_chats(tmp_db):
+    """停滞：距上次写入 ≥7 天且近 7 天仍有对话 → 异常。"""
     mgr = MemoryManager(tmp_db)
     old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
     await tmp_db.execute(
@@ -496,9 +498,27 @@ async def test_health_abnormal_stale(tmp_db):
         ("m-stale", "旧记忆", "其他", old),
     )
     await tmp_db.commit()
+    await _seed_messages(tmp_db, ["在吗"])  # 窗口内有对话
+
     health = await mgr.check_memory_health()
     assert health["days_since_write"] >= 7
     assert health["abnormal"] is True
+
+
+async def test_health_idle_no_chats_is_normal(tmp_db):
+    """误报修复：7 天未写入但也没有对话（正常闲置）→ 不告警。"""
+    mgr = MemoryManager(tmp_db)
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES (?, ?, ?, ?, 'active')",
+        ("m-stale", "旧记忆", "其他", old),
+    )
+    await tmp_db.commit()
+
+    health = await mgr.check_memory_health()
+    assert health["days_since_write"] >= 7  # 指标照报
+    assert health["abnormal"] is False       # 只是不告警
 
 
 async def test_health_normal_fresh_memory(tmp_db):
@@ -507,6 +527,61 @@ async def test_health_normal_fresh_memory(tmp_db):
     await mgr.add("其他", "刚刚记住的事")
     health = await mgr.check_memory_health()
     assert health["abnormal"] is False
+
+
+async def test_health_abnormal_stopped_after_prior_memories(tmp_db):
+    """新检测能力：曾有记忆，但近 7 天对话活跃却零新增 → 写路径停摆。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("其他", "旧记忆")
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, updated_at = ?, last_mention_ts = ?",
+        (old, old, old),
+    )
+    await tmp_db.commit()
+    await _seed_messages(tmp_db, ["在吗"] * 10)  # 今天 10 条对话
+
+    health = await mgr.check_memory_health()
+    assert health["active_count"] == 1
+    assert health["added_7d"] == 0
+    assert health["chats_7d"] == 10
+    assert health["abnormal"] is True
+
+
+async def test_health_window_metrics_and_rates(tmp_db):
+    """多指标：近 7 天窗口统计 + 提取率 + 归档占比。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("其他", "最近记住的事")          # 今天新增（v17 created_at 不可变）
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=30)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES (?, ?, ?, ?, 'active')",
+        ("m-old", "30 天前的旧记忆", "其他", old),
+    )
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES (?, ?, ?, ?, 'archived')",
+        ("m-arch", "已归档记忆", "其他", old),
+    )
+    await tmp_db.commit()
+    await _seed_messages(tmp_db, ["在吗"] * 4)   # 今天 4 条对话
+
+    health = await mgr.check_memory_health()
+    assert health["chats_7d"] == 4
+    assert health["added_7d"] == 1               # 30 天前的行不进窗口
+    assert health["extract_rate_7d"] == pytest.approx(0.25)
+    assert health["archived_count"] == 1
+    assert health["archive_ratio"] == pytest.approx(1 / 3)  # 2 active+core : 1 archived
+
+
+async def test_health_extract_rate_none_without_chats(tmp_db):
+    """无对话 → 提取率为 None（不除零、不误造 0%）。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("其他", "一条记忆")
+    health = await mgr.check_memory_health()
+    assert health["chats_7d"] == 0
+    assert health["added_7d"] == 1
+    assert health["extract_rate_7d"] is None
 
 
 async def test_health_report_warns_then_throttles(tmp_db, monkeypatch):

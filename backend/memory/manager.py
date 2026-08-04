@@ -969,8 +969,18 @@ class MemoryManager:
         曾出现「31 条真实对话、0 条记忆」跑一周无人察觉。本方法产出
         abnormal 信号，由调用方（memory/extract.py 的
         check_and_report_memory_health）负责节流告警：
-        - 有相当对话量（>= _HEALTH_MIN_CHATS）却零记忆 → 写路径异常；
-        - 距上次写入超过 _HEALTH_WARN_DAYS 天 → 记忆已停滞。
+
+        - 写路径异常（近 _HEALTH_WINDOW_DAYS 天窗口）：窗口内有相当
+          对话量（>= _HEALTH_MIN_CHATS）却零新增记忆——覆盖「从未写入」
+          与「曾经写过、最近停摆」两种失灵（2026-08-04 多指标批）；
+        - 记忆停滞：距上次写入超过 _HEALTH_WARN_DAYS 天且窗口内仍有
+          对话——「7 天没打开小汐」是正常闲置，不该报（原实现无对话
+          也报，误报；2026-08-04 修正）。
+
+        多指标（2026-08-04，MEMORY_GAPS 健康检查收尾）：提取率 /
+        归档占比等只做观测信息（进返回体与消费方 INFO 日志），不参与
+        abnormal——默认动作「今天没事发生」会天然压低提取率，告警阈值
+        需实盘基线（每 2h INFO 日志时间序列）校准后再考虑。
         """
         cursor = await self._db.execute(
             # O1：created_at 不可变后，写时钟看 MAX(COALESCE(updated_at,
@@ -989,21 +999,55 @@ class MemoryManager:
         if newest:
             days_since_write = max(0.0, (now - _parse_time(newest)).total_seconds() / 86400)
 
+        # ── 多指标（2026-08-04）：近窗口活动 + 库结构观测 ──────────
+        # 窗口统计全部基于 created_at（v17 后不可变 = 首次记住时间戳）：
+        # 「近窗口新增」无需差分快照。新增数按读面谓词过滤（superseded
+        # 历史行与情绪账本行都不算——v18 _MOOD_ROW_FILTER 纪律贯穿）。
+        # 归档占比是存量而非窗口差：SQLite 无归档时间戳（apply_status_decay
+        # 不刷 updated_at），占比反映「库是否在膨胀/积压」的慢信号。
+        cutoff = (now - datetime.timedelta(days=_HEALTH_WINDOW_DAYS)).strftime(_TIME_FMT)
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM chat_messages WHERE created_at >= ?", (cutoff,)
+        )
+        chats_7d = (await cursor.fetchone())[0]
+        cursor = await self._db.execute(
+            f"SELECT COUNT(*) FROM memories WHERE created_at >= ? "
+            f"AND status IN ('active', 'core') {_MOOD_ROW_FILTER}",
+            (cutoff,),
+        )
+        added_7d = (await cursor.fetchone())[0]
+        cursor = await self._db.execute(
+            f"SELECT COUNT(*) FROM memories WHERE status = 'archived' {_MOOD_ROW_FILTER}"
+        )
+        archived_count = (await cursor.fetchone())[0]
+        total = count + archived_count
+        archive_ratio = archived_count / total if total else 0.0
+
         chats = 0
         if count == 0:
-            # 只在零记忆时才查对话量（异常信号所需的唯一场景）
+            # 只在零记忆时才查全历史对话量（兼容旧返回体语义）
             cursor = await self._db.execute("SELECT COUNT(*) FROM chat_messages")
             chats = (await cursor.fetchone())[0]
 
         abnormal = (
-            (count == 0 and chats >= _HEALTH_MIN_CHATS)
-            or (days_since_write is not None and days_since_write >= _HEALTH_WARN_DAYS)
+            (chats_7d >= _HEALTH_MIN_CHATS and added_7d == 0)
+            or (
+                days_since_write is not None
+                and days_since_write >= _HEALTH_WARN_DAYS
+                and chats_7d >= 1
+            )
         )
         return {
             "active_count": count,
             "days_since_write": days_since_write,
             "chat_count": chats,
             "abnormal": abnormal,
+            # 多指标（2026-08-04，基线积累期——告警阈值待实盘数据校准）
+            "chats_7d": chats_7d,
+            "added_7d": added_7d,
+            "extract_rate_7d": (added_7d / chats_7d) if chats_7d else None,
+            "archived_count": archived_count,
+            "archive_ratio": archive_ratio,
         }
 
 
@@ -1026,10 +1070,16 @@ _ARCHIVE_EXEMPT_CATEGORIES = frozenset({"重要的事"})
 
 
 # ── 记忆健康检查阈值 ─────────────────────────────────────────────
-# 有 ≥10 条对话消息却零记忆 → 写路径疑似失灵；距上次写入 ≥7 天 → 停滞。
+# 写路径异常（近 _HEALTH_WINDOW_DAYS 天窗口）：窗口内 ≥_HEALTH_MIN_CHATS
+# 条对话却零新增记忆——覆盖「从未写入」与「曾经写过、最近停摆」两种失灵；
+# 记忆停滞：距上次写入 ≥_HEALTH_WARN_DAYS 天且窗口内仍有对话——「7 天没
+# 打开小汐」是正常闲置，不该报（2026-08-04 多指标批修误报）。
 # 阈值偏保守（宁可错报一次，不可再静默一周）。
+# 提取率/归档占比不做告警阈值（基线积累期）：默认动作「今天没事发生」
+# 天然压低提取率，告警下限需 2-4 周实盘 INFO 日志时间序列校准后再定。
 _HEALTH_MIN_CHATS = 10
 _HEALTH_WARN_DAYS = 7
+_HEALTH_WINDOW_DAYS = 7
 
 
 async def run_status_decay() -> dict:
