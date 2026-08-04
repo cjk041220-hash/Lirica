@@ -564,3 +564,37 @@ async def test_extract_importance_defaults_five(tmp_db, fake_llm):
         "SELECT importance FROM memories WHERE status IN ('active', 'core')"
     )
     assert (await cursor.fetchone())[0] == 5
+
+
+# ── 情绪标签打分（schema v18 情绪联动）────────────────────────
+
+
+async def test_extract_passes_valence_arousal(tmp_db, fake_llm):
+    """v18：提取 LLM 的 add 动作带 valence/arousal → 落库。"""
+    await _seed_messages(tmp_db, ["冷冷说今天考试考砸了，很难过"])
+    fake_llm(text='[{"action": "add", "category": "冷冷的信息", '
+                  '"content": "冷冷今天考试考砸了很难过", "importance": 6, '
+                  '"valence": -0.7, "arousal": 0.3}]')
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["added"] == 1
+    cursor = await tmp_db.execute(
+        "SELECT valence, arousal FROM memories WHERE status IN ('active', 'core')"
+    )
+    valence, arousal = await cursor.fetchone()
+    assert valence == pytest.approx(-0.7)
+    assert arousal == pytest.approx(0.3)
+
+
+async def test_extract_valence_defaults_zero(tmp_db, fake_llm):
+    """v18：LLM 没打情绪分 → 0 中性（与既有行为兼容）。"""
+    await _seed_messages(tmp_db, ["冷冷说她周三有课"])
+    fake_llm(text='[{"action": "add", "category": "冷冷的信息", "content": "冷冷周三有课"}]')
+
+    await extract.extract_new_memories(tmp_db)
+
+    cursor = await tmp_db.execute(
+        "SELECT valence, arousal FROM memories WHERE status IN ('active', 'core')"
+    )
+    assert tuple(await cursor.fetchone()) == (0.0, 0.0)

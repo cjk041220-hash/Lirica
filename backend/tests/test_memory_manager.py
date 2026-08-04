@@ -776,3 +776,38 @@ async def test_importance_boosts_ranking(memory_mgr, tmp_db):
 
     result = await memory_mgr.recall(limit=2, passive=True)
     assert result[0]["content"] == "重要的事"  # 修复前同分按 rowid → 日常流水在前
+
+
+# ── 情绪标签写入（schema v18 情绪联动）────────────────────────
+
+
+async def test_valence_arousal_stored_and_default(memory_mgr):
+    """v18：add 显式传 valence/arousal 落库；不传默认 0.0（中性）。"""
+    tagged = await memory_mgr.add("冷冷的信息", "冷冷今天很难过", valence=-0.7, arousal=0.3)
+    assert tagged["valence"] == pytest.approx(-0.7)
+    assert tagged["arousal"] == pytest.approx(0.3)
+    plain = await memory_mgr.add("日常", "今天吃了饭")
+    assert plain["valence"] == 0.0
+    assert plain["arousal"] == 0.0
+
+
+async def test_valence_arousal_clamped_and_coerced(memory_mgr):
+    """v18：LLM 手滑超界/非法值 → 钳制或归 0（NaN 必须归 0，不能入库）。"""
+    m = await memory_mgr.add("a", "x", valence=3.5, arousal=-4)
+    assert m["valence"] == pytest.approx(1.0)
+    assert m["arousal"] == pytest.approx(-1.0)
+    m = await memory_mgr.add("a", "y", valence="0.5", arousal="abc")
+    assert m["valence"] == pytest.approx(0.5)
+    assert m["arousal"] == pytest.approx(0.0)
+    m = await memory_mgr.add("a", "z", valence="nan", arousal=None)
+    assert m["valence"] == pytest.approx(0.0)
+    assert m["arousal"] == pytest.approx(0.0)
+
+
+async def test_add_dedup_refreshes_valence(memory_mgr):
+    """v18：重提同一事实，情绪标签随最新打分刷新（importance 保持首写不变）。"""
+    first = await memory_mgr.add("冷冷的信息", "冷冷怕打雷", valence=-0.6, arousal=0.4)
+    again = await memory_mgr.add("冷冷的信息", "冷冷怕打雷", valence=-0.2, arousal=0.1)
+    assert again["id"] == first["id"]          # 去重命中同一行
+    assert again["valence"] == pytest.approx(-0.2)
+    assert again["arousal"] == pytest.approx(0.1)

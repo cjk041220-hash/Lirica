@@ -86,6 +86,31 @@ def _coerce_importance(value) -> int:
     return max(1, min(10, n))
 
 
+def _coerce_unit(value) -> float:
+    """valence/arousal 归一化到 [-1, 1]（schema v18 情绪联动）。
+
+    LLM 手滑/缺失兜底为 0.0（中性）；NaN 显式归 0——json.loads 接受
+    NaN 字面量，float() 不拦它，入库会污染亲和度计算。
+    """
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if x != x:  # NaN
+        return 0.0
+    return max(-1.0, min(1.0, x))
+
+
+def _coerce_valence(value) -> float:
+    """valence（情绪效价）钳制：缺失/非法 → 0.0 中性。"""
+    return _coerce_unit(value)
+
+
+def _coerce_arousal(value) -> float:
+    """arousal（唤醒度）钳制：缺失/非法 → 0.0 中性。"""
+    return _coerce_unit(value)
+
+
 def _char_bigrams(text: str) -> set[str]:
     """字符 2-gram 集合（去空白）。中文短文本的话题指纹，无需分词。"""
     t = "".join((text or "").split())
@@ -205,6 +230,8 @@ class MemoryManager:
         content: str,
         source: str | None = None,
         importance: int = 5,
+        valence=None,
+        arousal=None,
     ) -> dict:
         """添加一条记忆（原子去重）。返回实际生效的记忆条目。
 
@@ -217,6 +244,13 @@ class MemoryManager:
 
         importance（I1，schema v17）：提取时 LLM 打 1-10 分，进相关性
         排序权重 0.3 档；agentic remember 不传默认 5（中性）。
+        **importance 去重时保持首写**（第一次记住时的重要性判断稳定）。
+
+        valence/arousal（情绪联动，schema v18）：提取时 LLM 打 Russell
+        情绪空间分（各 -1..1，缺失/非法 → 0.0 中性，见 _coerce_unit）。
+        与 importance 刻意不同的纪律：**去重时随最新打分刷新**——情绪是
+        状态量，同一事实重提时最新的情绪色彩胜出（提取重试也自愈：
+        首跑漏打分落 0，次跑补上即刷新）。agentic remember 不传默认 0。
 
         source（v12）：来源追踪——后台提取传 ``chat:{session_id}``，
         agentic remember 不传（NULL）。「小汐为什么记得这个」可追溯。
@@ -236,20 +270,26 @@ class MemoryManager:
             raise ValueError("content 不能为空")
         content = _cap_content(content, "add")
         importance = _coerce_importance(importance)
+        valence = _coerce_valence(valence)
+        arousal = _coerce_arousal(arousal)
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
         await self._db.execute(
             """INSERT INTO memories
                (id, content, category, created_at, last_used_at, access_count,
-                status, updated_at, source, last_mention_ts, importance)
-               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?)
+                status, updated_at, source, last_mention_ts, importance,
+                valence, arousal)
+               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?)
                ON CONFLICT(category, content) WHERE status IN ('active', 'core')
                DO UPDATE SET
                    last_used_at = excluded.last_used_at,
                    updated_at = excluded.updated_at,
-                   last_mention_ts = excluded.last_mention_ts""",
-            (mem_id, content, category, now, now, now, source, now, importance),
+                   last_mention_ts = excluded.last_mention_ts,
+                   valence = excluded.valence,
+                   arousal = excluded.arousal""",
+            (mem_id, content, category, now, now, now, source, now, importance,
+             valence, arousal),
         )
         await self._db.commit()
 
