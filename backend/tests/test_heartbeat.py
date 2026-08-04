@@ -987,3 +987,124 @@ async def test_watchdog_isolation_echo_stage(tmp_db):
         m_prof.assert_awaited_once()
     finally:
         db_core._db = original
+
+
+# ── 情绪联动：心跳换词落情绪核心记忆（schema v18）────────────
+
+
+async def test_heartbeat_mood_change_writes_mood_memory(tmp_db, monkeypatch):
+    """换词放行（距上次 ≥6h）：心情变化落情绪核心记忆（core 行、固定 id）。"""
+    import datetime as dt
+    import heartbeat as hb
+    from memory.manager import MOOD_MEMORY_ID
+
+    now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', mood_changed_at = '2026-08-03 08:00' "
+        "WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+
+    cursor = await tmp_db.execute(
+        "SELECT status, category, content FROM memories WHERE id = ?",
+        (MOOD_MEMORY_ID,),
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row[0] == "core"
+    assert row[1] == "小汐的心情"
+    assert "开心" in row[2] and "2026-08-03 16:00" in row[2]
+
+
+async def test_heartbeat_second_change_grows_chain(tmp_db, monkeypatch):
+    """第二次换词：旧心情落 superseded 链（回放账本在心跳链路上成立）。"""
+    import datetime as dt
+    import heartbeat as hb
+    from memory.manager import MOOD_MEMORY_ID, MemoryManager
+
+    now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', mood_changed_at = '2026-08-03 08:00' "
+        "WHERE id = 1"
+    )
+    await tmp_db.commit()
+    await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+
+    now_dt2 = dt.datetime(2026, 8, 4, 7, 0, tzinfo=hb._HKT)  # 次日早晨锚定
+    await _run_heartbeat_at(tmp_db, monkeypatch, now_dt2, "期待")
+
+    history = await MemoryManager(tmp_db).history(MOOD_MEMORY_ID)
+    assert len(history) == 1 and "开心" in history[0]["content"]
+    cursor = await tmp_db.execute(
+        "SELECT content FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+    )
+    assert "期待" in (await cursor.fetchone())[0]
+
+
+async def test_heartbeat_no_change_no_mood_memory(tmp_db, monkeypatch):
+    """心情词未变：不落情绪记忆（首次部署生命状态行已有 mood 的场景）。"""
+    import datetime as dt
+    import heartbeat as hb
+    from memory.manager import MOOD_MEMORY_ID
+
+    now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '开心', mood_changed_at = '2026-08-03 08:00' "
+        "WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+
+    cursor = await tmp_db.execute(
+        "SELECT COUNT(*) FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+    )
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_heartbeat_hold_blocks_mood_memory(tmp_db, monkeypatch):
+    """最小停留拦回的换词：life_state 不变，情绪记忆也不落。"""
+    import datetime as dt
+    import heartbeat as hb
+    from memory.manager import MOOD_MEMORY_ID
+
+    now_dt = dt.datetime(2026, 8, 3, 10, 0, tzinfo=hb._HKT)  # 距 08:00 仅 2h
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', mood_changed_at = '2026-08-03 08:00' "
+        "WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    (mood, _, _), _ = await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+
+    assert mood == "满足"  # 被 6h 最小停留拦回
+    cursor = await tmp_db.execute(
+        "SELECT COUNT(*) FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+    )
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_daily_diary_excludes_mood_memory(tmp_db):
+    """自动日记素材：情绪核心记忆是小汐自己的账本，不算「冷冷新告诉小汐的事」。"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import heartbeat as hb
+    from memory.manager import MemoryManager
+    from utils.timezone import now_str
+
+    mgr = MemoryManager(tmp_db)
+    await mgr.upsert_mood_memory("开心", now=now_str())  # created_at = 今天
+    await mgr.add("冷冷的信息", "冷冷今天说想去海边")
+
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(return_value=MagicMock(content="今天的日记内容。"))
+
+    with patch("heartbeat.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db), \
+         patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm):
+        await hb.daily_diary()
+
+    material = fake_llm.ainvoke.await_args[0][0][1].content
+    assert "冷冷今天说想去海边" in material
+    assert "小汐的心情" not in material

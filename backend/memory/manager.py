@@ -72,6 +72,20 @@ _MAX_JSON_BACKUPS = 5
 # digest——链无上限时历史行与活跃行同量级增长，且导出/备份无谓携带。
 _MAX_SUPERSEDED_GENERATIONS = 5
 
+# ── 情绪核心记忆（schema v18 情绪联动）────────────────────────
+# 「当前情绪」固定行：status='core'，**只存不浮现**——一切浮现/计数
+# 读面按 id 排除（_MOOD_ROW_FILTER），仅作回放（history / 导出账本）
+# 与调制信号来源。固定确定性 id 的好处：幂等 upsert、最便宜的 SQL
+# 排除谓词、测试可直接断言（uuid 动态 id 每次写前还得先查）。
+MOOD_MEMORY_ID = "mood_current"
+MOOD_MEMORY_CATEGORY = "小汐的心情"
+MOOD_MEMORY_SOURCE = "system:mood"
+
+# 排除谓词（id 排除而非 category/source：确定性单行、单写入方，谓词
+# 最便宜且零歧义；superseded 链行已因 status='superseded' 天然跌出
+# 读面，无需本谓词照顾）。挂在所有浮现/计数读面的 WHERE 后。
+_MOOD_ROW_FILTER = f"AND id != '{MOOD_MEMORY_ID}'"
+
 
 def _cap_content(content: str, context: str) -> str:
     """截断超长记忆内容（500 字），超限部分替换为省略号并记日志。"""
@@ -582,8 +596,9 @@ class MemoryManager:
             # 高相关」的记忆永远进不了候选池，评分只能在最新 N 条里选）。
             # LIKE 过滤后全量评分，单用户量级（百级～千级）可承受。
             cursor = await self._db.execute(
-                """SELECT * FROM memories
-                   WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')""",
+                f"""SELECT * FROM memories
+                    WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
+                    {_MOOD_ROW_FILTER}""",
                 (f"%{_escape_like(category)}%",),
             )
         else:
@@ -593,7 +608,7 @@ class MemoryManager:
             # 退化成「最新路」（narrative 的 hybrid 注入名存实亡）。
             # 单用户记忆量级（百级～千级）全表评分完全可承受。
             cursor = await self._db.execute(
-                "SELECT * FROM memories WHERE status IN ('active', 'core')"
+                f"SELECT * FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
             )
         rows = await cursor.fetchall()
         matched = rows_to_dicts(cursor, rows)
@@ -664,9 +679,10 @@ class MemoryManager:
         眼前，不应计入浮现次数。
         """
         cursor = await self._db.execute(
-            """SELECT * FROM memories
-               WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
-               ORDER BY created_at DESC LIMIT ?""",
+            f"""SELECT * FROM memories
+                WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
+                {_MOOD_ROW_FILTER}
+                ORDER BY created_at DESC LIMIT ?""",
             (f"%{_escape_like(category)}%", limit),
         )
         rows = await cursor.fetchall()
@@ -680,11 +696,11 @@ class MemoryManager:
         天数——被叙事浮现过的记忆不该到期冷藏）。
         """
         cursor = await self._db.execute(
-            """SELECT * FROM (
-                   SELECT * FROM memories
-                   WHERE status IN ('active', 'core')
-                   ORDER BY COALESCE(last_mention_ts, created_at) DESC LIMIT ?   -- O1
-               ) ORDER BY COALESCE(last_mention_ts, created_at) ASC""",
+            f"""SELECT * FROM (
+                    SELECT * FROM memories
+                    WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}
+                    ORDER BY COALESCE(last_mention_ts, created_at) DESC LIMIT ?   -- O1
+                ) ORDER BY COALESCE(last_mention_ts, created_at) ASC""",
             (limit,),
         )
         rows = await cursor.fetchall()
@@ -717,15 +733,17 @@ class MemoryManager:
                     WHERE status IN ('active', 'core')
                       AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
                       AND id NOT IN ({placeholders})
+                      {_MOOD_ROW_FILTER}
                     ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, *exclude, limit),
             )
         else:
             cursor = await self._db.execute(
-                """SELECT * FROM memories
-                   WHERE status IN ('active', 'core')
-                     AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
-                   ORDER BY RANDOM() LIMIT ?""",
+                f"""SELECT * FROM memories
+                    WHERE status IN ('active', 'core')
+                      AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
+                      {_MOOD_ROW_FILTER}
+                    ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, limit),
             )
         rows = await cursor.fetchall()
@@ -736,7 +754,9 @@ class MemoryManager:
     async def list_categories(self) -> dict[str, int]:
         """列出所有类别及活跃记忆数量。"""
         cursor = await self._db.execute(
-            "SELECT category, COUNT(*) as cnt FROM memories WHERE status IN ('active', 'core') GROUP BY category"
+            f"""SELECT category, COUNT(*) as cnt FROM memories
+                WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}
+                GROUP BY category"""
         )
         rows = await cursor.fetchall()
         return {r[0] or "其他": r[1] for r in rows}
@@ -744,7 +764,7 @@ class MemoryManager:
     async def count(self) -> int:
         """返回活跃记忆总数。"""
         cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM memories WHERE status IN ('active', 'core')"
+            f"SELECT COUNT(*) FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -793,7 +813,8 @@ class MemoryManager:
         status_filter = "IN ('active', 'core')" if not include_archived \
             else "IN ('active', 'core', 'archived')"
         cursor = await self._db.execute(
-            f"SELECT * FROM memories WHERE status {status_filter} ORDER BY created_at DESC"
+            f"SELECT * FROM memories WHERE status {status_filter} {_MOOD_ROW_FILTER} "
+            "ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
         return rows_to_dicts(cursor, rows)
@@ -807,16 +828,79 @@ class MemoryManager:
         core 会在 _relevance_score 里自我加冕，违背被动读取原则）；
         但按日计 hit_count（v13 引入、v14 按不同天数）：保底席位的
         浮现是衰减燃料，不是排名信号。
+
+        情绪核心记忆不占保底席位（_MOOD_ROW_FILTER）：它是小汐自己的
+        心情账本，若计入会永久霸占 core 保底席——叙事里永远多一条
+        「心情」，且高频心跳 update 刷它的 last_used_at 钉死榜首。
         """
         cursor = await self._db.execute(
-            """SELECT * FROM memories WHERE status = 'core'
-               ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT ?""",
+            f"""SELECT * FROM memories WHERE status = 'core' {_MOOD_ROW_FILTER}
+                ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT ?""",
             (limit,),
         )
         rows = await cursor.fetchall()
         mems = rows_to_dicts(cursor, rows)
         await self._count_hits([m["id"] for m in mems])
         return mems
+
+    async def upsert_mood_memory(self, mood: str, now: str | None = None) -> dict | None:
+        """把一次心情变化落进情绪核心记忆（回放账本，schema v18 情绪联动）。
+
+        首次调用 INSERT core 行（add() 只会落 active，且其同内容去重语义
+        与「每次换词留一代历史」冲突，故情绪行走裸 SQL）；此后走
+        update_content——旧说法落 superseded 历史链（v15）并继承链上限
+        5 代压缩（compress_history），created_at 保留首次创建时间——
+        情绪轨迹可逐代回放（history() / export_json）。
+
+        content 内嵌落库时间：superseded 行的 created_at 一律是本记忆
+        最初创建时间（时序诚实设计），列上拿不到每代生效时间，只有文案
+        能携带；副作用是每代 content 必不同，天然规避去重索引与幂等误判。
+
+        行上 valence/arousal 存 MOOD_VECTORS 坐标——调制信号也落账本
+        （导出/回放可读数值）。update_content 不动这两列（不改共享方法），
+        本方法在链更新后补一条 UPDATE。
+
+        只存不浮现：本行被一切浮现/计数读面排除（_MOOD_ROW_FILTER），
+        不进叙事注入、不参与 recall/top_core/old_memories 候选。
+        同分钟同心情重复调用 → no-op 返回 None（不空落历史行）。
+        """
+        mood = (mood or "").strip()
+        if not mood:
+            return None
+        now = now or _now()
+        content = f"{now} 起，小汐的心情是「{mood}」"
+        vec = MOOD_VECTORS.get(mood, (0.0, 0.0))
+
+        cursor = await self._db.execute(
+            "SELECT content FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+        )
+        row = await cursor.fetchone()
+
+        if row is None:
+            await self._db.execute(
+                """INSERT INTO memories
+                   (id, content, category, created_at, last_used_at, access_count,
+                    status, updated_at, source, last_mention_ts, importance,
+                    valence, arousal)
+                   VALUES (?, ?, ?, ?, ?, 0, 'core', ?, ?, ?, 5, ?, ?)""",
+                (MOOD_MEMORY_ID, content, MOOD_MEMORY_CATEGORY, now, now,
+                 now, MOOD_MEMORY_SOURCE, now, vec[0], vec[1]),
+            )
+            await self._db.commit()
+        else:
+            if row[0] == content:
+                return None  # 同分钟同心情：no-op
+            await self.update_content(MOOD_MEMORY_ID, content)
+            await self._db.execute(
+                "UPDATE memories SET valence = ?, arousal = ? WHERE id = ?",
+                (vec[0], vec[1], MOOD_MEMORY_ID),
+            )
+            await self._db.commit()
+
+        cursor = await self._db.execute(
+            "SELECT * FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+        )
+        return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
     async def apply_status_decay(self) -> dict:
         """分层衰减：active→core（高频晋升）/ active→archived（低频遗忘）。
@@ -892,8 +976,10 @@ class MemoryManager:
             # O1：created_at 不可变后，写时钟看 MAX(COALESCE(updated_at,
             # created_at))——add/update 刷新 updated_at，hit 不刷，「距上次
             # 写入」该看它；只 update 不新增的记忆系统不该误报停滞
+            # v18：排除情绪核心记忆——它每小时可能被心跳 update，若计入，
+            # 「0 记忆」与「记忆停滞」两条告警恒假，健康检查全废
             "SELECT COUNT(*), MAX(COALESCE(updated_at, created_at)) "
-            "FROM memories WHERE status IN ('active', 'core')"
+            f"FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
         )
         row = await cursor.fetchone()
         count, newest = (row[0], row[1]) if row else (0, None)

@@ -169,6 +169,19 @@ async def check_and_proactive_message(app=None, now_dt: datetime.datetime | None
             )
         await conn.commit()
 
+        # ── 情绪联动（schema v18）：心情变化落情绪核心记忆 ─────────
+        # 只存不浮现：仅供回放（superseded 链）与调制信号，不参与任何
+        # 浮现（manager._MOOD_ROW_FILTER 排除一切读面）。复用
+        # update_content 历史链（5 代上限）。条件与 mood_changed_at 刷新
+        # 同一判断——只有真换词（最小停留放行 / 早晨锚定放行）才落库，
+        # 被拦回的换词自然不落。异常隔离，不拖累 life_state 主流程。
+        if mood != current_mood:
+            try:
+                from memory.manager import MemoryManager
+                await MemoryManager(conn).upsert_mood_memory(mood, now=now)
+            except Exception:
+                log.exception("情绪核心记忆落库失败")
+
         log.info("%02d:00 -> 心情：%s | 日常：%s", hour, mood, daily_event)
 
         # 生命状态更新后，刷新 system prompt 使小汐的心情与实际状态同步
@@ -841,16 +854,20 @@ async def daily_diary():
 
     memories_lines = []
     try:
+        from memory.manager import MOOD_MEMORY_ID
         conn = await get_db()
         # 读面谓词与全项目约定对齐 IN ('active','core')（体检 D6：
         # 此处是唯一违约点。当天记忆其实不可能是 core——晋升要求 ≥30
         # 天龄——当前无害；但谓词漂移遇上阈值调低/手动晋升就静默漏数，
         # 一致性债当即清）
+        # v18 情绪联动：排除情绪核心记忆——那是小汐自己的心情账本，
+        # 不是「冷冷新告诉小汐的事」，不该进日记素材
         cursor = await conn.execute(
             """SELECT category, content FROM memories
                WHERE status IN ('active', 'core') AND created_at LIKE ?
+                 AND id != ?
                ORDER BY created_at DESC LIMIT 5""",
-            (f"{today_str}%",),
+            (f"{today_str}%", MOOD_MEMORY_ID),
         )
         memories_lines = [f"- {r[0]}：{r[1][:60]}" for r in await cursor.fetchall()]
     except Exception as e:
