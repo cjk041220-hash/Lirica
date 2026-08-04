@@ -110,10 +110,14 @@ docker compose up -d
 ├── Dockerfile                      # Docker 构建（多阶段）
 ├── docker-compose.yml              # Docker Compose 编排
 ├── docs/                           # 文档
-│   ├── PROJECT_SOURCE.md           # 完整技术文档
+│   ├── PROJECT_SOURCE.md           # 完整技术文档（冻结于 v0.4.2，历史参考）
+│   ├── PRODUCT_REPORT_2026-08-02.md  # 产品报告（最新一轮）
+│   ├── MEMORY_GAPS_2026-08-03.md   # 记忆库诊断记录（schema v17/v18 落地回执）
+│   ├── MEMORY_ARCHITECTURE_REVIEW_2026-08-01.md  # 记忆架构评审（P0/P1 已落地）
+│   ├── CHECKUP_2026-07-31.md       # 第三轮体检（生理期闭环 + 记忆改造）
 │   ├── CHECKUP_2026-07-29.md       # 多维度全面体检报告（诊断 + 治疗回执）
 │   ├── CHECKUP_2026-07-29_round2.md  # 第二轮复查（5 视角独立取证，治疗 9/9 属实）
-│   ├── PRODUCT_REPORT_2026-07-27.md  # 产品报告（最新一轮）
+│   ├── PRODUCT_REPORT_2026-07-27.md  # 产品报告
 │   ├── PRODUCT_REPORT_2026-07-26.md  # 产品报告（3 轮测试 + 5 路审查 + 修复方案）
 │   ├── PRODUCT_AUDIT_2026-07-25.md  # 全项目代码审计报告
 │   ├── RETROSPECTIVE_2026-07-27.md  # 复盘
@@ -121,8 +125,7 @@ docker compose up -d
 │   ├── PROMPT_GUIDE.md             # 提示词指南
 │   ├── PRIVACY.md                  # 数据与隐私说明
 │   ├── checkup-2026-07-29/         # 体检截图
-│   ├── mockups/                    # 界面设计稿（日历面板 v2 已验收）
-│   └── superpowers/specs/          # 设计文档（日历 + 地图双引擎）
+│   └── superpowers/                # specs/ 设计文档（日历 + 地图双引擎）+ plans/ 实施计划
 │
 ├── scripts/                        # 辅助脚本
 │   ├── gen_assets.py               # 生成 PWA 图标 + 立绘 PNG→WebP 压缩
@@ -132,7 +135,8 @@ docker compose up -d
 │   ├── fix_sleeping_sprite.py      # 睡姿立绘定位修正（一次性工具）
 │   └── e2e/
 │       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，29 交互点含日历剧本）
-│       └── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
+│       ├── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
+│       └── pink_verify.cjs         # 粉色主题体检（面板扫掠/字体加载/reduced-motion）
 │
 ├── backend/
 │   ├── main.py                     # 启动入口（uvicorn）
@@ -169,13 +173,15 @@ docker compose up -d
 │   ├── providers/
 │   │   └── deepseek.py             # DeepSeek V4 Flash/Pro 接入
 │   │
-│   ├── tools/                      # 18 个工具
+│   ├── tools/                      # 23 个工具
 │   │   ├── weather.py              # 天气（Open-Meteo + 高德回退）
 │   │   ├── map_tools.py            # 地图（高德：附近搜索/定位/路线）
+│   │   ├── google_places.py        # 谷歌 Places 引擎（港澳/海外，供 map_tools 调用）
 │   │   ├── search.py               # 网络搜索（Tavily）
 │   │   ├── memory.py               # 记忆（增删改查导出）
 │   │   ├── diary.py                # 日记（写/读，同日去重）
-│   │   ├── events.py               # 事件（create_event/list_events，「惦记」系统）
+│   │   ├── events.py               # 事件（增删改查，「惦记」系统）
+│   │   ├── cycle.py                # 生理期（状态查询/登记/修正）
 │   │   ├── tarot.py                # 塔罗牌（78 张韦特塔罗）
 │   │   └── tarot_deck.yaml         # 塔罗牌数据（牌义文案）
 │   │
@@ -258,28 +264,32 @@ docker compose up -d
 | 前端 | Vite 8 + React 19 + Tailwind CSS v4（PWA，Web Push） |
 | 动画 | CSS / Tailwind 自定义动画（呼吸 / 淡入 / 星空 / 浮云） |
 | 容器化 | Docker 多阶段构建 |
-| 测试 | pytest + pytest-asyncio（320+ 测试，以 `pytest --collect-only` 为准）+ 浏览器 E2E（20+ 交互点） |
+| 测试 | pytest + pytest-asyncio（670+ 测试，以 `pytest --collect-only` 为准）+ 浏览器 E2E（ui_test 29 交互点） |
 
 ## 核心能力
 
-### 小汐的 18 个工具
+### 小汐的 23 个工具
 
 - **🌤️ 天气查询** — Open-Meteo，50+ 城市本地坐标 + 高德地理编码回退
-- **📍 附近搜索** — 高德 POI，支持 GPS 自动传入
-- **🗺️ 地址定位 / 模糊搜索** — 高德地理编码
+- **📍 附近搜索** — 高德 POI，支持 GPS 自动传入（WGS-84→GCJ-02 自动转换）
+- **🗺️ 地址定位 / 模糊搜索** — 高德地理编码（港澳/海外自动切谷歌 Places 双引擎）
 - **🚇 公交路线 / 🚲 骑行路线** — 高德路线规划
 - **🔍 网络搜索** — Tavily，世界观包装（「去映海里找找看」）
-- **🧠 记忆系统** — 记住/回忆/列出/导出，自动去重
+- **🧠 记忆系统** — 记住/回忆/列出/导出，自动去重 + importance 打分 + 情绪标签
 - **✏️ 记忆更新 / 删除** — update_memory 覆盖矛盾、合并变化；delete_memory 忘掉过时的
 - **📖 日记系统** — 写/读，同日 UPDATE 去重
-- **📅 事件登记** — create_event 记下未来要发生的事（考试/旅行/约定），小汐会惦记、会关心、会自动翻篇
-- **📔 事件查看** — list_events 看小汐的小本本上记了哪些 upcoming 的事
+- **📅 事件登记 / 查看** — create_event 记下未来要发生的事（考试/旅行/约定），小汐会惦记、会关心、会自动翻篇；list_events 看她的小本本
+- **✏️ 事件更新 / 删除** — update_event 改日程；delete_event 删掉（墓碑机制挡住小汐偷偷记回来）
+- **🌸 生理期管理** — get_period_status 查周期状态；log_period 记日子；amend_period 修正日期（删/挪歧义消解）
 - **🎴 塔罗牌占卜** — 78 张韦特塔罗，3 种牌阵
 
 ### 内在系统
 
-- **💓 心跳** — 每 2 小时更新心情+日常事件（按时段匹配心情池，启动时立即触发，更新后自动刷新 Agent）
-- **📖 叙事注入** — 每次对话动态注入最近 5 条记忆（SQL LIMIT，不烘焙进 system prompt）
+- **💓 心跳** — 5 个定时任务（HKT）：2h 脉冲更新心情+日常事件（启动即触发）/ 08:00 早安（注入今日日程）/ 23:00 前夜提醒 / 1h 事件看门狗（归档过期 + 检测新事件）/ 22:30 自动日记；更新后自动刷新 Agent；维护窗口还跑记忆整合 pass（dreaming-lite，合并同类近义记忆）
+- **📖 叙事注入** — 每次对话混合召回 5 条记忆：话题相关性 top-3 + 最新记忆补足配额，按时间正序注入；多因子加权排序（新鲜度/访问热度/话题命中/importance/情绪亲和度）；不烘焙进 system prompt
+- **🌱 后台记忆提取** — 对话后由 LLM 在后台提取值得记住的事（水位线推进、去重 noop、连续失败进死信），顺带打 importance 1-10 分与情绪坐标；健康检查多指标打点（7 天窗口提取率/增长率/归档占比）
+- **🎭 情绪联动** — 心情走 Russell 情绪平面（早晨锚定 + 最小停留）；记忆浮现按 mood-congruent 加权软调制（不硬过滤，防情绪固化）；当前心情存为核心记忆，superseded 链可回放
+- **🧠 记忆衰减** — 分层衰减：active→core（高频浮现晋升，叙事保底席位）/ active→archived（长期未提及冷藏不删）；「重要的事」类别豁免归档
 - **🧬 生命状态** — 心情/日常注入系统提示词（心跳后自动刷新，不再过期）
 - **📍 GPS 缓存** — 会话级内存缓存（8h TTL，asyncio.Lock）
 - **💾 对话持久化** — SQLite checkpointer（小汐的短期工作记忆，每 2h 裁剪）+ 对话档案（`chat_sessions`/`chat_messages`，永久保留、可回看续聊，**永不进入 LLM 上下文**——重要信息由记忆系统自己提取）
