@@ -1108,3 +1108,41 @@ async def test_daily_diary_excludes_mood_memory(tmp_db):
     material = fake_llm.ainvoke.await_args[0][0][1].content
     assert "冷冷今天说想去海边" in material
     assert "小汐的心情" not in material
+
+
+# ── 全局连接收尾（防解释器退出挂起，2026-08-04 排查）──────────
+
+
+async def test_heartbeat_triggers_global_db_connection(tmp_db, monkeypatch):
+    """机制钉死：心跳经 _periodic_maintenance 会触发真实 database.core
+    全局连接（monkeypatch 只盖住 heartbeat.get_db 的引用，盖不住
+    database.core 模块内部调用）——这正是「单文件跑挂起」的泄漏源。
+    修复前提不成立（不触发）时本测试失败，防止未来重构悄悄绕开。
+    """
+    import datetime as dt
+    import heartbeat as hb
+    from database import core
+
+    core._db = None  # 隔离：本用例前不应有全局连接
+    now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = '满足', mood_changed_at = '2026-08-03 08:00' "
+        "WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    await _run_heartbeat_at(tmp_db, monkeypatch, now_dt, "开心")
+
+    assert core._db is not None  # 心跳确实惰性建出了全局真实连接
+    await core.close_db_connection()  # 本用例自清理，不留泄漏
+    assert core._db is None
+
+
+async def test_close_db_connection_idempotent(tmp_db):
+    """close_db_connection 幂等：已关/未建都静默成功（conftest session
+    收尾 fixture 每次跑都会调用它，绝不能抛异常。"""
+    from database import core
+
+    core._db = None
+    await core.close_db_connection()  # 未建：no-op 不报错
+    assert core._db is None

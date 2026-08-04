@@ -78,6 +78,24 @@ async def memory_mgr(tmp_db):
     return MemoryManager(tmp_db)
 
 
+@pytest.fixture(scope="session", autouse=True)
+async def _close_global_db_after_session():
+    """session 收尾关闭 database.core 全局真实连接（防解释器退出挂起）。
+
+    心跳测试经 _periodic_maintenance → prune_checkpoints/backup_database
+    走真实的 database.core.get_db()（monkeypatch 只盖住 heartbeat 的
+    get_db 引用，盖不住同模块内部调用），惰性建出连到真实 DB_PATH 的
+    全局连接；生产侧由 server.py lifespan 调 close_db_connection() 收尾，
+    测试侧此前无人收尾 → 单文件/子集跑法下该连接活到解释器关闭，
+    threading._shutdown join 非守护 worker 线程永久挂起（基线 922b6e6
+    即可复现，2026-08-04 排查确认；全量跑时 GC 恰好回收故不发作）。
+    本 fixture 幂等兜底关闭，根治单文件/子集跑法。
+    """
+    yield
+    from database import core
+    await core.close_db_connection()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_tool_globals():
     """每个用例后重置工具模块的进程级全局注入（P2-1 测试隔离）。
