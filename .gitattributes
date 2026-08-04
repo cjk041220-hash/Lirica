@@ -1,3 +1,13 @@
+# 全仓库基线：文本文件由 git 自动识别并规范化行尾
+# （库存 LF，Windows 检出按 core.autocrlf=true 转 CRLF）。
+# Windows 开发机 + autocrlf=true 环境，故意不用全局 eol=lf——
+# 那会让 Windows 检出的每个文件都显示 modified。
+* text=auto
+
+# 二进制文件：永不参与行尾转换（显式声明，不依赖自动探测）
+*.webp -text
+*.png -text
+
 # shell 脚本在 Linux 容器内执行，必须 LF：CRLF 会弄坏 shebang（/bin/sh^M）导致容器起不来。
 # 强制 eol=lf，使 Windows 检出也是 LF（构建上下文随之为 LF）；Dockerfile 内另有一次 CR 剥离兜底。
 *.sh text eol=lf
