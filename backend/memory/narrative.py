@@ -45,12 +45,18 @@ class NarrativeBuilder:
         if total == 0:
             return ""
 
+        # 情绪联动（schema v18）：查一次当前心情效价，传给 recall 的
+        # mood-congruent 因子。未知 mood 词 / 无 life_state 行 → None，
+        # 因子自动关闭，行为退回 v17（降级路径有测试钉死）。
+        mood_valence = await self._manager.get_mood_valence()
+
         # passive=True：叙事注入是系统被动读取，不能计入访问热度。
         # 否则会形成正反馈闭环——top 记忆每次注入都被刷新 last_used_at /
         # access_count，永远霸占相关性配额，新记忆挤不进来。
         relevance_k = min(3, max_items)
         relevant = await self._manager.recall(
-            limit=relevance_k, passive=True, query=query
+            limit=relevance_k, passive=True, query=query,
+            mood_valence=mood_valence,
         )
         recent = await self._manager.recent(max_items)
 

@@ -24,6 +24,10 @@ log = get_logger(__name__)
 from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
 from database.core import rows_to_dicts
 
+# Russell 情绪空间坐标（heartbeat_moods 单持有，本模块只读引用）。
+# 无循环导入：heartbeat_moods 只 import stdlib + utils.logger。
+from heartbeat_moods import MOOD_VECTORS
+
 # hit_count 按日去重的守卫格式（v14）：HKT 日历日，"%Y-%m-%d"。
 # **不能复用 _TIME_FMT**——那是分钟精度 "%Y-%m-%d %H:%M"，分钟级守卫
 # 几乎永远放行，按日计数等于没修。TEXT 字典序即日期序，比较安全。
@@ -132,16 +136,47 @@ def _bigram_overlap(query: str, content: str) -> float:
     return len(a & b) / min(len(a), len(b))
 
 
-def _relevance_score(memory: dict, now: datetime.datetime, query: str = "") -> float:
+# mood-congruent 因子权重（schema v18 情绪联动）：0.15 = importance 档
+# （0.3）的一半，远低于话题档（1.0）与二段硬分层——压不过话题命中，
+# 满幅差 ≈1.5 天时近差，只在近持平时换位：软调制，不是硬过滤。
+_MOOD_AFFINITY_WEIGHT = 0.15
+
+
+def _mood_affinity(memory: dict, mood_valence: float | None) -> float:
+    """mood-congruent 亲和度 [0,1]（schema v18 情绪联动第六因子）。
+
+    亲和度 = 1 - |v_mem - v_mood| / 2：记忆效价与当前心情效价越接近分越高
+    （Bower 1981 mood-congruent memory）。**加权而非硬过滤**——异效价记忆
+    仍可凭话题/时近/热度浮现，防「只想起同色记忆 → 情绪更固化」回路。
+
+    中性免疫：valence 缺失（存量/未打分）或显式 0 → 亲和度恒定 0.5，
+    与 mood_valence 取值无关——中性记忆不吃任何心情的偏置，也不被系统性
+    惩罚（回归测试用严格等式钉死）。
+
+    mood_valence=None（调用方未提供当前心情）→ 返回 0.0，因子整体关闭，
+    评分与 v17 逐字节一致（extract 冲突上下文 / agentic recall 走此路径）。
+    """
+    if mood_valence is None:
+        return 0.0
+    raw = memory.get("valence")
+    if raw is None or _coerce_valence(raw) == 0.0:
+        return 0.5
+    return 1.0 - abs(_coerce_valence(raw) - mood_valence) / 2.0
+
+
+def _relevance_score(memory: dict, now: datetime.datetime, query: str = "",
+                     mood_valence: float | None = None) -> float:
     """计算记忆相关性分数。
 
-    五因子加权（O1/I1，schema v17）：
+    六因子加权（O1/I1 schema v17；mood-congruent schema v18）：
     - 时间衰减（last_mention_ts，半衰期 ≈ 7 天——O1：统一提及时钟，
       被 add/update/hit 过的记忆续命，created_at 不再兼职衰减）
     - 访问热度（access_count，对数衰减防止老热门垄断）
     - 最近使用（last_used_at，半衰期 ≈ 3.5 天）
     - 重要性（importance 1-10，LLM 打分，权重 0.3 档——I1）
     - 话题命中（query 与 content+category 的字面重叠，B1 新增，权重 1.0）
+    - 情绪亲和（当前心情效价与记忆 valence 的接近度——schema v18，
+      权重 0.15 软调制；mood_valence=None 时因子关闭，等同 v17）
     """
     # 时间衰减（O1：基于 last_mention_ts，缺失回退 created_at——
     # 被 add/update/hit 过的记忆续命，created_at 不再兼职衰减时钟）
@@ -173,7 +208,10 @@ def _relevance_score(memory: dict, now: datetime.datetime, query: str = "") -> f
     else:
         topic = 0.0
 
-    return recency + access_boost + usage_recency + importance_boost + topic
+    # 情绪亲和（schema v18）：mood-congruent 软调制，加权而非硬过滤
+    mood_boost = _MOOD_AFFINITY_WEIGHT * _mood_affinity(memory, mood_valence)
+
+    return recency + access_boost + usage_recency + importance_boost + topic + mood_boost
 
 
 class MemoryManager:
@@ -512,13 +550,19 @@ class MemoryManager:
 
     async def recall(
         self, category: str = "", limit: int = 20, passive: bool = False,
-        query: str = "",
+        query: str = "", mood_valence: float | None = None,
     ) -> list[dict]:
         """回忆记忆。可按 category 筛选，不传则返回全部。
 
         按相关性评分排序（时间衰减 × 访问热度 × 最近使用 × 话题命中）。
         query 传当前对话的最新一句话时，字面重叠的记忆获得话题加分
         （只进排序键，不影响 passive 语义——被动读取仍不刷热度）。
+
+        mood_valence（schema v18 情绪联动）：当前心情的效价（-1..1）。
+        传入时进 _relevance_score 第六因子 mood-congruent 加权（软调制，
+        不硬过滤）；None（agentic recall 工具 / extract 冲突上下文）→
+        因子关闭，行为与 v17 一致。叙事注入路径由 NarrativeBuilder 查
+        life_state 后传入。
 
         默认（passive=False）更新被召回记忆的 last_used_at 和 access_count，
         记录真实的「被想起」信号。
@@ -569,10 +613,10 @@ class MemoryManager:
             def _sort_key(m):
                 haystack = f"{m.get('content', '')} {m.get('category', '')}"
                 hit = 1 if q_grams & _char_bigrams(haystack) else 0
-                return (hit, _relevance_score(m, now, query))
+                return (hit, _relevance_score(m, now, query, mood_valence))
         else:
             def _sort_key(m):
-                return _relevance_score(m, now, query)
+                return _relevance_score(m, now, query, mood_valence)
 
         matched.sort(key=_sort_key, reverse=True)
         matched = matched[:limit]
@@ -722,6 +766,23 @@ class MemoryManager:
             (cutoff,),
         )
         return await cursor.fetchone() is not None
+
+    async def get_mood_valence(self) -> float | None:
+        """当前心情效价（schema v18 情绪联动的调制信号源）。
+
+        读 life_state 单行 mood → MOOD_VECTORS 的 Russell valence 分量。
+        无行 / mood 为空 / 未知词 → None（调用方关闭 mood 因子，浮现
+        退回 v17 行为）。mood 词表与心跳 _choose_mood 的抽样空间同源
+        （heartbeat_moods.MOOD_VECTORS），永不漂移。
+        """
+        cursor = await self._db.execute(
+            "SELECT mood FROM life_state WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        vec = MOOD_VECTORS.get(row[0])
+        return vec[0] if vec is not None else None
 
     async def all(self, include_archived: bool = False) -> list[dict]:
         """返回全部活跃记忆列表。

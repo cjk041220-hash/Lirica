@@ -811,3 +811,118 @@ async def test_add_dedup_refreshes_valence(memory_mgr):
     assert again["id"] == first["id"]          # 去重命中同一行
     assert again["valence"] == pytest.approx(-0.2)
     assert again["arousal"] == pytest.approx(0.1)
+
+
+# ── mood-congruent 第六因子（schema v18 情绪联动）──────────────
+
+
+def _mem(valence=None, days=0):
+    """构造最小记忆 dict（公式级单测用）。"""
+    import datetime
+    from utils.timezone import HKT
+    ts = (datetime.datetime.now(HKT) - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    return {"created_at": ts, "last_mention_ts": ts, "access_count": 0,
+            "importance": 5, "valence": valence}
+
+
+def test_mood_affinity_congruent_outranks_opposed():
+    """v18：当前心情效价相近的记忆分高，相反的低（其余因子全同）。"""
+    import datetime
+    from memory.manager import _relevance_score
+    from utils.timezone import HKT
+
+    now = datetime.datetime.now(HKT)
+    pos, neg = _mem(valence=0.8), _mem(valence=-0.8)
+
+    assert _relevance_score(pos, now, "", mood_valence=0.85) > \
+           _relevance_score(neg, now, "", mood_valence=0.85)
+    # 心情翻转 → 排序翻转（加权是对称的，不偏向某一侧）
+    assert _relevance_score(pos, now, "", mood_valence=-0.85) < \
+           _relevance_score(neg, now, "", mood_valence=-0.85)
+
+
+def test_mood_affinity_neutral_not_systematically_penalized():
+    """v18 防固化校验：valence 缺失/0 的中性记忆，mood 因子与其取值无关。"""
+    import datetime
+    from memory.manager import _relevance_score
+    from utils.timezone import HKT
+
+    now = datetime.datetime.now(HKT)
+    for mem in (_mem(valence=None), _mem(valence=0.0), _mem()):  # 缺键也中性
+        s_pos = _relevance_score(mem, now, "", mood_valence=1.0)
+        s_neg = _relevance_score(mem, now, "", mood_valence=-1.0)
+        assert s_pos == s_neg  # 严格等式：中性记忆不吃任何心情的偏置
+
+
+def test_mood_factor_off_without_mood_valence():
+    """v18：mood_valence=None → 因子整体关闭，与 v17 行为逐字节一致。"""
+    import datetime
+    from memory.manager import _relevance_score
+    from utils.timezone import HKT
+
+    now = datetime.datetime.now(HKT)
+    for v in (None, 0.0, 0.9, -0.9):
+        mem = _mem(valence=v)
+        assert _relevance_score(mem, now, "") == \
+               _relevance_score(mem, now, "", mood_valence=None)
+
+
+async def test_recall_mood_valence_biases_ranking(memory_mgr, tmp_db):
+    """v18 核心回归：mood-congruent 加权——同调记忆先浮现，且异调记忆
+    仍在结果里（加权而非硬过滤，防情绪固化回路）。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("日常", "开心的事", valence=0.8)
+    await memory_mgr.add("日常", "难过的事", valence=-0.8)
+    # 拉平全部时钟与热度，让差异只剩 mood 因子
+    now = datetime.datetime.now(HKT).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_mention_ts = ?, last_used_at = NULL",
+        (now, now),
+    )
+    await tmp_db.commit()
+
+    happy = await memory_mgr.recall(passive=True, mood_valence=0.85)
+    assert [m["content"] for m in happy] == ["开心的事", "难过的事"]
+
+    sad = await memory_mgr.recall(passive=True, mood_valence=-0.85)
+    assert [m["content"] for m in sad] == ["难过的事", "开心的事"]
+    # 加权而非硬过滤：两种心情下两条都在场
+    assert len(happy) == len(sad) == 2
+
+
+async def test_recall_without_mood_valence_keeps_v17_order(memory_mgr, tmp_db):
+    """v18：不传 mood_valence（extract/agentic recall 路径）→ v17 行为不变。"""
+    import datetime
+    from utils.timezone import HKT, _TIME_FMT
+
+    await memory_mgr.add("日常", "先记住的")
+    await memory_mgr.add("日常", "后记住的", valence=0.9)
+    old = (datetime.datetime.now(HKT) - datetime.timedelta(days=30)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, last_mention_ts = ? WHERE content = '后记住的'",
+        (old, old),
+    )
+    await tmp_db.commit()
+
+    result = await memory_mgr.recall(passive=True)  # 无 mood_valence
+    assert result[0]["content"] == "先记住的"      # 时近主导，valence 不参与
+
+
+async def test_get_mood_valence_maps_life_state(memory_mgr, tmp_db):
+    """v18：life_state.mood → MOOD_VECTORS valence；未知词/无行 → None。"""
+    # conftest 种子行 mood='开心' → MOOD_VECTORS['开心'] = (0.85, 0.55)
+    assert await memory_mgr.get_mood_valence() == pytest.approx(0.85)
+
+    await tmp_db.execute("UPDATE life_state SET mood = '担心' WHERE id = 1")
+    await tmp_db.commit()
+    assert await memory_mgr.get_mood_valence() == pytest.approx(-0.55)
+
+    await tmp_db.execute("UPDATE life_state SET mood = '不存在的词' WHERE id = 1")
+    await tmp_db.commit()
+    assert await memory_mgr.get_mood_valence() is None
+
+    await tmp_db.execute("DELETE FROM life_state")
+    await tmp_db.commit()
+    assert await memory_mgr.get_mood_valence() is None

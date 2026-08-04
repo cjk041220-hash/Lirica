@@ -185,3 +185,46 @@ async def test_build_does_not_inflate_access_counts(memory_mgr):
         for m in await memory_mgr.all()
     }
     assert before == after, "被动注入不应修改 access_count / last_used_at"
+
+
+# ── 情绪联动：build 传 mood_valence 给 recall（schema v18）──────
+
+
+async def test_build_passes_mood_valence_to_recall(memory_mgr, tmp_db, monkeypatch):
+    """v18：build 每次查一次 life_state，把 mood_valence 传给 recall 相关路。"""
+    await memory_mgr.add("喜好", "喜欢吃芒果")
+    calls = []
+    orig_recall = memory_mgr.recall
+
+    async def spy_recall(*args, **kwargs):
+        calls.append(kwargs)
+        return await orig_recall(*args, **kwargs)
+
+    monkeypatch.setattr(memory_mgr, "recall", spy_recall)
+    await tmp_db.execute("UPDATE life_state SET mood = '担心' WHERE id = 1")
+    await tmp_db.commit()
+
+    builder = NarrativeBuilder(memory_mgr)
+    await builder.build(max_items=5)
+
+    assert len(calls) == 1
+    assert calls[0]["mood_valence"] == pytest.approx(-0.55)
+
+
+async def test_build_unknown_mood_degrades_gracefully(memory_mgr, tmp_db, monkeypatch):
+    """v18：life_state 是未知 mood 词 → mood_valence=None，浮现退回 v17。"""
+    await memory_mgr.add("喜好", "喜欢吃芒果")
+    calls = []
+    orig_recall = memory_mgr.recall
+
+    async def spy_recall(*args, **kwargs):
+        calls.append(kwargs)
+        return await orig_recall(*args, **kwargs)
+
+    monkeypatch.setattr(memory_mgr, "recall", spy_recall)
+    await tmp_db.execute("UPDATE life_state SET mood = '不存在的词' WHERE id = 1")
+    await tmp_db.commit()
+
+    await NarrativeBuilder(memory_mgr).build(max_items=5)
+
+    assert calls and calls[0]["mood_valence"] is None
