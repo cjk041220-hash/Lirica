@@ -12,7 +12,9 @@
 > - I1 → `fa6d74c`：提取 LLM 打 1-10 分进 `_relevance_score`（权重 0.3 档）
 > - O2 → `f108782`：talked 信号改读 `chat_messages` 真实对话时间
 > - O3 → `c9ecb68`：superseded 链上限 5 代 + `export_json` 导出开关
-> 尚未实施的：O4（记录不修）、情绪联动、健康检查多指标。
+> - 情绪联动 → schema v18（valence/arousal 标签 + mood-congruent 加权浮现 +
+>   情绪核心记忆「只存不浮现」，2026-08-04，全量 pytest 663 passed）
+> 尚未实施的：O4（记录不修）、健康检查多指标。
 
 ## 核心判断
 
@@ -33,13 +35,22 @@
 | O3 | superseded 历史链**无上限、不入 JSON 导出**：`export_json(include_archived=True)` 谓词只含 active/core/archived，历史链仅存于整库快照备份 | `manager.py` export 谓词 | Graphiti 时间图无限保留 + valid_at 时间旅行；mem0 覆盖不留链；LangMem/A-MEM 压缩折叠 | 每记忆保留 N 代（如 5），更旧合并为一行 digest；`export_json` 加可选开关 | ✅ `c9ecb68` |
 | O4 | 提取批次「有界不回看」：单批超 50 条/4000 字从旧端丢弃，水位线推进到批尾，丢弃消息永久跳过 | `extract.py` | 设计有意（提取价值随对话变旧衰减） | 记录，不修 | — |
 
-## 情绪联动（前沿空白，可做差异化）
+## 情绪联动（前沿空白，可做差异化）✅ schema v18（2026-08-04）
 
-- 记忆带 valence/arousal 标签（提取时 LLM 顺带打分，A-MEM note tags 先例）；
-- 浮现抽样按当前情绪效价加权（mood-congruent，Bower 1981 经典心理学）——
-  **加权而非硬过滤**，防情绪固化回路（只想起同色记忆 → 情绪更固化）；
-- 把「当前情绪」本身存成一条核心记忆，UPDATE 保留 superseded 历史 → 情绪
-  可回放、可作检索调制信号。
+- ✅ 记忆带 valence/arousal 标签（提取时 LLM 顺带打分，A-MEM note tags 先例）
+  ——`memories.valence/arousal` 两列 + 迁移 `_migrate_v18`；提取 prompt 规则 8
+  （-1/0/1 三档锚点，只对 add 生效）→ `_dispatch` 透传；写入钳制
+  `manager._coerce_valence/_coerce_arousal`（缺失/非法/NaN → 0.0 中性）；
+- ✅ 浮现抽样按当前情绪效价加权（mood-congruent，Bower 1981 经典心理学）——
+  `_relevance_score` 第六因子 `_mood_affinity`（亲和度 1−|Δv|/2，权重 0.15 软
+  调制）**加权而非硬过滤**，防情绪固化回路；中性记忆免疫（亲和度恒 0.5，
+  等式测试钉死）；效价来源 `get_mood_valence()`（life_state.mood →
+  MOOD_VECTORS），narrative.build 查一次传给 recall（graph.py 零改动）；
+- ✅ 把「当前情绪」本身存成一条核心记忆（固定 id `mood_current`，status
+  'core'），换词走 `update_content` 保留 superseded 历史（继承 5 代上限）
+  → 情绪可回放（history / export_json）——`manager.upsert_mood_memory`；
+  **只存不浮现**：`_MOOD_ROW_FILTER` 排除全部浮现/计数读面，仅作回放账本
+  与调制信号来源；心跳换词（最小停留/早晨锚定放行后）接线落库。
 
 ## 健康检查（无业界标准，当前做法合理）
 
