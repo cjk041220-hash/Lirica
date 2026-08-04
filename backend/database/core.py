@@ -128,7 +128,9 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             prev_content    TEXT,
             superseded_by   TEXT,
             last_mention_ts TEXT,
-            importance      INTEGER DEFAULT 5
+            importance      INTEGER DEFAULT 5,
+            valence         REAL DEFAULT 0,
+            arousal         REAL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS diaries (

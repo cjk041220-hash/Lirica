@@ -67,6 +67,8 @@ async def test_init_db_upgrades_legacy_v1_database(tmp_path):
         assert "superseded_by" in columns  # v15 覆盖历史链
         assert "last_mention_ts" in columns  # v17 O1 统一提及时钟
         assert "importance" in columns       # v17 I1 重要性打分
+        assert "valence" in columns          # v18 情绪联动：效价
+        assert "arousal" in columns          # v18 情绪联动：唤醒度
         assert "time" not in columns
 
         # 2. 旧数据完整保留，time 已映射为 created_at

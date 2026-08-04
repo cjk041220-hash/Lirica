@@ -63,7 +63,12 @@ log = get_logger(__name__)
 #     importance（I1：提取时 LLM 打 1-10 分，进相关性排序权重 0.3 档）。
 #     存量回填 last_mention_ts = MAX(created_at, updated_at, last_used_at)，
 #     importance 默认 5（中性）。
-SCHEMA_VERSION = 17
+# v18: 情绪联动 — memories 新增 valence / arousal（Russell 情绪空间标签，
+#     REAL DEFAULT 0，范围 -1..1 由写入侧钳制）。提取时 LLM 顺带打分；
+#     进 _relevance_score 第六因子 mood-congruent 加权（manager.py，
+#     加权而非硬过滤——防只浮现同色记忆的情绪固化回路）。存量回填
+#     0 = 中性：老记忆无情绪打分，亲和度取 0.5 常量，不被系统性偏置。
+SCHEMA_VERSION = 18
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -784,6 +789,40 @@ async def _migrate_v17(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[17] = _migrate_v17
+
+
+# ── v18 迁移：情绪联动情绪标签 ────────────────────────────────
+
+
+async def _migrate_v18(conn: aiosqlite.Connection) -> None:
+    """v18: memories.valence + arousal（情绪联动：记忆的情绪空间标签）。
+
+    背景（2026-08-03 记忆库诊断「情绪联动」，schema v18 批）：
+    - 记忆带 (valence, arousal) Russell 空间标签，提取时 LLM 打分写入，
+      供 _relevance_score 第六因子 mood-congruent 加权（加权而非硬过滤——
+      防「只想起同色记忆 → 情绪更固化」回路）；
+    - 标签是纯增量列：不影响任何既有读面谓词、去重索引与衰减。
+
+    存量回填 0 = 中性：老记忆无情绪打分，manager._mood_affinity 对
+    NULL/0 一律取亲和度 0.5 常量——不被 mood 因子偏向也不被系统性惩罚。
+    ALTER TABLE ADD COLUMN ... DEFAULT 0 已把默认值写入存量行，UPDATE
+    只是 NULL 兜底（幂等；重跑时已有合法值的行不受影响）。
+    """
+    cursor = await conn.execute("PRAGMA table_info(memories)")
+    mem_cols = {row[1] for row in await cursor.fetchall()}
+    if "valence" not in mem_cols:
+        await conn.execute("ALTER TABLE memories ADD COLUMN valence REAL DEFAULT 0")
+    if "arousal" not in mem_cols:
+        await conn.execute("ALTER TABLE memories ADD COLUMN arousal REAL DEFAULT 0")
+
+    await conn.execute("UPDATE memories SET valence = 0 WHERE valence IS NULL")
+    await conn.execute("UPDATE memories SET arousal = 0 WHERE arousal IS NULL")
+
+    await conn.commit()
+    log.info("迁移 v18 完成：memories.valence + arousal（情绪联动情绪标签）")
+
+
+_migrations[18] = _migrate_v18
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
