@@ -598,15 +598,61 @@ async def test_health_report_warns_then_throttles(tmp_db, monkeypatch):
     assert len(calls) == 1
 
 
+async def test_health_report_warns_never_written(tmp_db, monkeypatch):
+    """告警三态-从未写入：0 记忆 + 窗口对话量 → 文本含「从未写入」。"""
+    await _seed_messages(tmp_db, ["在吗"] * 10)
+    calls = []
+    monkeypatch.setattr(extract.log, "warning", lambda *a, **k: calls.append(a))
+    await extract.check_and_report_memory_health(tmp_db)
+    assert any("从未写入" in str(c) for c in calls)
+
+
+async def test_health_report_warns_stalled_write_path(tmp_db, monkeypatch):
+    """告警三态-最近停摆：有旧记忆但窗口对话活跃零新增 → 文本含「停摆」。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("其他", "旧记忆")
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, updated_at = ?",
+        (old, old),
+    )
+    await tmp_db.commit()
+    await _seed_messages(tmp_db, ["在吗"] * 10)
+    calls = []
+    monkeypatch.setattr(extract.log, "warning", lambda *a, **k: calls.append(a))
+    await extract.check_and_report_memory_health(tmp_db)
+    assert any("停摆" in str(c) for c in calls)
+
+
+async def test_health_report_warns_stale_with_chats(tmp_db, monkeypatch):
+    """告警三态-停滞：超期未写但窗口有对话 → 文本含「停滞」。"""
+    mgr = MemoryManager(tmp_db)
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "INSERT INTO memories (id, content, category, created_at, status) "
+        "VALUES (?, ?, ?, ?, 'active')",
+        ("m-stale", "旧记忆", "其他", old),
+    )
+    await tmp_db.commit()
+    await _seed_messages(tmp_db, ["在吗"])
+    calls = []
+    monkeypatch.setattr(extract.log, "warning", lambda *a, **k: calls.append(a))
+    await extract.check_and_report_memory_health(tmp_db)
+    assert any("停滞" in str(c) for c in calls)
+
+
 async def test_health_report_normal_logs_info(tmp_db, monkeypatch):
-    """正常状态打 INFO 遥测，不告警。"""
+    """正常状态打 INFO 遥测（含多指标时间序列——基线积累数据源），不告警。"""
     mgr = MemoryManager(tmp_db)
     await mgr.add("其他", "新记忆")
+    await _seed_messages(tmp_db, ["在吗", "嗯嗯"])
     calls = []
     monkeypatch.setattr(extract.log, "info", lambda *a, **k: calls.append(a))
     result = await extract.check_and_report_memory_health(tmp_db)
     assert result["warned"] is False
-    assert any("记忆健康" in str(c) for c in calls)
+    text = " ".join(str(c) for c in calls)
+    assert "记忆健康" in text
+    assert "提取率" in text and "归档占比" in text
 
 
 # ── I1 importance 打分（schema v17）────────────────────────────

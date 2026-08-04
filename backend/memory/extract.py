@@ -28,7 +28,7 @@ import json
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from database.core import rows_to_dicts
-from memory.manager import MemoryManager
+from memory.manager import MemoryManager, _HEALTH_MIN_CHATS
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -429,8 +429,11 @@ async def check_and_report_memory_health(conn=None) -> dict:
 
     实盘教训（2026-08-01 评审 D3）：0 记忆跑一周无告警。本函数把
     manager.check_memory_health 的纯指标转成日志：异常时 24h 节流
-    WARNING（区分「有对话零记忆——写路径失灵」与「记忆停滞」），
-    正常时 INFO 打点。返回 {指标..., "warned": bool}。
+    WARNING（三态区分——从未写入 / 最近停摆 / 停滞且有对话，日志可
+    直接区分排查方向），正常时 INFO 打点。INFO 行含全部多指标
+    （提取率 / 归档占比）= 基线积累的时间序列数据源（2026-08-04
+    MEMORY_GAPS 收尾：告警阈值待 2-4 周实盘数据校准）。
+    返回 {指标..., "warned": bool}。
     """
     if conn is None:
         from database.core import get_db
@@ -444,8 +447,17 @@ async def check_and_report_memory_health(conn=None) -> dict:
             if health["days_since_write"] is not None
             else "从未写入"
         )
-        log.info("记忆健康：count=%d, 距上次写入=%s, chats=%d",
-                 health["active_count"], stale, health["chat_count"])
+        rate = (
+            f"{health['extract_rate_7d'] * 100:.0f}%"
+            if health["extract_rate_7d"] is not None
+            else "无对话"
+        )
+        log.info(
+            "记忆健康：count=%d, 距上次写入=%s, 近7天 chats=%d/新增=%d"
+            "（提取率 %s, 归档占比 %d%%）",
+            health["active_count"], stale, health["chats_7d"],
+            health["added_7d"], rate, health["archive_ratio"] * 100,
+        )
         return {**health, "warned": False}
 
     now = datetime.datetime.now(_HKT)
@@ -455,13 +467,20 @@ async def check_and_report_memory_health(conn=None) -> dict:
 
     if health["active_count"] == 0:
         log.warning(
-            "记忆健康异常：已有 %d 条对话消息但 0 条记忆 —— 写路径疑似失灵，"
-            "检查 remember 工具与后台提取",
-            health["chat_count"],
+            "记忆健康异常：近 7 天已有 %d 条对话消息但 0 条记忆 —— 写路径"
+            "疑似失灵（从未写入），检查 remember 工具与后台提取",
+            health["chats_7d"],
+        )
+    elif health["chats_7d"] >= _HEALTH_MIN_CHATS and health["added_7d"] == 0:
+        log.warning(
+            "记忆健康异常：近 7 天已有 %d 条对话消息但 0 条新增记忆 —— 写路径"
+            "疑似停摆（库里有 %d 条旧记忆），检查后台提取水位线与 remember",
+            health["chats_7d"], health["active_count"],
         )
     else:
         log.warning(
-            "记忆健康异常：%d 条记忆但已 %.0f 天无新写入 —— 记忆停滞",
+            "记忆健康异常：%d 条记忆但已 %.0f 天无新写入，且近 7 天仍有对话"
+            " —— 记忆停滞",
             health["active_count"], health["days_since_write"],
         )
     return {**health, "warned": True}
