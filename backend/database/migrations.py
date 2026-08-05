@@ -69,7 +69,11 @@ log = get_logger(__name__)
 #     进 _relevance_score 第六因子 mood-congruent 加权（manager.py，
 #     加权而非硬过滤——防只浮现同色记忆的情绪固化回路）。存量回填
 #     0 = 中性：老记忆无情绪打分，亲和度取 0.5 常量，不被系统性偏置。
-SCHEMA_VERSION = 18
+# v19: 异常感知关心冷却台账 — 新增 care_ledger 表（type 主键 + last_at）。
+#     Spec B：late_night 72h / event_combo 24h 各自独立冷却，「注入即
+#     记账」——LLM 最后没提这茬也算冷却开始；防唠叨由确定性状态保证，
+#     不押在模型自觉上（记忆写路径 31 条消息零触发的前科）。
+SCHEMA_VERSION = 19
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -79,6 +83,17 @@ SCHEMA_VERSION = 18
 MEMORIES_INDEX_SQL = """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
         ON memories(category, content) WHERE status IN ('active', 'core');
+"""
+
+
+# 异常感知关心冷却台账（迁移 v19 / Spec B）：各提示类型独立冷却，
+# 注入即记账。三处共享此常量（同 EVENTS_SCHEMA_SQL 模式）：
+# 全新安装（core.py init_db）/ 测试夹具（conftest）/ 迁移（v19）。
+CARE_LEDGER_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS care_ledger (
+        type     TEXT PRIMARY KEY,
+        last_at  TEXT NOT NULL
+    );
 """
 
 
@@ -824,6 +839,23 @@ async def _migrate_v18(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[18] = _migrate_v18
+
+
+# ── v19 迁移：异常感知关心冷却台账 ────────────────────────────
+
+
+async def _migrate_v19(conn: aiosqlite.Connection) -> None:
+    """v19: care_ledger — 异常感知关心的硬冷却台账（Spec B）。
+
+    纯新表，无存量回填。全新安装由 core.init_db 执行共享 DDL 常量，
+    老库走本迁移，两者终态一致（同 v6/v8 模式）。
+    """
+    await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
+    await conn.commit()
+    log.info("迁移 v19 完成：care_ledger 表已建立")
+
+
+_migrations[19] = _migrate_v19
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

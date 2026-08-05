@@ -87,3 +87,68 @@ def test_returned_gap_thresholds():
 def test_returned_not_fired_for_empty_history():
     """从未对话（新库）→ 无「回来」可言。"""
     assert care.detect_care_hints(_now(h=15), [], []) == []
+
+
+# ── 冷却台账（care_ledger，迁移 v19）──────────────────────────
+
+
+@pytest.fixture
+def care_db(tmp_db, monkeypatch):
+    """把 agent.care 的读库接到临时库。"""
+    async def fake_get_db():
+        return tmp_db
+
+    monkeypatch.setattr(care, "get_db", fake_get_db)
+    return tmp_db
+
+
+async def test_ledger_record_then_load_upserts(care_db):
+    """注入即记账；同类型再记 → 覆盖时间（UPSERT）。"""
+    await care.record_hint(care.LATE_NIGHT, "2026-08-05 02:14")
+    assert await care.load_ledger() == {care.LATE_NIGHT: "2026-08-05 02:14"}
+
+    await care.record_hint(care.LATE_NIGHT, "2026-08-06 01:00")
+    assert (await care.load_ledger())[care.LATE_NIGHT] == "2026-08-06 01:00"
+
+
+def test_filter_cooled_blocks_within_cooldown():
+    """冷却期内同类滤掉；不同类型互不影响；returned 永不滤。"""
+    now = _now(d=5, h=2)
+    hints = [
+        {"type": care.LATE_NIGHT, "text": "a"},
+        {"type": care.EVENT_COMBO, "text": "b"},
+        {"type": care.RETURNED, "text": "c"},
+    ]
+
+    ledger = {care.LATE_NIGHT: "2026-08-04 03:00"}   # 23h 前 < 72h → 滤
+    passed = care.filter_cooled(hints, ledger, now)
+    assert [h["type"] for h in passed] == [care.EVENT_COMBO, care.RETURNED]
+
+    ledger2 = {care.EVENT_COMBO: "2026-08-04 01:00"}  # 25h 前 > 24h → 放行
+    passed2 = care.filter_cooled(hints, ledger2, now)
+    assert [h["type"] for h in passed2] == [care.LATE_NIGHT, care.EVENT_COMBO, care.RETURNED]
+
+
+def test_filter_cooled_bad_timestamp_passes():
+    """台账时间戳异常 → 放行（宁可多关心）。"""
+    now = _now(d=5, h=2)
+    hints = [{"type": care.LATE_NIGHT, "text": "a"}]
+    assert care.filter_cooled(hints, {care.LATE_NIGHT: "垃圾时间戳"}, now) == hints
+
+
+async def test_load_ledger_failure_degrades_to_no_filter(monkeypatch):
+    """表读取失败 → 降级不滤（宁可多关心，不因 DB 抖动丢感知）。"""
+    async def broken_get_db():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(care, "get_db", broken_get_db)
+    assert await care.load_ledger() == {}
+
+
+async def test_record_hint_failure_swallowed(monkeypatch):
+    """写入失败只记日志，不上抛。"""
+    async def broken_get_db():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(care, "get_db", broken_get_db)
+    await care.record_hint(care.LATE_NIGHT, "2026-08-05 02:14")  # 不抛即通过

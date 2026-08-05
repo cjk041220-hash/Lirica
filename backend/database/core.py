@@ -171,6 +171,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     # 直接报错，导致旧数据库永远无法启动新版本（v0.4.3 修复）。
     from database.migrations import (
         ensure_schema,
+        CARE_LEDGER_SCHEMA_SQL,
         CHAT_ARCHIVE_SCHEMA_SQL,
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
@@ -198,6 +199,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     # memory_extract_state（迁移 v11）：后台提取水位线 + 健康检查节流
     await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
+    # care_ledger（迁移 v19）：异常感知关心冷却台账（Spec B）
+    await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针

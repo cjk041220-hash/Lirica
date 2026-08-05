@@ -44,8 +44,10 @@ async def tmp_db(tmp_path):
     """)
     # life_state（v7：含 first_met_on）、events 表（迁移 v6）、
     # chat_sessions / chat_messages（迁移 v8）、记忆去重唯一部分索引
-    # （迁移 v5 建立、v10 扩谓词）：与生产共享同一份 DDL 常量，防止夹具漂移
+    # （迁移 v5 建立、v10 扩谓词）、care_ledger（迁移 v19）：与生产
+    # 共享同一份 DDL 常量，防止夹具漂移
     from database.migrations import (
+        CARE_LEDGER_SCHEMA_SQL,
         CHAT_ARCHIVE_SCHEMA_SQL,
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
@@ -57,6 +59,7 @@ async def tmp_db(tmp_path):
     await conn.executescript(CHAT_ARCHIVE_SCHEMA_SQL)
     await conn.executescript(MEMORIES_INDEX_SQL)
     await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
+    await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致，v16 含 mood_changed_at）
     from datetime import datetime
     from utils.timezone import HKT as _HKT

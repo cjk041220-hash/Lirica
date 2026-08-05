@@ -11,6 +11,7 @@ _resolve_user_content 单一入口）：纯函数 detect_care_hints 产出提示
 """
 import datetime
 
+from database.core import get_db
 from utils.logger import get_logger
 from utils.timezone import HKT
 
@@ -110,3 +111,62 @@ def detect_care_hints(now_dt, recent_user_times, active_events, *,
         hints.append({"type": LATE_NIGHT, "text": text})
 
     return hints
+
+
+# ── 冷却台账（care_ledger，迁移 v19）──────────────────────────
+
+
+async def load_ledger() -> dict[str, str]:
+    """读取冷却台账 {type: last_at}。
+
+    读取失败降级为**不滤**（返回空 dict——宁可多关心，不因 DB 抖动
+    丢感知；与项目「失败放行」惯例一致）。
+    """
+    try:
+        conn = await get_db()
+        cursor = await conn.execute("SELECT type, last_at FROM care_ledger")
+        return {r[0]: r[1] for r in await cursor.fetchall()}
+    except Exception:
+        log.warning("冷却台账读取失败，降级为不滤", exc_info=True)
+        return {}
+
+
+async def record_hint(hint_type: str, now: str) -> None:
+    """注入即记账：冷却写时机 = 注入时（LLM 最后没提这茬也算冷却开始）。
+    写入失败只记日志。"""
+    try:
+        conn = await get_db()
+        await conn.execute(
+            """INSERT INTO care_ledger (type, last_at) VALUES (?, ?)
+               ON CONFLICT(type) DO UPDATE SET last_at = excluded.last_at""",
+            (hint_type, now),
+        )
+        await conn.commit()
+    except Exception:
+        log.warning("冷却台账写入失败（type=%s）", hint_type, exc_info=True)
+
+
+def filter_cooled(hints: list[dict], ledger: dict[str, str],
+                  now_dt: datetime.datetime) -> list[dict]:
+    """冷却期内的同类提示滤掉；各类型独立；returned 永不滤。
+
+    台账时间戳异常 → 放行（失败语义同读取：宁可多关心）。
+    """
+    passed = []
+    for h in hints:
+        cooldown = COOLDOWN_HOURS.get(h["type"])
+        if cooldown is None:
+            passed.append(h)
+            continue
+        last = ledger.get(h["type"])
+        if not last:
+            passed.append(h)
+            continue
+        try:
+            last_dt = datetime.datetime.strptime(last, _TIME_FMT).replace(tzinfo=HKT)
+        except (ValueError, TypeError):
+            passed.append(h)
+            continue
+        if (now_dt - last_dt).total_seconds() >= cooldown * 3600:
+            passed.append(h)
+    return passed
