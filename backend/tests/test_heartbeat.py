@@ -356,6 +356,7 @@ async def test_morning_greeting_malformed_daily_keeps_current_weather(tmp_db):
     fake_llm.ainvoke = fake_ainvoke
 
     with patch("heartbeat.get_db", return_value=tmp_db), \
+         patch("memory.chat_archive.get_db", return_value=tmp_db), \
          patch("tools.weather._fetch_open_meteo", fake_fetch), \
          patch("utils.web_push.send_push", AsyncMock(return_value=0)), \
          patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm):
@@ -1248,3 +1249,43 @@ async def test_proactive_prompt_empty_history_no_block(tmp_db):
         await heartbeat._generate_proactive_message("开心", "映海很清澈", 15)
 
     assert "你最近和冷冷说过这些话" not in captured["human"]
+
+
+async def test_morning_prompt_includes_history_tail(tmp_db):
+    """早安对称用例：昨晚的对话尾巴进早安 prompt（「昨晚你们聊到这里」块）。"""
+    import database.core as db_core
+    import heartbeat
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    original = db_core._db
+    db_core._db = tmp_db
+    captured = {}
+    tail = [
+        {"role": "user", "content": "我先睡了，晚安。", "created_at": "2026-08-05 23:30"},
+        {"role": "assistant", "content": "晚安冷冷，做个好梦。", "created_at": "2026-08-05 23:31"},
+    ]
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content="冷冷早安呀～")
+
+    async def fake_fetch(client, lat, lon):
+        return {}
+
+    try:
+        with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+             patch("memory.location_store.get_any", return_value=None), \
+             patch("tools.weather._fetch_open_meteo", side_effect=fake_fetch), \
+             patch("utils.web_push.send_push", return_value=0), \
+             patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=tail)):
+            await heartbeat.daily_morning_greeting()
+
+        human = captured["human"]
+        assert "昨晚你们聊到这里（最新在最后）" in human
+        assert "[08-05 23:30] 冷冷：我先睡了，晚安。" in human
+        assert "[08-05 23:31] 小汐：晚安冷冷，做个好梦。" in human
+        assert "如果昨晚收尾僵着，早上是你先开口" in human
+    finally:
+        db_core._db = original

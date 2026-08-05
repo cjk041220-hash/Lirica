@@ -719,11 +719,29 @@ async def daily_morning_greeting():
     except Exception as e:
         log.warning("早安问候：获取今日日程失败，省略日程段: %s", e)
 
+    # ── 历史尾巴（Spec A）：早安是每天第一次开口，吵架后的第二天早上
+    # 最关键。带时间戳的尾巴让她看得见「昨晚 23:42 还僵着」「02:13 还
+    # 在聊天」。读取失败只省略本段（同天气/日程段的降级纪律）
+    history_part = ""
+    try:
+        from memory.chat_archive import recent_messages, format_recent_messages
+        history = await recent_messages()
+        if history:
+            history_part = (
+                "\n昨晚你们聊到这里（最新在最后）：\n"
+                + format_recent_messages(history)
+                + "\n如果昨晚收尾僵着，早上是你先开口——挑个自然的方式破冰，"
+                "别扭一点也没关系。天气、美食、今日一歌照旧。\n"
+            )
+    except Exception as e:
+        log.warning("早安问候：读取对话历史失败，省略历史块: %s", e)
+
     prompt_text = (
         f"今天是{today}，早上 8 点。\n"
         f"{weekend_part}"
         f"{weather_part}\n"
-        f"{schedule_part}\n"
+        f"{schedule_part}"
+        f"{history_part}\n"
         f"请给冷冷发一条早安问候消息。要求：\n"
         f"1. 包含早安问候\n"
         f"2. 自然地提到天气信息（如果有的话）\n"
