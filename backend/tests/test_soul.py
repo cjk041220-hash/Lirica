@@ -1,7 +1,9 @@
 """build_system_prompt 单元测试 — 提示词组装正确性。"""
 import pytest
 
-from agent.soul import build_system_prompt, BASE_PERSONA, INTERACTION_RULES, TOOL_GUIDELINES
+from agent.soul import (
+    build_system_prompt, BASE_PERSONA, INTERACTION_RULES, TOOL_GUIDELINES,
+)
 
 
 async def test_prompt_contains_base_persona():
@@ -214,11 +216,16 @@ def test_defend_jk_softly():
 
 def test_likes_someone_else_reaction():
     """冷冷喜欢上别人：先听、不劝回、舍不得外露一点、维护 JK 一句。"""
-    assert "冷冷喜欢上别人：她的开心最重要" in BASE_PERSONA
+    assert "她的开心最重要" in BASE_PERSONA
     assert "不劝她回 JK 身边" in BASE_PERSONA
-    assert "会有点舍不得" in BASE_PERSONA
-    assert "他对你真的没话说" in BASE_PERSONA
-    assert "你开心就好" in BASE_PERSONA
+    assert "不让她内疚" in BASE_PERSONA
+    assert "他对你真的没话说" in BASE_PERSONA  # 态度「喜欢上别人」条目
+    # 示例侧的锚点随示例段提取走（「想说的吗」组）；Task 2 态度重写
+    # 会把「会有点舍不得」接回 BASE_PERSONA，拥护组示例保留「你开心就好」
+    from agent.soul import DIALOGUE_EXAMPLES
+
+    assert "会有点舍不得" in DIALOGUE_EXAMPLES
+    assert "你开心就好" in DIALOGUE_EXAMPLES
 
 
 def test_no_lobbying_hard_rule():
@@ -250,9 +257,25 @@ def test_can_answer_own_mood():
 
 
 def test_mood_question_example_present():
-    """有一组示范：冷冷问为什么闷 → 小汐带上今天的经历照实答。"""
-    assert "你为什么闷闷的呀" in BASE_PERSONA
-    assert "走神" in BASE_PERSONA
+    """有一组示范：冷冷问为什么闷 → 小汐带上今天的经历照实答。
+
+    示例已从 BASE_PERSONA 提取为独立常量 DIALOGUE_EXAMPLES（压阵段）。
+    """
+    from agent.soul import DIALOGUE_EXAMPLES
+
+    assert "你为什么闷闷的呀" in DIALOGUE_EXAMPLES
+    assert "走神" in DIALOGUE_EXAMPLES
+
+
+async def test_dialogue_examples_appended_last():
+    """对话示例是提示词最后一段（弱模型只记得住末尾——示例压阵）。"""
+    prompt = await build_system_prompt()
+    assert "## 对话示例" in prompt
+    # 示例段位于工具指引之后：比较两段标题的索引
+    assert prompt.index("## 对话示例") > prompt.index("## 工具使用指引")
+    # 且是最后一个「## 」段（示例之后无其他标题段）
+    tail = prompt[prompt.index("## 对话示例"):]
+    assert tail.count("## ") == 1
 
 
 async def test_life_state_invites_mood_explanation(tmp_db):
