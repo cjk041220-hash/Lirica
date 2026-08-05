@@ -36,6 +36,7 @@
   --animate-shimmer: shimmer 2.5s ease-in-out infinite;
   --animate-zzz: zzzFloat 2.8s ease-in-out infinite;
   --animate-bubble-pop: bubblePop 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-tarot-settle: tarotSettle 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   --animate-wiggle: wiggle 0.3s ease-in-out;
 }
 
@@ -91,6 +92,11 @@
   0%, 100% { transform: rotate(0deg); }
   30% { transform: rotate(-1.2deg); }
   70% { transform: rotate(1.2deg); }
+}
+/* 塔罗全部翻牌完毕：网格整体轻轻落定（backwards fill 兜住首帧） */
+@keyframes tarotSettle {
+  0% { transform: scale(1.03); }
+  100% { transform: scale(1); }
 }
 
 /* ── 天空：活的天象 ─────────────────────────────────── */
