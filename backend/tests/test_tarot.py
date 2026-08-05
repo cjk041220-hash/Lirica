@@ -157,3 +157,48 @@ async def test_tarot_insufficient_cards_for_spread_degrades(mini_deck):
     msg = await _tool_call(tarot, {"question": "x", "spread_type": "celtic"})  # 需要 10 张
     assert "凑不齐" in msg.content
     assert msg.artifact is None
+
+
+async def test_agent_survives_tool_exception():
+    """端到端验证 #10 总闸：工具抛异常不击穿对话，agent 拿到错误消息后继续。
+
+    build_agent 的 _ToolErrorGuardMiddleware（agent/graph.py）包裹全部工具
+    执行：未捕获异常转成 status='error' 的 ToolMessage 交还 LLM，由它自行
+    重试或降级。旧版 create_react_agent(handle_tool_errors=True) 方案已被
+    该 middleware 取代（graph.py:173-181 注释），行为等价，与每个工具
+    自身的 try/except 形成双重兜底。
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.tools import tool
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+    from agent.graph import build_agent
+
+    class FakeToolModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    @tool
+    def broken_tool(x: str) -> str:
+        """一个会爆炸的工具。"""
+        raise RuntimeError("boom")
+
+    model = FakeToolModel(responses=[
+        AIMessage(content="", tool_calls=[
+            {"name": "broken_tool", "args": {"x": "1"}, "id": "call1", "type": "tool_call"}
+        ]),
+        AIMessage(content="工具坏了，但对话还在继续"),
+    ])
+
+    graph = build_agent(model=model, tools=[broken_tool], system_prompt="p")
+
+    out = await graph.ainvoke(
+        {"messages": [HumanMessage("hi")]},
+        config={"configurable": {"thread_id": "t1"}},
+    )
+
+    msgs = out["messages"]
+    tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].status == "error"  # 异常被转成错误消息，而不是 500
+    assert msgs[-1].content == "工具坏了，但对话还在继续"  # 对话正常收尾
