@@ -49,7 +49,7 @@ def create_deepseek_llm(
         model=model or s.deepseek_model,
         api_key=s.deepseek_api_key,
         base_url=s.deepseek_base_url,
-        temperature=temperature if temperature is not None else 0.7,
+        temperature=temperature if temperature is not None else 0.8,
         max_tokens=max_tokens or 8192,
         timeout=120,
         max_retries=2,

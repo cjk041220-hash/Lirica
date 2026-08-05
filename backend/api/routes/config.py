@@ -28,11 +28,11 @@ _agent_lock = asyncio.Lock()
 # create_llm_from_runtime_config() / rebuild_agent_for_app()，
 # 保证「GET /api/config 报告的值」「app.state.model」「app.state.agent」
 # 三者永远一致。默认值必须与 create_deepseek_llm() 的默认参数
-# （temperature=0.7 / max_tokens=8192 / flash 模型）保持一致。
+# （temperature=0.8 / max_tokens=8192 / flash 模型）保持一致。
 
 _runtime_config = {
     "model": "deepseek-v4-flash",
-    "temperature": 0.7,
+    "temperature": 0.8,
     "max_tokens": 8192,
     "thinking_intensity": "medium",
 }
@@ -43,7 +43,7 @@ _runtime_config = {
 # V4 Pro 支持深度推理模式，但推理深度由模型内部控制，与 temperature 无关
 _THINKING_PRESETS = {
     "low":    {"temperature": 0.3, "max_tokens": 4096,  "label": "轻柔"},
-    "medium": {"temperature": 0.7, "max_tokens": 8192,  "label": "适中"},
+    "medium": {"temperature": 0.8, "max_tokens": 8192,  "label": "适中"},
     "high":   {"temperature": 1.0, "max_tokens": 8192,  "label": "深度"},
     "max":    {"temperature": 1.2, "max_tokens": 8192,  "label": "全力"},
 }

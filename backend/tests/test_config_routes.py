@@ -6,7 +6,7 @@ async def test_get_runtime_config_defaults():
     """默认配置值正确。
 
     默认值必须与启动时 create_deepseek_llm() 的实际参数一致
-    （temperature=0.7 / max_tokens=8192 / flash），即 medium 档；
+    （temperature=0.8 / max_tokens=8192 / flash），即 medium 档；
     否则 GET /api/config 在用户首次配置前会报告与实际不符的状态。
     """
     from api.routes.config import get_runtime_config
@@ -14,14 +14,14 @@ async def test_get_runtime_config_defaults():
 
     cfg = get_runtime_config()
     assert cfg["model"] == "deepseek-v4-flash"
-    assert cfg["temperature"] == 0.7
+    assert cfg["temperature"] == 0.8
     assert cfg["max_tokens"] == 8192
     assert cfg["thinking_intensity"] == "medium"
 
     # medium 预设与实际默认参数一致（单一数据源）
     from api.routes.config import _THINKING_PRESETS
     medium = _THINKING_PRESETS["medium"]
-    assert medium["temperature"] == 0.7
+    assert medium["temperature"] == 0.8
     assert medium["max_tokens"] == 8192
 
 
@@ -30,7 +30,7 @@ async def test_get_current_temperature_per_intensity():
     from api.routes.config import _THINKING_PRESETS
 
     assert _THINKING_PRESETS["low"]["temperature"] == 0.3
-    assert _THINKING_PRESETS["medium"]["temperature"] == 0.7
+    assert _THINKING_PRESETS["medium"]["temperature"] == 0.8
     assert _THINKING_PRESETS["high"]["temperature"] == 1.0
     assert _THINKING_PRESETS["max"]["temperature"] == 1.2
 
