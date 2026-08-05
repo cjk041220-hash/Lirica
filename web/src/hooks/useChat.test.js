@@ -136,4 +136,93 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     expect(assistant.content).toBe('一半\n\n（出错了）')
     vi.useRealTimers()
   })
+
+  it('tool_end 携带 nav → 与 output 同一次挂到 tool_hint（地图按钮数据）', async () => {
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => { sendPromise = result.current.sendMessage('尖沙咀在哪里') })
+    await act(async () => { gps.resolve(null) })
+    await act(async () => {
+      s.emit('data: {"type":"tool_start","name":"map"}\n')
+      s.emit('data: {"type":"tool_end","name":"map","output":"📍 尖沙咀站：114.172,22.297","nav":{"name":"尖沙咀站","lat":22.297,"lon":114.172,"coord":"gcj02"}}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => { await sendPromise })
+
+    const hint = result.current.messages.find(m => m.type === 'tool_hint')
+    expect(hint.output).toBe('📍 尖沙咀站：114.172,22.297')
+    expect(hint.nav).toEqual({ name: '尖沙咀站', lat: 22.297, lon: 114.172, coord: 'gcj02' })
+  })
+
+  it('tool_end nav 非法（lat 缺失）→ 不挂 nav，output 正常挂', async () => {
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => { sendPromise = result.current.sendMessage('天气') })
+    await act(async () => { gps.resolve(null) })
+    await act(async () => {
+      s.emit('data: {"type":"tool_start","name":"weather"}\n')
+      s.emit('data: {"type":"tool_end","name":"weather","output":"🌤️ 晴","nav":{"name":"x","lon":114.1}}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => { await sendPromise })
+
+    const hint = result.current.messages.find(m => m.type === 'tool_hint')
+    expect(hint.output).toBe('🌤️ 晴')
+    expect(hint.nav).toBeUndefined()
+  })
+
+  it('tool_end 携带 tarot → 卡片数据与 output 同一次挂到 tool_hint', async () => {
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => { sendPromise = result.current.sendMessage('帮我算一卦') })
+    await act(async () => { gps.resolve(null) })
+    await act(async () => {
+      s.emit('data: {"type":"tool_start","name":"tarot"}\n')
+      s.emit('data: {"type":"tool_end","name":"tarot","output":"🐋 小汐去映海里看了一下……","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"name":"恋人","symbol":"VI","position":"过去"},{"name":"魔术师","symbol":"I","position":"现在"},{"name":"女皇","symbol":"III","position":"未来"}]}}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => { await sendPromise })
+
+    const hint = result.current.messages.find((m) => m.type === 'tool_hint')
+    expect(hint.tarot.cards).toHaveLength(3)
+    expect(hint.tarot.spread_type).toBe('three')
+    expect(hint.output).toBeTruthy()  // 与卡片同一次原子挂载
+  })
+
+  it('tool_end tarot 脏数据（缺 name）→ 不挂 tarot，output 正常挂', async () => {
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => { sendPromise = result.current.sendMessage('再算一卦') })
+    await act(async () => { gps.resolve(null) })
+    await act(async () => {
+      s.emit('data: {"type":"tool_start","name":"tarot"}\n')
+      s.emit('data: {"type":"tool_end","name":"tarot","output":"🐋 文本","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"symbol":"VI","position":"过去"}]}}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => { await sendPromise })
+
+    const hint = result.current.messages.find((m) => m.type === 'tool_hint')
+    expect(hint.tarot).toBeUndefined()
+    expect(hint.output).toBeTruthy()
+  })
 })

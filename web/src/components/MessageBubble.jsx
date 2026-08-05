@@ -1,4 +1,6 @@
 import { lazy, Suspense } from 'react'
+import MapNavButtons from './MapNavButtons'
+import TarotCards from './TarotCards'
 
 // 小汐回复的 Markdown 渲染组件（修复 P2-5）：
 // react-markdown 默认不渲染原始 HTML（无 dangerouslySetInnerHTML），
@@ -54,6 +56,11 @@ export default function MessageBubble({ message }) {
               </p>
             </details>
           )}
+          {/* 塔罗可视化：tarot 数据合法才渲染（isValidTarot 已挡脏数据）；
+             无数据时回退纯文本折叠块，协议行为不变 */}
+          {message.tarot && <TarotCards tarot={message.tarot} />}
+          {/* 地图联动：nav 合法才渲染（buildNavTargets 内部校验，null 不出现） */}
+          {message.nav && <MapNavButtons nav={message.nav} />}
         </div>
       </div>
     )

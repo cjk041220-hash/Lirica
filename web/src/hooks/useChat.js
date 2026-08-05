@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { apiFetch, getToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { getGpsCoords, isGpsEnabled } from '../api/location'
+import { isValidNav } from '../utils/mapLink'
+import { isValidTarot } from '../utils/tarot'
 
 // iOS Safari <17.4 的 fetch + ReadableStream 会整段缓冲、生成完毕才
 // 一次性吐出（WebKit 17.4 起才真增量）——打字机效果全毁，用户盯着
@@ -232,15 +234,27 @@ export function useChat() {
               setCharacterState('thinking')
               continue
             }
-            // 工具结果（修复 P2-5）：挂到最近一条同名提示上，可折叠查看
+            // 工具结果（修复 P2-5）：挂到最近一条同名提示上，可折叠查看。
+            // nav（地图目的地）、tarot（塔罗卡片，后端 content_and_artifact
+            // 契约）与 output 同一次 setMessages 挂上——二次挂载会被
+            // !prev[i].output 挡掉，必须一次到位才保证「有卡片/按钮就有数据」的原子性
             if (parsed.type === 'tool_end') {
               const output = summarizeOutput(parsed.output)
-              if (output) {
+              const nav = isValidNav(parsed.nav) ? parsed.nav : null
+              const tarot = isValidTarot(parsed.tarot) ? parsed.tarot : null
+              // 一次 setMessages 挂 output/nav/tarot——二次挂载会被
+              // !prev[i].output 挡掉，必须一次到位保证「有卡片就有数据」的原子性
+              if (output || nav || tarot) {
                 setMessages(prev => {
                   for (let i = prev.length - 1; i >= 0; i--) {
                     if (prev[i].type === 'tool_hint' && prev[i].toolName === parsed.name && !prev[i].output) {
                       const updated = [...prev]
-                      updated[i] = { ...updated[i], output }
+                      updated[i] = {
+                        ...updated[i],
+                        ...(output ? { output } : {}),
+                        ...(nav ? { nav } : {}),
+                        ...(tarot ? { tarot } : {}),
+                      }
                       return updated
                     }
                   }
