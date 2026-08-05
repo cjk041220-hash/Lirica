@@ -27,8 +27,12 @@ def clean_buckets(monkeypatch):
     monkeypatch.setattr(auth_mod, "_rate_buckets", {})
 
 
-async def _invoke(mw, inner, path, *, headers=None, client=("1.2.3.4", 40000), method="GET"):
-    """驱动一次中间件调用，返回 (响应状态码或 200=透传, 内层调用次数)。"""
+async def _invoke(mw, inner, path, *, headers=None, client=("1.2.3.4", 40000), method="GET", headers_out=None):
+    """驱动一次中间件调用，返回 (响应状态码或 200=透传, 内层调用次数)。
+
+    headers_out 若传入，则把每次响应的原始头 dict 追加进该列表
+    （供 Retry-After 断言用）。
+    """
     scope = {
         "type": "http",
         "path": path,
@@ -44,6 +48,8 @@ async def _invoke(mw, inner, path, *, headers=None, client=("1.2.3.4", 40000), m
     async def send(message):
         if message["type"] == "http.response.start":
             statuses.append(message["status"])
+            if headers_out is not None:
+                headers_out.append(dict(message.get("headers", [])))
 
     await mw(scope, receive, send)
     return (statuses[0] if statuses else 200), inner.calls
@@ -186,6 +192,36 @@ async def test_push_rate_limited():
     assert 429 in statuses[30:]
 
 
+async def test_429_carries_retry_after_header():
+    """429 响应带 Retry-After 头（体检四轮钉子户：客户端可据此退避）。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="")
+    headers_out: list[dict] = []
+
+    status = 200
+    for _ in range(11):
+        status, _ = await _invoke(mw, inner, "/api/chat", headers_out=headers_out)
+    assert status == 429
+
+    # ASGI 层响应头名统一小写（Retry-After → retry-after），大小写无关取
+    hdrs = {k.decode().lower(): v.decode() for k, v in headers_out[-1].items()}
+    retry_after = int(hdrs["retry-after"])
+    assert 1 <= retry_after <= 60  # 窗口 60 秒，最坏也要等 1 秒
+
+
+async def test_options_preflight_not_counted_in_bucket():
+    """CORS 预检不占限流桶：12 次 OPTIONS 后再 GET 仍应放行。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="")
+
+    for _ in range(12):
+        status, _ = await _invoke(mw, inner, "/api/chat", method="OPTIONS")
+        assert status == 200
+    # 桶未被预检消耗：真实 GET 仍是第 1 次
+    status, _ = await _invoke(mw, inner, "/api/chat")
+    assert status == 200
+
+
 # ── 登记纪律（P0 回归：/api/diaries 漏登记裸奔）──────────────
 #
 # status 路由文件一次注册 /api/status 与 /api/diaries 两个端点，
@@ -275,9 +311,21 @@ async def test_rate_limit_history_separate_from_chat():
     """
     ip = "9.9.9.9"
     for _ in range(10):
-        assert auth_mod._check_rate("/api/chat", ip) is True
-    assert auth_mod._check_rate("/api/chat", ip) is False  # 第 11 次被限
-    assert auth_mod._check_rate("/api/chat/history", ip) is True  # 独立桶不受影响
+        assert auth_mod._check_rate("/api/chat", ip)[0] is True
+    assert auth_mod._check_rate("/api/chat", ip)[0] is False  # 第 11 次被限
+    assert auth_mod._check_rate("/api/chat/history", ip)[0] is True  # 独立桶不受影响
+
+
+def test_retry_after_computed_from_oldest_record():
+    """_check_rate 返回 (放行, Retry-After)：被限时给出桶内最早记录跌出窗口的秒数。"""
+    ip = "1.1.1.1"
+    allowed, retry_after = auth_mod._check_rate("/api/chat", ip)
+    assert allowed is True and retry_after is None
+    for _ in range(9):
+        auth_mod._check_rate("/api/chat", ip)
+    allowed, retry_after = auth_mod._check_rate("/api/chat", ip)
+    assert allowed is False
+    assert isinstance(retry_after, int) and 1 <= retry_after <= 60
 
 
 def test_rate_limit_health_has_bucket():

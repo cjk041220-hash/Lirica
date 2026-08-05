@@ -5,7 +5,9 @@
 - X-Forwarded-For 仅在显式开启 trust_proxy（部署在可信反向代理之后）时
   才用于限流归因，否则攻击者可伪造 XFF 完全绕过限流
 - Token 比较使用 hmac.compare_digest（常量时间，防时序侧信道）
+- 429 响应带 Retry-After 头（客户端可据此退避）；OPTIONS 预检不占限流桶
 """
+import math
 import time
 
 from fastapi.responses import JSONResponse
@@ -111,10 +113,11 @@ def _is_public_path(path: str) -> bool:
     return path in _PUBLIC_PATHS
 
 
-def _check_rate(path: str, ip: str) -> bool:
-    """检查 IP 是否超出限流。返回 True 表示允许通过。
+def _check_rate(path: str, ip: str) -> tuple[bool, int | None]:
+    """检查 IP 是否超出限流。返回 (是否放行, 若被限则是 Retry-After 秒数)。
 
     按 (ip, prefix) 组合键分桶，不同端点独立计数。
+    Retry-After = 桶内最早记录再过多久跌出 60 秒窗口（客户端退避依据）。
     """
     global _cleanup_counter
 
@@ -133,7 +136,7 @@ def _check_rate(path: str, ip: str) -> bool:
             matched_prefix = prefix
             break
     if limit == 0:
-        return True  # 无限制
+        return True, None  # 无限制
 
     now = time.time()
     bucket_key = f"{ip}:{matched_prefix}"
@@ -142,11 +145,13 @@ def _check_rate(path: str, ip: str) -> bool:
     cutoff = now - 60
     bucket[:] = [t for t in bucket if t > cutoff]
     if len(bucket) >= limit:
-        return False
+        # bucket 按时间顺序追加，[0] 是最早记录；过滤后必满足 now - bucket[0] < 60
+        retry_after = max(1, math.ceil(60 - (now - bucket[0])))
+        return False, retry_after
     # 单 bucket 硬上限：异常流量下防止单 IP 时间戳列表撑爆内存
     if len(bucket) < 200:
         bucket.append(now)
-    return True
+    return True, None
 
 
 # ── 中间件类 ──────────────────────────────────────────────────
@@ -171,14 +176,17 @@ class AuthAndRateLimitMiddleware:
         prefix = _get_path_prefix(path)
 
         # ── 速率限制 ──
-        if not _check_rate(path, ip):
-            if method == "OPTIONS":
-                # CORS 预检请求：不对 OPTIONS 限流（通过后继续往下走认证豁免）
-                pass
-            else:
+        if method == "OPTIONS":
+            # CORS 预检请求：不进限流桶、不计数（否则高频预检会
+            # 消耗真实请求的配额，实测过的 429 误触形态之一）
+            pass
+        else:
+            allowed, retry_after = _check_rate(path, ip)
+            if not allowed:
                 response = JSONResponse(
                     {"detail": "请求太频繁了，等一会儿再来找小汐玩吧~"},
                     status_code=429,
+                    headers={"Retry-After": str(retry_after)},
                 )
                 await response(scope, receive, send)
                 return

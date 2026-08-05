@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 2026-08-05 · 限流体检修复：429 带 Retry-After 退避头 + OPTIONS 预检豁免
+
+- 429 响应新增 `Retry-After` 头（值 = 桶内最早记录跌出 60 秒窗口的秒数，
+  1–60）：前端 fetch / 推送网关可据此退避，不再盲目重试撞墙。
+- CORS 预检（OPTIONS）不再进限流桶：此前高频预检会消耗真实请求的配额，
+  是实测过的 429 误触形态之一；预检本就豁免认证，本次补上限流豁免。
+- `_check_rate` 返回 (放行, Retry-After) 二元组；新增 3 例钉死行为：
+  Retry-After 取值区间（`test_429_carries_retry_after_header`）、预检 12 次
+  后 GET 仍放行（`test_options_preflight_not_counted_in_bucket`）、
+  无限制时返回 None（`test_retry_after_computed_from_oldest_record`）。
+
+**验证**：pytest 684 全绿（含本批全部改动）。
+
 ## 2026-08-05 · 地图引擎收敛（纯高德）+ 看地图/去这里联动导航
 
 **地图引擎收敛**
