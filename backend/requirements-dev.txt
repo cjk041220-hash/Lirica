@@ -1,0 +1,7 @@
+# 开发/测试依赖：生产 requirements + 测试工具
+# 生产镜像（Dockerfile 只 COPY requirements.txt）不携带 pytest，
+# 本地开发/CI 用本文件（start.bat / start.sh / README 均指向它）。
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.23

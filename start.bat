@@ -28,7 +28,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 REM --- Install missing dependencies ---
 echo    [...] Checking dependencies...
-.venv\Scripts\pip.exe install -r requirements.txt -q 2>&1
+.venv\Scripts\pip.exe install -r requirements-dev.txt -q 2>&1
 if errorlevel 1 (
     echo    [ERR] pip install failed - check your network
     pause

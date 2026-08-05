@@ -21,7 +21,7 @@ fi
 
 # --- 安装依赖 ---
 echo "    [...] Checking dependencies..."
-.venv/bin/pip install -r requirements.txt -q || { echo "    [ERR] pip install failed - check your network"; exit 1; }
+.venv/bin/pip install -r requirements-dev.txt -q || { echo "    [ERR] pip install failed - check your network"; exit 1; }
 echo "    [OK] Dependencies ready"
 
 # --- .env 检查 ---
