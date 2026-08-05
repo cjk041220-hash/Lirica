@@ -67,6 +67,11 @@ async def test_check_and_proactive_message_updates_db(tmp_db):
 
     original = hb.get_db
     hb.get_db = mock_get_db
+    # 50% 概率走进 _generate_proactive_message → recent_messages，
+    # 档案读库同样接到临时库，不碰生产 userdata.db
+    import database.core as db_core
+    original_core_db = db_core._db
+    db_core._db = tmp_db
 
     try:
         await hb.check_and_proactive_message()
@@ -78,6 +83,7 @@ async def test_check_and_proactive_message_updates_db(tmp_db):
         assert row[1] is not None  # daily_event 已更新
     finally:
         hb.get_db = original
+        db_core._db = original_core_db
 
 
 # ── 调度注册回归测试（v0.4.5 修复 P0：心跳协程从未被 await）──────────
@@ -384,6 +390,7 @@ async def test_background_llm_calls_use_runtime_model(tmp_db):
     try:
         with patch("heartbeat.get_db", return_value=tmp_db), \
              patch("utils.events.get_db", return_value=tmp_db), \
+             patch("memory.chat_archive.get_db", return_value=tmp_db), \
              patch("providers.deepseek.create_deepseek_llm", capture_llm):
             text = await hb._generate_proactive_message("开心", "在窗边看雨", 15)
     finally:
@@ -876,6 +883,15 @@ async def _run_heartbeat_at(tmp_db, monkeypatch, now_dt, fake_mood):
         return tmp_db
 
     monkeypatch.setattr(hb, "get_db", mock_get_db)
+
+    # 心跳可能走进 _generate_proactive_message → recent_messages，
+    # 档案读库同样接到临时库
+    async def fake_archive_get_db():
+        return tmp_db
+
+    import memory.chat_archive as _archive
+    monkeypatch.setattr(_archive, "get_db", fake_archive_get_db)
+
     seen = {}
 
     async def fake_choose_mood(period, *, app=None, now_dt=None,
@@ -1148,3 +1164,87 @@ async def test_close_db_connection_idempotent(tmp_db):
     core._db = None
     await core.close_db_connection()  # 未建：no-op 不报错
     assert core._db is None
+
+
+# ── Spec A：主动消息历史尾巴注入 ──────────────────────────────
+
+
+def _capturing_llm(captured, reply="冷冷，小汐在想你~"):
+    """FakeLLM 工厂：捕获 HumanMessage 内容（不真调模型）。"""
+    from types import SimpleNamespace
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content=reply)
+
+    return FakeLLM()
+
+
+async def test_proactive_prompt_includes_history_tail(tmp_db):
+    """patch recent_messages 返回「吵架尾巴」→ prompt 含历史块与
+    「递台阶/别装没发生过」引导词（捕获 LLM 入参，不真调模型）。"""
+    import datetime as dt
+    import heartbeat
+    from unittest.mock import AsyncMock, patch
+    from utils.timezone import HKT
+
+    captured = {}
+    tail = [
+        {"role": "user", "content": "JK 算什么东西，你也配替他说话？",
+         "created_at": "2026-08-04 23:41"},
+        {"role": "assistant", "content": "你这么说，我不高兴了。",
+         "created_at": "2026-08-04 23:42"},
+    ]
+
+    with patch("providers.deepseek.create_deepseek_llm",
+               return_value=_capturing_llm(captured)), \
+         patch("utils.events.get_active_events", return_value=[]), \
+         patch("utils.events.get_recent_proactive_texts", return_value=[]), \
+         patch("memory.chat_archive.recent_messages",
+               new=AsyncMock(return_value=tail)):
+        await heartbeat._generate_proactive_message(
+            "不开心", "映海很安静", 23,
+            now_dt=dt.datetime(2026, 8, 5, 9, 0, tzinfo=HKT))
+
+    human = captured["human"]
+    assert "你最近和冷冷说过这些话（最新在最后）" in human
+    assert "[08-04 23:41] 冷冷：JK 算什么东西，你也配替他说话？" in human
+    assert "[08-04 23:42] 小汐：你这么说，我不高兴了。" in human
+    assert "递个台阶" in human
+    assert "别装没发生过" in human
+
+
+async def test_proactive_prompt_history_read_failure_degrades(tmp_db):
+    """recent_messages 抛异常 → prompt 照常构建、无历史块、消息照常生成。"""
+    import heartbeat
+    from unittest.mock import AsyncMock, patch
+
+    captured = {}
+    with patch("providers.deepseek.create_deepseek_llm",
+               return_value=_capturing_llm(captured)), \
+         patch("utils.events.get_active_events", return_value=[]), \
+         patch("utils.events.get_recent_proactive_texts", return_value=[]), \
+         patch("memory.chat_archive.recent_messages",
+               new=AsyncMock(side_effect=RuntimeError("db lost"))):
+        text = await heartbeat._generate_proactive_message("开心", "映海很清澈", 15)
+
+    assert "你最近和冷冷说过这些话" not in captured["human"]
+    assert len(text) >= 5  # 消息照常生成（降级不阻断）
+
+
+async def test_proactive_prompt_empty_history_no_block(tmp_db):
+    """空历史（新库/从未对话）→ prompt 不出现历史块。"""
+    import heartbeat
+    from unittest.mock import AsyncMock, patch
+
+    captured = {}
+    with patch("providers.deepseek.create_deepseek_llm",
+               return_value=_capturing_llm(captured)), \
+         patch("utils.events.get_active_events", return_value=[]), \
+         patch("utils.events.get_recent_proactive_texts", return_value=[]), \
+         patch("memory.chat_archive.recent_messages",
+               new=AsyncMock(return_value=[])):
+        await heartbeat._generate_proactive_message("开心", "映海很清澈", 15)
+
+    assert "你最近和冷冷说过这些话" not in captured["human"]

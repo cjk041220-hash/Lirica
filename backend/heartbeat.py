@@ -377,6 +377,26 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
     except Exception:
         pass
 
+    # ── 历史尾巴（Spec A）：把最近对话原文喂给她，由她结合人格自己
+    # 判断怎么接——聊到一半的事自然跟进；闹了别扭就按「生气的时候」
+    # 的性子来。不带时间窗口：三天不来尾巴仍是那次争吵，正好求和。
+    # 读取失败只省略历史块，不阻断消息生成（降级纪律同上方事件段）
+    try:
+        from memory.chat_archive import recent_messages, format_recent_messages
+        history = await recent_messages()
+    except Exception as e:
+        log.warning("主动消息：读取对话历史失败，省略历史块: %s", e)
+        history = []
+    if history:
+        user_prompt += (
+            "\n\n你最近和冷冷说过这些话（最新在最后）：\n"
+            + format_recent_messages(history)
+            + "\n\n接着这个语气和情境自然地搭话。聊到一半没说完的事，"
+            "可以自己跟进；如果上次闹了别扭或气氛僵着，按你生气时的性子"
+            "来——可以别扭地先递个台阶，可以傲娇一点，但别装没发生过，"
+            "也别翻旧账。"
+        )
+
     # 用独立的轻量 LLM 调用（低 token、无工具）
     # model 跟随用户在控制台的选择（运行时配置），temperature/max_tokens
     # 保持本任务的轻量值——主动消息不需要 8192 tokens 的发挥空间

@@ -98,7 +98,8 @@ async def test_generate_proactive_message_returns_text():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
-    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm):
+    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])):
         result = await heartbeat._generate_proactive_message("开心", "在映海浅滩玩", 14)
 
     assert len(result) > 0
@@ -114,7 +115,8 @@ async def test_generate_proactive_truncates_long_text():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
-    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm):
+    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])):
         result = await heartbeat._generate_proactive_message("开心", "test", 14)
 
     assert len(result) <= 200
@@ -130,7 +132,8 @@ async def test_generate_proactive_fallback_on_short_text():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
-    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm):
+    with patch("providers.deepseek.create_deepseek_llm", return_value=mock_llm), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])):
         result = await heartbeat._generate_proactive_message("开心", "test", 14)
 
     assert len(result) >= 5
