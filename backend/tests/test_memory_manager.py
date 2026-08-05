@@ -926,3 +926,37 @@ async def test_get_mood_valence_maps_life_state(memory_mgr, tmp_db):
     await tmp_db.execute("DELETE FROM life_state")
     await tmp_db.commit()
     assert await memory_mgr.get_mood_valence() is None
+
+
+# ── 存储侧时间词归一化（批次 H：2026-08-05 用户反馈防回归）──────
+
+
+async def test_add_normalizes_time_words(memory_mgr):
+    """add 落库前把相对时间词改写为绝对日期（「后天」过两天就读不懂）。"""
+    import datetime
+    from utils.timezone import HKT
+
+    result = await memory_mgr.add("重要的事", "冷冷后天考试")
+    d = (datetime.datetime.now(HKT) + datetime.timedelta(days=2)).date()
+    assert result["content"] == f"冷冷{d.month}月{d.day}日考试"
+
+
+async def test_update_content_normalizes_time_words(memory_mgr):
+    """update_content 同样归一化（改期场景）。"""
+    import datetime
+    from utils.timezone import HKT
+
+    mem = await memory_mgr.add("重要的事", "冷冷有考试")
+    assert await memory_mgr.update_content(mem["id"], "考试改到明天了")
+    cursor = await memory_mgr._db.execute(
+        "SELECT content FROM memories WHERE id = ?", (mem["id"],)
+    )
+    row = await cursor.fetchone()
+    d = (datetime.datetime.now(HKT) + datetime.timedelta(days=1)).date()
+    assert row[0] == f"考试改到{d.month}月{d.day}日了"
+
+
+async def test_add_without_time_words_unchanged(memory_mgr):
+    """无相对时间词的内容逐字节原样入库（防过度改写）。"""
+    result = await memory_mgr.add("喜好", "喜欢吃芒果")
+    assert result["content"] == "喜欢吃芒果"

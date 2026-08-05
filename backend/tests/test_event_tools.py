@@ -261,3 +261,47 @@ async def test_delete_event_not_found_and_readonly(events_tool_db):
     )
     await events_tool_db.commit()
     assert "划不掉" in await delete_event.ainvoke({"event_id": "a1"})
+
+
+# ── 存储侧时间词归一化（批次 H：2026-08-05 用户反馈防回归）──────
+
+
+async def test_create_event_normalizes_time_words(events_tool_db):
+    """title/memo 里的相对时间词落库前改写为绝对日期（「后天考试」防过期）。"""
+    import datetime
+    from tools.events import create_event
+    from utils.timezone import HKT
+
+    result = await create_event.ainvoke({
+        "title": "后天考试",
+        "event_date": _d(2),
+        "event_type": "exam",
+        "memo": "冷冷说今天要开始复习",
+    })
+    assert "记在小本本上" in result
+    cursor = await events_tool_db.execute("SELECT title, memo FROM events")
+    row = await cursor.fetchone()
+    d = (datetime.datetime.now(HKT) + datetime.timedelta(days=2)).date()
+    today = datetime.datetime.now(HKT).date()
+    assert row[0] == f"{d.month}月{d.day}日考试"
+    assert row[1] == f"冷冷说{today.month}月{today.day}日要开始复习"
+
+
+async def test_update_event_normalizes_time_words(events_tool_db):
+    """改事件时 memo 同样归一化。"""
+    import datetime
+    from tools.events import create_event, update_event
+    from utils.timezone import HKT
+
+    await create_event.ainvoke({
+        "title": "期中考试", "event_date": _d(5), "event_type": "exam",
+    })
+    cursor = await events_tool_db.execute("SELECT id FROM events")
+    event_id = (await cursor.fetchone())[0]
+
+    result = await update_event.ainvoke({"event_id": event_id, "memo": "改到明天了"})
+    assert "改好啦" in result
+    cursor = await events_tool_db.execute("SELECT memo FROM events WHERE id = ?", (event_id,))
+    memo = (await cursor.fetchone())[0]
+    d = (datetime.datetime.now(HKT) + datetime.timedelta(days=1)).date()
+    assert memo == f"改到{d.month}月{d.day}日了"

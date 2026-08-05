@@ -719,3 +719,15 @@ async def test_extract_valence_defaults_zero(tmp_db, fake_llm):
         "SELECT valence, arousal FROM memories WHERE status IN ('active', 'core')"
     )
     assert tuple(await cursor.fetchone()) == (0.0, 0.0)
+
+
+# ── 提取提示词时间约束（批次 H：2026-08-05 用户反馈防回归）──────
+
+
+def test_extract_system_forbids_relative_time_words():
+    """提取提示词规则 9：content 只写绝对日期，禁止相对时间词。"""
+    from memory.extract import _EXTRACT_SYSTEM
+
+    assert "一律写绝对日期" in _EXTRACT_SYSTEM
+    assert "今天/明天/后天/下周" in _EXTRACT_SYSTEM
+    assert "换算成绝对日期" in _EXTRACT_SYSTEM

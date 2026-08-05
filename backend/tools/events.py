@@ -66,6 +66,15 @@ async def create_event(
     except (ValueError, TypeError):
         return "呜，日期格式好像不对……要用 YYYY-MM-DD 哦，比如 2026-08-01。"
 
+    # 存储侧时间词归一化（2026-08-05 用户反馈）：LLM 写的 title/memo
+    # 里常带「后天/明天/今天」等相对说法，日子一过就读不懂、会答错。
+    # 落库前把日级相对词改写为绝对日期（日历面板 source='user' 不走
+    # 工具层，用户的原始措辞不受影响）。
+    from utils.time_words import normalize_time_words
+
+    title = normalize_time_words(title)
+    memo = normalize_time_words(memo or "") if memo else memo
+
     try:
         saved, created = await events_mgr.create_event(
             title,
@@ -157,6 +166,12 @@ async def update_event(
         severity: high / normal / low（留空=不改）
         memo: 新备注（留空=不改）
     """
+    # 同 create_event：title/memo 落库前做相对时间词归一化
+    from utils.time_words import normalize_time_words
+
+    title = normalize_time_words(title) if title else title
+    memo = normalize_time_words(memo) if memo else memo
+
     try:
         updated = await events_mgr.update_event(
             event_id,

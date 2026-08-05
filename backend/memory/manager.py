@@ -320,6 +320,12 @@ class MemoryManager:
         content = (content or "").strip()
         if not content:
             raise ValueError("content 不能为空")
+        # 存储侧时间词归一化（2026-08-05 用户反馈）：相对时间词落库前
+        # 改写为绝对日期，防「后天考试」过了两天读不懂（提示词约束在
+        # soul.py「时间的写法」+ 提取提示词，这里是硬兜底）。
+        from utils.time_words import normalize_time_words
+
+        content = normalize_time_words(content)
         content = _cap_content(content, "add")
         importance = _coerce_importance(importance)
         valence = _coerce_valence(valence)
@@ -370,7 +376,14 @@ class MemoryManager:
         读面自然消失；v10 去重索引同谓词，故重提同内容不被历史行
         阻挡（「忘了又想起」语义不受影响）。
         """
-        new_content = _cap_content((new_content or "").strip(), "update_content")
+        # 存储侧时间词归一化（同 add：相对时间词改写为绝对日期）
+        from utils.time_words import normalize_time_words
+
+        new_content = (new_content or "").strip()
+        if not new_content:
+            return False
+        new_content = normalize_time_words(new_content)
+        new_content = _cap_content(new_content, "update_content")
         if not new_content:
             return False
         # 先读旧文本与历史行所需字段（同一事务内完成：取旧值 → 落

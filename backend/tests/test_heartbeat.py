@@ -1095,7 +1095,9 @@ async def test_daily_diary_excludes_mood_memory(tmp_db):
 
     mgr = MemoryManager(tmp_db)
     await mgr.upsert_mood_memory("开心", now=now_str())  # created_at = 今天
-    await mgr.add("冷冷的信息", "冷冷今天说想去海边")
+    # 注意：内容刻意不含相对时间词——存储侧时间词归一化（批次 H）会把
+    # 「今天」改写为绝对日期，日记素材随之携带绝对日期，断言用永恒词
+    await mgr.add("冷冷的信息", "冷冷说想去海边")
 
     fake_llm = MagicMock()
     fake_llm.ainvoke = AsyncMock(return_value=MagicMock(content="今天的日记内容。"))
@@ -1106,7 +1108,7 @@ async def test_daily_diary_excludes_mood_memory(tmp_db):
         await hb.daily_diary()
 
     material = fake_llm.ainvoke.await_args[0][0][1].content
-    assert "冷冷今天说想去海边" in material
+    assert "冷冷说想去海边" in material
     assert "小汐的心情" not in material
 
 
