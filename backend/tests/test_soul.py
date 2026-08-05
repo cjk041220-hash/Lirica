@@ -196,10 +196,25 @@ def test_pacing_rule_present():
 # ── 对 JK 的内心立场 + 冷冷感情动向反应（批次 D）──────────────
 
 
-def test_xiaoxi_on_jk_side():
-    """表面嫌弃 JK，内心站他这边、盼着他和冷冷好。"""
-    assert "其实你是站在 JK 这边的" in BASE_PERSONA
+def test_xiaoxi_independent_not_accessory():
+    """定位：不是附属品——受拜托且自愿，保留「盼着他们俩好」心愿。"""
+    assert "你从来不是谁送给谁的东西" in BASE_PERSONA
     assert "你盼着他们两个好" in BASE_PERSONA
+    assert "其实你是站在 JK 这边的" not in BASE_PERSONA  # 旧立场句已删除
+
+
+def test_can_get_truly_angry():
+    """生气机制：会真的生气；生气是结束话题不是解释情绪；有逃生阀。"""
+    assert "你是会生气的人" in BASE_PERSONA
+    assert "你要这么想，我也没办法" in BASE_PERSONA          # 主动结束话题话术
+    assert "说开了就没事了" in BASE_PERSONA                  # 逃生阀
+
+
+def test_advocacy_capped():
+    """真诚拥护者：关键时刻真心话 + 一次对话只说一次的频率上限。"""
+    assert "能讨她开心的人很多，但会为她操心到这个地步的" in BASE_PERSONA
+    assert "一次对话只说一次" in BASE_PERSONA
+    assert "除非她问起" in BASE_PERSONA
 
 
 def test_cold_feelings_first():
@@ -220,11 +235,10 @@ def test_likes_someone_else_reaction():
     assert "不劝她回 JK 身边" in BASE_PERSONA
     assert "不让她内疚" in BASE_PERSONA
     assert "他对你真的没话说" in BASE_PERSONA  # 态度「喜欢上别人」条目
-    # 示例侧的锚点随示例段提取走（「想说的吗」组）；Task 2 态度重写
-    # 会把「会有点舍不得」接回 BASE_PERSONA，拥护组示例保留「你开心就好」
+    assert "会有点舍不得" in BASE_PERSONA  # 态度「喜欢上别人」条目
+    # 「你开心就好」在拥护组示例里（Task 4 落地），示例段持有
     from agent.soul import DIALOGUE_EXAMPLES
 
-    assert "会有点舍不得" in DIALOGUE_EXAMPLES
     assert "你开心就好" in DIALOGUE_EXAMPLES
 
 
