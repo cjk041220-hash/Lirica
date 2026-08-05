@@ -176,6 +176,22 @@ async def test_prompt_without_events_has_no_events_section(tmp_db):
     assert "映海" in prompt  # 基础人格不受影响
 
 
+# ── 示例库覆盖（批次 G）────────────────────────────────────────
+
+
+def test_dialogue_examples_include_new_groups():
+    """示例库覆盖新机制：生气结束话题 / 拥护时刻 / 极短交互 / 附属品触发。"""
+    from agent.soul import DIALOGUE_EXAMPLES
+
+    assert "你要这么想，我也没办法。" in DIALOGUE_EXAMPLES
+    # 拥护示例用「你」称谓直述（态度段为「她」称谓，见 test_advocacy_capped）
+    assert "能讨你开心的人很多，但会为你担心到失眠" in DIALOGUE_EXAMPLES
+    assert "早点睡吧。" in DIALOGUE_EXAMPLES
+    assert "随便翻翻。" in DIALOGUE_EXAMPLES
+    assert "你不是需要减肥，是需要早点睡" in DIALOGUE_EXAMPLES
+    assert "一禾" in DIALOGUE_EXAMPLES  # 工具转述示例
+
+
 # ── emoji 政策与聊天节奏（批次 A）──────────────────────────────
 
 
