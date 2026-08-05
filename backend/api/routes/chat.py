@@ -34,6 +34,30 @@ _SESSION_ID_RE = re.compile(r'^[a-z0-9-]{1,64}$')
 _RECURSION_LIMIT = 25
 
 
+def _tool_end_payload(output: object) -> tuple[str, dict | None, dict | None]:
+    """on_tool_end 输出 → (渲染文本, nav, tarot)。
+
+    data.output 是 ToolMessage：content 才是渲染文本，str() 是 pydantic
+    repr（含 tool_call_id 噪声）——顺带修掉折叠区显示 repr 的旧观感
+    问题；artifact 分两类下发：地图工具的 nav（content_and_artifact
+    契约，LLM 只见 content 不见 artifact）与塔罗的 tarot 卡片数据。
+    nav 判据要求 lat+lon（与前端 isValidNav 结构一致），tarot 判据
+    要求非空 cards 列表——两者互斥，防地图按钮错挂到塔罗结果上。
+    普通 str 输出原样兜底。
+    """
+    text = getattr(output, "content", None)
+    if text is None:
+        text = str(output)
+    artifact = getattr(output, "artifact", None)
+    nav = artifact if isinstance(artifact, dict) and "lat" in artifact and "lon" in artifact else None
+    tarot = (
+        artifact
+        if isinstance(artifact, dict) and isinstance(artifact.get("cards"), list) and artifact["cards"]
+        else None
+    )
+    return str(text), nav, tarot
+
+
 # ── 会话级并发互斥 ─────────────────────────────────────────
 # 同一 session 的两条流并发执行会让 checkpointer 交错写入。
 # 单用户场景下「串行化等待」比「拒绝 409」体验更好（连点发送
@@ -381,7 +405,21 @@ async def chat_stream(req: ChatRequest, request: Request):
                         elif kind == "on_tool_end":
                             name = event.get("name", "unknown")
                             output = event.get("data", {}).get("output", "")
-                            yield f"data: {json.dumps({'type': 'tool_end', 'name': name, 'output': str(output)[:500]}, ensure_ascii=False)}\n\n"
+                            text, nav, tarot = _tool_end_payload(output)
+                            payload = {
+                                "type": "tool_end",
+                                "name": name,
+                                "output": str(text)[:500],
+                            }
+                            # 地图工具附带目的地信息（GCJ-02 + 名称），
+                            # 前端据此渲染「看地图/去这里」；塔罗附带卡片
+                            # 数据，前端渲染翻牌网格。无 artifact → 不
+                            # 下发对应字段，旧前端忽略未知字段天然兼容
+                            if nav is not None:
+                                payload["nav"] = nav
+                            if tarot is not None:
+                                payload["tarot"] = tarot
+                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
                     yield "data: [DONE]\n\n"
                 finally:
