@@ -3,7 +3,7 @@
 把本服务从「本机 :8000」搬到「域名 + HTTPS」的最小步骤。所有命令在仓库根执行。
 
 ## 0. 上线前安全前置（必读）
-- **确认 Gitee 仓库可见性**：`backend/database/migrations.py` 的 v4 迁移种子与 `backend/tests/test_cycle_tracker.py` 含真实生理期日期，已在 git 历史里。若仓库曾/将公开，按已泄露处理（源码占位化 + `git filter-repo` 清历史 + force-push），并**轮换五把密钥**（DeepSeek / 高德 / 谷歌地图 / Tavily / VAPID 私钥）。VAPID 私钥泄露 = 他人可冒充小汐向你设备推通知。
+- **确认 Gitee 仓库可见性**：`backend/database/migrations.py` 的 v4 迁移种子与 `backend/tests/test_cycle_tracker.py` 含真实生理期日期，已在 git 历史里。若仓库曾/将公开，按已泄露处理（源码占位化 + `git filter-repo` 清历史 + force-push），并**轮换四把密钥**（DeepSeek / 高德 / Tavily / VAPID 私钥）。VAPID 私钥泄露 = 他人可冒充小汐向你设备推通知。
 - 在 `backend/config/.env` 设强 `XIAOXI_API_TOKEN`（`python -c "import secrets;print(secrets.token_hex(32))"`）；或留空交给入口脚本自动生成（见 §1）。
 
 ## 1. 构建并启动容器
@@ -23,7 +23,6 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 
 ## 3. .env 收尾
 - `CORS_ORIGINS=https://你的域名`（精确域名，勿用 `*`）。
-- 可选 `GOOGLE_MAPS_API_KEY`：港澳/海外 POI 搜索（内地自动走高德，双引擎无需其他配置）；留空 = 港澳/海外查询回提示文案，不影响启动。
 - 可选 `BACKUP_SCRUB_SENSITIVE=true`：让应用内置备份剔除生理期 + 对话档案（分享/演示前更安心）。
 
 ## 4. 验证

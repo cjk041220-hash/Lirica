@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 2026-08-05 · 地图引擎收敛（纯高德）+ 看地图/去这里联动导航
+
+**地图引擎收敛**
+- 删除谷歌 Places 双引擎死代码（`tools/google_places.py` 整文件、`_pick_engine`
+  几何判定、`_engine_hint`、`_resolve_engine_for_place`、`GOOGLE_MAPS_API_KEY`
+  配置与 .env.example 块）——谷歌侧无 key 本就走不到，收敛为纯高德单引擎后
+  后端更简单、测试更少、无死路径。
+- 港澳同样走高德：GCJ-02 正向转换覆盖港澳（高德港澳数据同为加偏系），
+  transit/cycling 港澳「婉拒」概念消失，空结果是诚实信号；`geo.py` 模块注
+  与 `test_geo.py` 语义更新。
+- verify_tools 清理谷歌软提示串与引擎字样；README/deploy 密钥五→四。
+
+**看地图 / 去这里联动导航**
+- 5 个地图工具改 `response_format="content_and_artifact"`：返回 (渲染文本,
+  nav) 二元组，nav = {name, lat, lon, coord:"gcj02"}（高德契约 GCJ-02 原值，
+  零转换下发）。直接 `ainvoke({纯参数})` 仍返回纯 str，测试与 verify_tools
+  零改动；图内 ToolMessage.artifact 下发，LLM 只见 content 零污染。
+- SSE `tool_end` 新增可选 `nav` 字段（`_tool_end_payload` 提取 content +
+  artifact）——顺带修掉折叠区显示 pydantic repr（tool_call_id 噪声）的旧观感。
+- 前端 `mapLink.js` + `MapNavButtons.jsx`：内地 → 高德 URI 唤起（marker 看
+  地图 / navigation 去这里，coordinate=gaode 直传）；港澳/海外 iOS → Apple
+  Maps（香港数据最好，系统级唤起，GCJ-02 逆向成 WGS-84 精度 1-2m）；其余 →
+  Google Maps 网页链接兜底（跳转链接无需 key）。`window.location.href` 唤起，
+  未装 App 时 uri.amap.com 自回退网页版。
+
+**验证**
+- pytest 679 全绿（test_map_engine.py 重写：删谷歌侧 10 例、新增 nav 契约
+  14 例 + `_tool_end_payload` 5 例）；verify_tools ALL_TOOLS_HEALTHY（5 地图
+  工具全 LIVE）。vitest 24 全绿（gcj02 向量硬编码自后端正向函数实跑）；
+  oxlint 零告警、build 零错误。
+
 ## 2026-07-29 · 小汐的日历（第四面板）+ 地图双引擎 + 前夜提醒
 
 设计文档：`docs/superpowers/specs/2026-07-29-calendar-and-maps-design.md`

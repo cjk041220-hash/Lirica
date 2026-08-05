@@ -16,8 +16,8 @@ def test_out_of_china_identity():
 def test_hk_inside_standard_box_gets_shifted():
     """标准算法的国境框含港澳 → 港澳坐标按框内加偏。
 
-    与生产语义不矛盾：_pick_engine 恒将港澳路由到谷歌分支，
-    港澳坐标实际从不进入高德路径（见 geo.py 模块注）。
+    单引擎（纯高德）后这正是生产语义：港澳同样走高德，
+    高德港澳数据同为 GCJ-02 加偏系（见 geo.py 模块注）。
     """
     shifted = wgs84_to_gcj02(22.3193, 114.1694)  # 尖沙咀
     assert shifted != (22.3193, 114.1694)

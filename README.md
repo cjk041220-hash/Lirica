@@ -26,7 +26,7 @@ chmod +x start.sh   # 首次需要
 # 后端
 cd backend
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
+.venv/Scripts/pip install -r requirements-dev.txt
 # 复制 config/.env.example → config/.env，填入 API Key
 .venv/Scripts/python main.py
 
@@ -67,8 +67,8 @@ docker compose up -d
 >   收紧为 700/600（Linux 生效；Windows 开发机请依赖 NTFS 权限/全盘加密）；
 >   请勿将其置于可被他人读取的位置，也不要提交入 git。
 > - **密钥轮换**：若 `.env` 曾以过宽权限（如 644）存放或被他人读取过，
->   应视为已泄露——请轮换 DeepSeek / 高德 / 谷歌地图 / Tavily 密钥与
->   VAPID 私钥（五把），并在 Linux 服务器上执行 `chmod 600 backend/config/.env`。
+>   应视为已泄露——请轮换 DeepSeek / 高德 / Tavily 密钥与
+>   VAPID 私钥（四把），并在 Linux 服务器上执行 `chmod 600 backend/config/.env`。
 
 ## API 接口
 
@@ -143,7 +143,8 @@ docker compose up -d
 │   ├── version.py                  # 版本号（唯一定义处）
 │   ├── heartbeat.py                # 心跳调度器（每 2h 更新生命状态+刷新 Agent+定期维护）
 │   ├── pytest.ini                  # 测试配置
-│   ├── requirements.txt            # Python 依赖
+│   ├── requirements.txt            # Python 依赖（生产，不含测试工具）
+│   ├── requirements-dev.txt        # 开发依赖（= requirements.txt + pytest）
 │   │
 │   ├── config/
 │   │   ├── settings.py             # 全局配置（pydantic-settings, .env）
@@ -175,8 +176,7 @@ docker compose up -d
 │   │
 │   ├── tools/                      # 23 个工具
 │   │   ├── weather.py              # 天气（Open-Meteo + 高德回退）
-│   │   ├── map_tools.py            # 地图（高德：附近搜索/定位/路线）
-│   │   ├── google_places.py        # 谷歌 Places 引擎（港澳/海外，供 map_tools 调用）
+│   │   ├── map_tools.py            # 地图（高德：附近搜索/定位/路线 + nav 联动）
 │   │   ├── search.py               # 网络搜索（Tavily）
 │   │   ├── memory.py               # 记忆（增删改查导出）
 │   │   ├── diary.py                # 日记（写/读，同日去重）
@@ -272,8 +272,9 @@ docker compose up -d
 
 - **🌤️ 天气查询** — Open-Meteo，50+ 城市本地坐标 + 高德地理编码回退
 - **📍 附近搜索** — 高德 POI，支持 GPS 自动传入（WGS-84→GCJ-02 自动转换）
-- **🗺️ 地址定位 / 模糊搜索** — 高德地理编码（港澳/海外自动切谷歌 Places 双引擎）
+- **🗺️ 地址定位 / 模糊搜索** — 高德地理编码（纯高德单引擎）
 - **🚇 公交路线 / 🚲 骑行路线** — 高德路线规划
+- **🗾 看地图 / 去这里** — 工具结果附目的地跳转：内地唤起高德 App，港澳/海外 iOS 唤起 Apple Maps（香港数据最好），其余浏览器 Google Maps 兜底（跳转链接无需任何 key）
 - **🔍 网络搜索** — Tavily，世界观包装（「去映海里找找看」）
 - **🧠 记忆系统** — 记住/回忆/列出/导出，自动去重 + importance 打分 + 情绪标签
 - **✏️ 记忆更新 / 删除** — update_memory 覆盖矛盾、合并变化；delete_memory 忘掉过时的
@@ -306,8 +307,7 @@ docker compose up -d
 | `DEEPSEEK_API_KEY` | ✅ | DeepSeek API Key |
 | `DEEPSEEK_BASE_URL` | ❌ | 默认 `https://api.deepseek.com/v1` |
 | `DEEPSEEK_MODEL` | ❌ | 默认 `deepseek-v4-flash` |
-| `AMAP_API_KEY` | ❌ | 高德地图 Key（内地地图/路线功能需要） |
-| `GOOGLE_MAPS_API_KEY` | ❌ | 谷歌地图 Key（港澳/海外 POI；双引擎自动切换，留空则优雅降级） |
+| `AMAP_API_KEY` | ❌ | 高德地图 Key（唯一地图引擎；POI/路线/「看地图去这里」跳转需要） |
 | `TAVILY_API_KEY` | ❌ | Tavily Key（搜索功能需要） |
 | `XIAOXI_API_TOKEN` | ❌ | API 认证 Token（部署公网时设置） |
 | `XIAOXI_ALLOW_INSECURE` | ❌ | 显式承担「无 token 绑定非回环地址」风险（仅受控内网；默认 false = fail-closed） |

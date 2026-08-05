@@ -13,13 +13,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-v4-flash"
 
-    # 高德地图
+    # 高德地图（唯一地图引擎）
     amap_api_key: str = ""
-
-    # 谷歌地图（Places API New）— 港澳/海外 POI 搜索，与高德双引擎
-    # 互补（map_tools._pick_engine 按坐标几何自动切换）。留空 = 优雅
-    # 降级：港澳/海外查询回小汐口吻提示，不影响启动、不影响内地高德。
-    google_maps_api_key: str = ""
 
     # Tavily 网络搜索
     tavily_api_key: str = ""

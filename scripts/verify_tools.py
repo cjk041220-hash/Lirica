@@ -77,21 +77,6 @@ def classify(name: str, text: str) -> str:
     return "EMPTY"
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memories (
-    id TEXT PRIMARY KEY, content TEXT NOT NULL,
-    category TEXT DEFAULT '其他', created_at TEXT NOT NULL,
-    last_used_at TEXT, access_count INTEGER DEFAULT 0, status TEXT DEFAULT 'active');
-CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
-    ON memories(category, content) WHERE status = 'active';
-CREATE TABLE IF NOT EXISTS diaries (date TEXT PRIMARY KEY, title TEXT, content TEXT);
-CREATE TABLE IF NOT EXISTS life_state (id INTEGER PRIMARY KEY DEFAULT 1, mood TEXT, daily_event TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS proactive_messages (id TEXT PRIMARY KEY, content TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT, read_at TEXT, status TEXT DEFAULT 'pending');
-CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS cycle_records (id INTEGER PRIMARY KEY AUTOINCREMENT, start_date TEXT NOT NULL UNIQUE, note TEXT);
-"""
-
-
 async def main():
     from config.settings import get_settings
     from tools import (
@@ -117,17 +102,25 @@ async def main():
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     conn = await aiosqlite.connect(tmp.name)
-    await conn.executescript(SCHEMA)
-    # events 表（迁移 v6）：与生产共享同一份 DDL 常量，防止夹具漂移
-    from database.migrations import EVENTS_SCHEMA_SQL
-    await conn.executescript(EVENTS_SCHEMA_SQL)
-    await conn.commit()
+    # 直接用生产初始化入口建表 + 全链迁移（init_db：基础表 v1..v18 +
+    # 索引 + 种子）。此前本脚本维护本地 SCHEMA 副本，落后于 v13/v14/v18
+    # 的列（hit_count/valence 等）导致 remember 写路径报 no such column
+    # 的夹具漂移——与 events 表共享 DDL 常量同款纪律，此处更彻底：
+    # 临时库与生产库逐字节同构，永不漂移
+    from database.core import init_db
+    await init_db(conn)
     # create_event / list_events 经 utils.events.get_db → database.core 全局
     # 长连接。把 _db 指向临时库（同 tests/test_cycle_tracker.py 的隔离模式），
     # 绝不允许事件工具写生产 userdata.db
     db_core._db = conn
     set_diary_db_conn(conn)
     set_memory_manager(MemoryManager(conn))
+    # 定位缓存种子：search_nearby 无 location 参数时回退用户最近定位
+    #（location_store.get_any）。无 GPS 环境种一个深圳坐标，让无坐标
+    # 用例也走真实高德链路（单引擎后文本查询不再有引擎切换语义，
+    # 种子只是「城市偏好」——文本查询把 city 参数传内地城市即可）
+    from memory import location_store
+    await location_store.update("verify", 22.543, 114.057)  # 深圳市民中心附近
     async with httpx.AsyncClient(timeout=15) as http:
         set_http_client(http)
 
@@ -136,7 +129,9 @@ async def main():
             ("geocode_address", lambda: geocode_address.ainvoke({"address": "香港铜锣湾时代广场"})),
             ("fuzzy_search_place", lambda: fuzzy_search_place.ainvoke({"keywords": "咖啡", "city": "深圳"})),
             ("search_nearby", lambda: search_nearby.ainvoke({"keywords": "便利店", "location": "114.06,22.54"})),
-            ("get_transit_route", lambda: get_transit_route.ainvoke({"origin": "香港铜锣湾时代广场", "destination": "香港中环国际金融中心", "city": "香港"})),
+            # 高德公交数据在港澳弱/不覆盖：线路用例必须用内地地址，
+            # 否则必然「没找到公交」的软响应
+            ("get_transit_route", lambda: get_transit_route.ainvoke({"origin": "深圳市民中心", "destination": "深圳会展中心", "city": "深圳"})),
             ("get_cycling_route", lambda: get_cycling_route.ainvoke({"origin": "深圳市民中心", "destination": "深圳会展中心", "city": "深圳"})),
             ("web_search", lambda: web_search.ainvoke({"query": "香港 本周末 展览 活动"})),
             ("remember", lambda: remember.ainvoke({"category": "verify临时", "content": "verify_tools 自动化测试记忆"})),

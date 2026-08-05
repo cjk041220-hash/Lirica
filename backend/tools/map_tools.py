@@ -1,25 +1,23 @@
-"""地图工具 — 高德/谷歌双引擎。
+"""地图工具 — 纯高德单引擎。
 
-引擎选择（_pick_engine）：坐标几何判定——中国内地 → 高德（免费、
-内地数据全），内地之外（港澳/海外）→ 谷歌 Places（香港 POI 质量
-最好）。面向 LLM 的工具签名与 docstring 完全不变，切换对 LLM 无感；
-两引擎输出归一化为同构 POI 字典后统一渲染。
+高德 Web 服务 API 承担全部地理能力（地理编码 / POI 搜索 / 路线规划）。
+内地与港澳统一收 GCJ-02 加偏坐标（高德港澳数据同样是 GCJ-02），无
+第二引擎、无坐标引擎切换；港澳的路线/POI 数据弱是数据现实，空结果
+按既有文案诚实告知，不搞「婉拒」概念。
 
-路线规划（公交/骑行）仅高德有实现：任一端点落在谷歌侧 → 固定婉拒
-文案（谷歌 Directions 记为将来项）。
+面向 LLM 的工具签名与 docstring 稳定；每个工具返回 (渲染文本, nav)
+二元组——nav 是「看地图 / 去这里」跳转所需的目的地信息（GCJ-02，
+前端按目的地区域选地图 App 唤起），经 response_format=
+"content_and_artifact" 走 ToolMessage.artifact 下发，LLM 只见 content
+文本，artifact 不进模型上下文。
 """
 import httpx
 from langchain_core.tools import tool
 from config.settings import get_settings
 from memory import location_store
-from tools.google_places import (
-    _GoogleKeyMissing, MSG_GOOGLE_KEY_MISSING,
-    nearby_search as _google_nearby, text_search as _google_text,
-)
 from utils.errors import log_tool_error
 from utils.geo import wgs84_to_gcj02
 from utils.retry import with_retry
-from utils.timezone import DEFAULT_LAT, DEFAULT_LON
 
 # 共享 HTTP 客户端（由 server.py lifespan 注入）
 _shared_client: httpx.AsyncClient | None = None
@@ -92,27 +90,11 @@ async def _amap_request(endpoint: str, params: dict) -> dict:
     return data
 
 
-# ── 双引擎选择与归一化 ─────────────────────────────────────────
+# ── 地理编码与导航载体 ─────────────────────────────────────────
 
-# 中国内地粗框（覆盖内地全境）：经度 73–135，纬度 18–54
-_MAINLAND_BBOX = (73.0, 18.0, 135.0, 54.0)
-# 港澳排除框：几何上落在内地框内，但高德港澳 POI 数据弱 → 强制谷歌。
-# 纬度上界取 22.50 ≈ 香港北界（深圳河一线）——深圳南侧（福田 22.54）
-# 留在高德，港深交界少量区域（新界北 22.49-22.50 之间）的归属误差
-# = 引擎换用，两侧都能给出正确坐标，体验差只在 POI 丰度
-_HKMO_BBOX = (113.82, 22.15, 114.44, 22.50)
-
-
-def _pick_engine(lat: float, lon: float) -> str:
-    """按坐标选地图引擎：中国内地（不含港澳）→ amap，其余 → google。
-
-    深圳 → 高德；港岛/九龙/新界 → 谷歌；海外 → 谷歌。
-    """
-    w, s, e, n = _MAINLAND_BBOX
-    in_mainland = w <= lon <= e and s <= lat <= n
-    w2, s2, e2, n2 = _HKMO_BBOX
-    in_hkmo = w2 <= lon <= e2 and s2 <= lat <= n2
-    return "amap" if (in_mainland and not in_hkmo) else "google"
+# nav 坐标系标记：后端统一下发 GCJ-02 原值（高德 API 直出零转换），
+# 由前端按目的地区域决定要不要逆向成 WGS-84（Apple/Google Maps）
+NAV_COORD_GCJ02 = "gcj02"
 
 
 def _parse_latlon(location: str) -> tuple[float, float] | None:
@@ -124,23 +106,23 @@ def _parse_latlon(location: str) -> tuple[float, float] | None:
         return None
 
 
-async def _engine_hint() -> tuple[float, float]:
-    """引擎判定的参考坐标：用户最后位置，无缓存回退默认香港坐标。
+def _nav(name: str, location: str | None) -> dict | None:
+    """目的地名称 + GCJ-02 坐标（高德契约「经度,纬度」）；非法返回 None。"""
+    ll = _parse_latlon(location or "")
+    if ll is None:
+        return None
+    lat, lon = ll
+    return {"name": name, "lat": lat, "lon": lon, "coord": NAV_COORD_GCJ02}
 
-    文本查询（地理编码/模糊搜索）自身没有坐标，只能按用户最近一次
-    定位推断她大概率在问哪边的地方。
-    """
-    try:
-        cached = await location_store.get_any()
-        if cached:
-            return cached
-    except Exception:
-        pass
-    return DEFAULT_LAT, DEFAULT_LON
+
+async def _amap_geocode(place: str, city: str = "") -> dict | None:
+    """地名 → 高德 geocode 对象（含 location「经度,纬度」GCJ-02）；查不到返回 None。"""
+    data = await _amap_request("/v3/geocode/geo", {"address": place, "city": city})
+    return (data.get("geocodes") or [None])[0]
 
 
 def _normalize_amap_poi(poi: dict) -> dict:
-    """高德 POI → 与谷歌同构的归一化字典（两侧统一渲染）。"""
+    """高德 POI → 归一化字典（统一渲染与 nav 构造）。"""
     d = poi.get("distance")
     return {
         "name": poi.get("name", "?"),
@@ -153,7 +135,7 @@ def _normalize_amap_poi(poi: dict) -> dict:
 
 
 def _render_pois(keywords: str, pois: list[dict]) -> str:
-    """两引擎共用的 POI 渲染（归一化字典就是为了这一刻）。"""
+    """统一 POI 渲染。"""
     if not pois:
         return f"小汐在附近没有找到「{keywords}」……要不要换个词试试？"
     result = f"🐋 小汐帮你找到附近的「{keywords}」啦：\n\n"
@@ -167,20 +149,8 @@ def _render_pois(keywords: str, pois: list[dict]) -> str:
     return result
 
 
-async def _resolve_engine_for_place(place: str, city: str) -> tuple[str, str]:
-    """地名 → (engine, "经度,纬度")。引擎按用户最后位置判定。"""
-    hint = await _engine_hint()
-    if _pick_engine(*hint) == "google":
-        hits = await _google_text(place)
-        loc = hits[0]["location"] if hits else ""
-        return "google", loc
-    data = await _amap_request("/v3/geocode/geo", {"address": place, "city": city})
-    loc = (data.get("geocodes") or [{}])[0].get("location", "")
-    return "amap", loc
-
-
-@tool
-async def search_nearby(keywords: str = "", radius: int = 1000, location: str = "") -> str:
+@tool(response_format="content_and_artifact")
+async def search_nearby(keywords: str = "", radius: int = 1000, location: str = "") -> tuple[str, dict | None]:
     """搜索附近的兴趣点。冷冷可以问「附近有什么咖啡店呀？」
     如果有 GPS 坐标，location 可以不传，会自动使用冷冷的当前位置。
 
@@ -192,7 +162,7 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
     """
     try:
         # 坐标全程以 WGS-84（浏览器 GPS 原值）持有，仅在入高德 API
-        # 的最后一步转 GCJ-02——引擎判定 _pick_engine 必须用真坐标
+        # 的最后一步转 GCJ-02（高德契约）
         latlon = _parse_latlon(location) if location else None
         if latlon is None:
             # 没有可用坐标 → 尝试会话缓存的 GPS
@@ -201,64 +171,51 @@ async def search_nearby(keywords: str = "", radius: int = 1000, location: str = 
                 latlon = cached
 
         if latlon is None:
-            return "小汐不知道冷冷现在在哪里呢……告诉小汐你的位置，或者开启 GPS 定位好不好？"
+            return ("小汐不知道冷冷现在在哪里呢……告诉小汐你的位置，或者开启 GPS 定位好不好？", None)
 
-        if _pick_engine(*latlon) == "google":
-            pois = await _google_nearby(latlon, keywords, radius)
-        else:
-            # 高德用 GCJ-02 加偏坐标系：WGS-84 原值直传会偏出几百米
-            #（内地 iPhone 必现；安卓系统常代转 GCJ-02 反而「侥幸正确」）
-            glat, glon = wgs84_to_gcj02(latlon[0], latlon[1])
-            data = await _amap_request("/v3/place/around", {
-                "location": f"{glon},{glat}", "keywords": keywords,
-                "radius": radius, "offset": 10,
-            })
-            if data.get("status") != "1":
-                return "小汐在海里游了一圈，没找到附近有什么……"
-            pois = [_normalize_amap_poi(p) for p in data.get("pois", [])]
-
-        return _render_pois(keywords, pois)
+        # 高德用 GCJ-02 加偏坐标系：WGS-84 原值直传会偏出几百米
+        #（内地 iPhone 必现；安卓系统常代转 GCJ-02 反而「侥幸正确」。
+        #  港澳同样收 GCJ-02 —— out_of_china 国境框含港澳，一并转换）
+        glat, glon = wgs84_to_gcj02(latlon[0], latlon[1])
+        data = await _amap_request("/v3/place/around", {
+            "location": f"{glon},{glat}", "keywords": keywords,
+            "radius": radius, "offset": 10,
+        })
+        if data.get("status") != "1":
+            return ("小汐在海里游了一圈，没找到附近有什么……", None)
+        pois = [_normalize_amap_poi(p) for p in data.get("pois", [])]
+        # 高德排序首位即最佳候选，nav 只带一个目的地（避免 UI 跳转爆炸）
+        nav = _nav(pois[0]["name"], pois[0]["location"]) if pois else None
+        return (_render_pois(keywords, pois), nav)
     except _AmapKeyMissing:
-        return MSG_AMAP_KEY_MISSING
-    except _GoogleKeyMissing:
-        return MSG_GOOGLE_KEY_MISSING
+        return (MSG_AMAP_KEY_MISSING, None)
     except Exception as e:
         log_tool_error("search_nearby", e)
-        return "呜，小汐去找的时候迷路了……过一会儿再试试好不好？"
+        return ("呜，小汐去找的时候迷路了……过一会儿再试试好不好？", None)
 
 
-@tool
-async def geocode_address(address: str) -> str:
+@tool(response_format="content_and_artifact")
+async def geocode_address(address: str) -> tuple[str, dict | None]:
     """把中文地址转成经纬度坐标。冷冷可以直接问「铜锣湾在哪里？」
 
     Args:
         address: 详细地址，如「香港铜锣湾时代广场」
     """
     try:
-        if _pick_engine(*(await _engine_hint())) == "google":
-            hits = await _google_text(address)
-            if not hits or not hits[0]["location"]:
-                return f"小汐找了找，好像没有「{address}」这个地方……"
-            return f"📍 {hits[0]['address']}：{hits[0]['location']}"
-
-        data = await _amap_request("/v3/geocode/geo", {
-            "address": address, "city": "香港",
-        })
-        if data.get("status") != "1" or not data.get("geocodes"):
-            return f"小汐在香港找了找，好像没有「{address}」这个地方……"
-        gc = data["geocodes"][0]
-        return f"📍 {gc.get('formatted_address', address)}：{gc.get('location', '?')}"
+        gc = await _amap_geocode(address, "香港")
+        if gc is None or not gc.get("location"):
+            return (f"小汐在香港找了找，好像没有「{address}」这个地方……", None)
+        text = f"📍 {gc.get('formatted_address', address)}：{gc.get('location', '?')}"
+        return (text, _nav(gc.get("formatted_address") or address, gc.get("location")))
     except _AmapKeyMissing:
-        return MSG_AMAP_KEY_MISSING
-    except _GoogleKeyMissing:
-        return MSG_GOOGLE_KEY_MISSING
+        return (MSG_AMAP_KEY_MISSING, None)
     except Exception as e:
         log_tool_error("geocode_address", e)
-        return "小汐定位的时候漂走了……过一会儿再试试好不好？"
+        return ("小汐定位的时候漂走了……过一会儿再试试好不好？", None)
 
 
-@tool
-async def fuzzy_search_place(keywords: str, city: str = "香港") -> str:
+@tool(response_format="content_and_artifact")
+async def fuzzy_search_place(keywords: str, city: str = "香港") -> tuple[str, dict | None]:
     """按关键词模糊搜索香港的地点。冷冷可以直接问「尖沙咀在哪里？」
 
     Args:
@@ -266,42 +223,30 @@ async def fuzzy_search_place(keywords: str, city: str = "香港") -> str:
         city: 城市，默认「香港」
     """
     try:
-        if _pick_engine(*(await _engine_hint())) == "google":
-            hits = await _google_text(keywords)
-            if not hits:
-                return f"小汐找了找，没有找到「{keywords}」……"
-            result = f"🐋 小汐找到了这些「{keywords}」：\n\n"
-            for i, poi in enumerate(hits[:5], 1):
-                result += f"{i}. **{poi['name']}**\n   📍 {poi['address']}"
-                if poi.get("location"):
-                    result += f"  🗺️ {poi['location']}"
-                result += "\n\n"
-            return result
-
         data = await _amap_request("/v3/place/text", {
             "keywords": keywords, "city": city, "offset": 5,
         })
         if data.get("status") != "1" or not data.get("pois"):
-            return f"小汐在香港找了找，没有找到「{keywords}」……"
+            return (f"小汐在香港找了找，没有找到「{keywords}」……", None)
+        pois = data["pois"][:5]
         result = f"🐋 小汐找到了这些「{keywords}」：\n\n"
-        for i, poi in enumerate(data["pois"][:5], 1):
+        for i, poi in enumerate(pois, 1):
             result += f"{i}. **{poi.get('name','?')}**\n"
             result += f"   📍 {poi.get('address','?')}"
             if poi.get("location"):
                 result += f"  🗺️ {poi['location']}"
             result += "\n\n"
-        return result
+        nav = _nav(pois[0].get("name") or keywords, pois[0].get("location"))
+        return (result, nav)
     except _AmapKeyMissing:
-        return MSG_AMAP_KEY_MISSING
-    except _GoogleKeyMissing:
-        return MSG_GOOGLE_KEY_MISSING
+        return (MSG_AMAP_KEY_MISSING, None)
     except Exception as e:
         log_tool_error("fuzzy_search_place", e)
-        return "小汐被水母绊了一下……过一会儿再试试好不好？"
+        return ("小汐被水母绊了一下……过一会儿再试试好不好？", None)
 
 
-@tool
-async def get_transit_route(origin: str, destination: str, city: str = "香港") -> str:
+@tool(response_format="content_and_artifact")
+async def get_transit_route(origin: str, destination: str, city: str = "香港") -> tuple[str, dict | None]:
     """查询公交/地铁路线。冷冷可以问「从铜锣湾怎么去中环？」
 
     Args:
@@ -310,20 +255,19 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
         city: 城市，默认「香港」
     """
     try:
-        og_engine, og_loc = await _resolve_engine_for_place(origin, city)
-        dg_engine, dg_loc = await _resolve_engine_for_place(destination, city)
-        if og_engine == "google" or dg_engine == "google":
-            # 谷歌 Directions 是将来项；港澳/海外的路线规划先婉拒
-            return "这条线小汐暂时还画不了公交路线……查附近的地方倒是可以的！"
+        og_gc = await _amap_geocode(origin, city)
+        dg_gc = await _amap_geocode(destination, city)
+        og_loc = (og_gc or {}).get("location", "")
+        dg_loc = (dg_gc or {}).get("location", "")
         if not og_loc or not dg_loc:
-            return "小汐找不到这条路……地址是不是写错了呀？"
+            return ("小汐找不到这条路……地址是不是写错了呀？", None)
 
         route = await _amap_request("/v3/direction/transit/integrated", {
             "origin": og_loc, "destination": dg_loc, "city": city,
         })
         transits = (route.get("route") or {}).get("transits", [])
         if not transits:
-            return "小汐没找到公交路线……试试打车？"
+            return ("小汐没找到公交路线……试试打车？", None)
 
         t = transits[0]
         dur = _to_int(t.get("duration"))
@@ -346,18 +290,17 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
                 d = _to_int(walk_s.get("distance"))
                 if d > 100:
                     result += f"  🚶 步行 {d}m\n"
-        return result
+        # nav 指向目的地（起点未知时地图 App 从当前位置起步）
+        return (result, _nav(destination, dg_loc))
     except _AmapKeyMissing:
-        return MSG_AMAP_KEY_MISSING
-    except _GoogleKeyMissing:
-        return MSG_GOOGLE_KEY_MISSING
+        return (MSG_AMAP_KEY_MISSING, None)
     except Exception as e:
         log_tool_error("get_transit_route", e)
-        return "小汐被红绿灯搞晕了……过一会儿再试试好不好？"
+        return ("小汐被红绿灯搞晕了……过一会儿再试试好不好？", None)
 
 
-@tool
-async def get_cycling_route(origin: str, destination: str, city: str = "香港") -> str:
+@tool(response_format="content_and_artifact")
+async def get_cycling_route(origin: str, destination: str, city: str = "香港") -> tuple[str, dict | None]:
     """查询骑行路线。
 
     Args:
@@ -366,29 +309,27 @@ async def get_cycling_route(origin: str, destination: str, city: str = "香港")
         city: 城市，默认「香港」
     """
     try:
-        og_engine, og_loc = await _resolve_engine_for_place(origin, city)
-        dg_engine, dg_loc = await _resolve_engine_for_place(destination, city)
-        if og_engine == "google" or dg_engine == "google":
-            return "这条线小汐暂时还画不了骑行路线……查附近的地方倒是可以的！"
+        og_gc = await _amap_geocode(origin, city)
+        dg_gc = await _amap_geocode(destination, city)
+        og_loc = (og_gc or {}).get("location", "")
+        dg_loc = (dg_gc or {}).get("location", "")
         if not og_loc or not dg_loc:
-            return "小汐找不到这条路……"
+            return ("小汐找不到这条路……", None)
 
         data = await _amap_request("/v4/direction/bicycling", {
             "origin": og_loc, "destination": dg_loc,
         })
         paths = (data.get("data") or {}).get("paths") or []
         if not paths:
-            return "小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？"
+            return ("小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？", None)
         p = paths[0]
         d = _to_int(p.get("distance"))
         t = _to_int(p.get("duration"))
         if d <= 0:
-            return "小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？"
-        return f"🚲 {d}m，约 {t // 60} 分钟"
+            return ("小汐没找到骑行路线……这段路也许不适合骑行，或在映海的骑行地图之外，试试公交好不好？", None)
+        return (f"🚲 {d}m，约 {t // 60} 分钟", _nav(destination, dg_loc))
     except _AmapKeyMissing:
-        return MSG_AMAP_KEY_MISSING
-    except _GoogleKeyMissing:
-        return MSG_GOOGLE_KEY_MISSING
+        return (MSG_AMAP_KEY_MISSING, None)
     except Exception as e:
         log_tool_error("get_cycling_route", e)
-        return "小汐骑着骑着漂走了……过一会儿再试试好不好？"
+        return ("小汐骑着骑着漂走了……过一会儿再试试好不好？", None)

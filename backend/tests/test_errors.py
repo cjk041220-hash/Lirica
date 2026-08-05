@@ -63,8 +63,8 @@ async def test_map_tool_returns_generic_message_without_exception_details(tmp_db
 
     monkeypatch.setattr(map_tools, "_amap_request", boom)
 
-    # 内地坐标走 amap 路径（尖沙咀 114.17,22.30 双引擎后归谷歌侧，
-    # 此用例钉的是 amap 异常脱敏，故改深圳坐标保持原意图）
+    # 深圳坐标走高德 around 路径（单引擎后港澳同样走高德，
+    # 此用例钉的是 around 请求的异常脱敏，深圳坐标保持原意图）
     result = await map_tools.search_nearby.ainvoke({"keywords": "咖啡", "location": "114.05,22.54"})
     assert "SUPER_SECRET" not in result
     assert "key=" not in result
