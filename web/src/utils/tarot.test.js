@@ -31,9 +31,11 @@ describe('isValidTarot', () => {
   })
 
   it('card 缺 name / 缺 position → false（严格 shape 校验）', () => {
-    const { name, ...noName } = GOOD.cards[0]
+    const noName = { ...GOOD.cards[0] }
+    delete noName.name
     expect(isValidTarot({ ...GOOD, cards: [noName] })).toBe(false)
-    const { position, ...noPos } = GOOD.cards[0]
+    const noPos = { ...GOOD.cards[0] }
+    delete noPos.position
     expect(isValidTarot({ ...GOOD, cards: [noPos] })).toBe(false)
   })
 
