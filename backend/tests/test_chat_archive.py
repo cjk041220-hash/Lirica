@@ -189,6 +189,74 @@ async def test_record_swallows_db_errors(monkeypatch):
     await chat_archive.record_assistant_message("s-x", "任意回复")
 
 
+# ── Spec A：主动消息/早安历史尾巴的只读取面 ─────────────────
+
+
+async def test_recent_messages_cross_session_ascending(archive_db):
+    """跨会话取最近消息，按时间正序返回（最新在最后）。"""
+    await chat_archive.record_user_message("s-a", "甲会话的第一句")
+    await chat_archive.record_assistant_message("s-a", "甲会话的回复")
+    await chat_archive.record_user_message("s-b", "乙会话的第一句")
+    await chat_archive.record_assistant_message("s-b", "乙会话的回复")
+
+    messages = await chat_archive.recent_messages()
+    assert [(m["role"], m["content"]) for m in messages] == [
+        ("user", "甲会话的第一句"),
+        ("assistant", "甲会话的回复"),
+        ("user", "乙会话的第一句"),
+        ("assistant", "乙会话的回复"),
+    ]
+    assert all(m["created_at"] for m in messages)
+
+
+async def test_recent_messages_limit_newest_n(archive_db):
+    """limit 生效：只取全局最近 N 条。"""
+    for i in range(5):
+        await chat_archive.record_user_message(f"s-{i}", f"第{i}句")
+
+    messages = await chat_archive.recent_messages(limit=3)
+    assert [m["content"] for m in messages] == ["第2句", "第3句", "第4句"]
+
+
+async def test_recent_messages_empty_table(archive_db):
+    """空库返回空列表（新部署无对话历史）。"""
+    assert await chat_archive.recent_messages() == []
+
+
+async def test_recent_messages_truncates_long_content(archive_db):
+    """单条超长按 100 字截断。"""
+    await chat_archive.record_user_message("s-long", "字" * 300)
+
+    messages = await chat_archive.recent_messages()
+    assert len(messages[0]["content"]) == 100
+
+
+async def test_recent_messages_total_budget(archive_db):
+    """总量封顶：超出预算丢最旧、保最新。"""
+    for _ in range(20):
+        await chat_archive.record_user_message("s-budget", "字" * 100)
+
+    messages = await chat_archive.recent_messages(limit=20, max_chars=1500)
+    assert 0 < len(messages) < 20
+    assert messages[-1]["content"] == "字" * 100   # 最新的保留
+    assert sum(len(m["content"]) + 20 for m in messages) <= 1500
+
+
+async def test_format_recent_messages_time_marks(archive_db):
+    """格式化：[MM-DD HH:MM] 说话人：内容，最新在最下。
+
+    archive_db 假时钟每次调用 +1 分钟（2026-07-27 10:01 起）。
+    """
+    await chat_archive.record_user_message("s-fmt", "你这么说，我不高兴了。")
+    await chat_archive.record_assistant_message("s-fmt", "冷冷，等一下……")
+
+    block = chat_archive.format_recent_messages(await chat_archive.recent_messages())
+    assert block.split("\n") == [
+        "[07-27 10:01] 冷冷：你这么说，我不高兴了。",
+        "[07-27 10:02] 小汐：冷冷，等一下……",
+    ]
+
+
 def test_archive_isolation_from_llm_context_paths():
     """静态自检：能触及 LLM 上下文的路径（agent/、heartbeat、
     记忆叙事）不得 import 对话档案——档案永不回喂上下文的结构性
