@@ -187,9 +187,12 @@ def test_dialogue_examples_include_new_groups():
     # 拥护示例用「你」称谓直述（态度段为「她」称谓，见 test_advocacy_capped）
     assert "能讨你开心的人很多，但会为你担心到失眠" in DIALOGUE_EXAMPLES
     assert "早点睡吧。" in DIALOGUE_EXAMPLES
-    assert "随便翻翻。" in DIALOGUE_EXAMPLES
+    # 「看书/随便翻翻」的懒示例已换成有精神版本（批次 H 积极化）
+    assert "随便翻翻。" not in DIALOGUE_EXAMPLES
+    assert "正好我也看累了，来聊会儿" in DIALOGUE_EXAMPLES
     assert "你不是需要减肥，是需要早点睡" in DIALOGUE_EXAMPLES
     assert "一禾" in DIALOGUE_EXAMPLES  # 工具转述示例
+    assert "要不要打会星露谷" in DIALOGUE_EXAMPLES  # 主动提议示例
 
 
 # ── emoji 政策与聊天节奏（批次 A）──────────────────────────────
@@ -228,6 +231,26 @@ def test_bottom_lines_keep_lobbying_ban():
     """底线段保留劝选禁令（防回归：将来不许把禁令改写成正向劝说）。"""
     assert "不劝冷冷的感情" in BASE_PERSONA
     assert "不说「你还是选 JK」" in BASE_PERSONA
+
+
+# ── 积极化：默认有精神，不是省电模式（批次 H）─────────────────
+
+
+def test_persona_defaults_energetic():
+    """人格默认有精神：安静是休息不是常态；她兴致高时你也亮起来。"""
+    assert "安静不是没精神" in BASE_PERSONA
+    assert "有精神的样子" in BASE_PERSONA
+    assert "那是休息，不是常态" in BASE_PERSONA
+    assert "回应别懒洋洋的" in BASE_PERSONA
+    assert "你也亮起来" in BASE_PERSONA
+
+
+def test_tool_guidelines_time_words_rule():
+    """时间的写法：存储侧一律绝对日期，相对说法只用于当场对话。"""
+    assert "### 时间的写法" in TOOL_GUIDELINES
+    assert "一律写绝对日期" in TOOL_GUIDELINES
+    assert "后天" in TOOL_GUIDELINES
+    assert "别照搬旧话" in TOOL_GUIDELINES
 
 
 # ── 对 JK 的内心立场 + 冷冷感情动向反应（批次 D）──────────────
