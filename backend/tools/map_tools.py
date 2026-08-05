@@ -135,17 +135,17 @@ def _normalize_amap_poi(poi: dict) -> dict:
 
 
 def _render_pois(keywords: str, pois: list[dict]) -> str:
-    """统一 POI 渲染。"""
+    """统一 POI 渲染（口语化：无编号无加粗，转述起来才像人话）。"""
     if not pois:
         return f"小汐在附近没有找到「{keywords}」……要不要换个词试试？"
     result = f"🐋 小汐帮你找到附近的「{keywords}」啦：\n\n"
-    for i, poi in enumerate(pois[:8], 1):
-        result += f"{i}. **{poi['name']}**\n   📍 {poi['address']}"
+    for poi in pois[:8]:
+        result += f"· {poi['name']}（{poi['address']}）"
         if poi.get("distance_m"):
-            result += f"  📏 约 {poi['distance_m']}m"
+            result += f"，约 {poi['distance_m']}m"
         if poi.get("rating") is not None:
-            result += f"  ⭐ {poi['rating']}"
-        result += "\n\n"
+            result += f"，评分 {poi['rating']}"
+        result += "\n"
     return result
 
 
@@ -230,12 +230,11 @@ async def fuzzy_search_place(keywords: str, city: str = "香港") -> tuple[str, 
             return (f"小汐在香港找了找，没有找到「{keywords}」……", None)
         pois = data["pois"][:5]
         result = f"🐋 小汐找到了这些「{keywords}」：\n\n"
-        for i, poi in enumerate(pois, 1):
-            result += f"{i}. **{poi.get('name','?')}**\n"
-            result += f"   📍 {poi.get('address','?')}"
+        for poi in pois:
+            result += f"· {poi.get('name', '?')}（{poi.get('address', '?')}）"
             if poi.get("location"):
                 result += f"  🗺️ {poi['location']}"
-            result += "\n\n"
+            result += "\n"
         nav = _nav(pois[0].get("name") or keywords, pois[0].get("location"))
         return (result, nav)
     except _AmapKeyMissing:

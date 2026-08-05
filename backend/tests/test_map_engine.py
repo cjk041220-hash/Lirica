@@ -114,7 +114,9 @@ async def test_direct_ainvoke_still_returns_str(monkeypatch):
                AsyncMock(return_value={"status": "1", "pois": fake})):
         out = await search_nearby.ainvoke({"keywords": "咖啡店", "location": "114.17,22.30"})
     assert isinstance(out, str)
-    assert "Cafe Coral" in out and "📏 约 120m" in out
+    # 口语化渲染（2026-08-05）：无编号无加粗，「，约 Nm」行内距离
+    assert "Cafe Coral" in out and "约 120m" in out
+    assert "1." not in out and "**" not in out
 
 
 async def test_search_nearby_nav_first_poi(monkeypatch):
