@@ -130,12 +130,23 @@ async def integration_app(tmp_db):
     hb.get_db = mock_get_db
     chat_archive_module.get_db = mock_get_db
 
+    # Spec B：care 流水线（care_ledger / chat_messages 时间戳 / 活跃事件）
+    # 同样必须接到 tmp_db，否则对话路径会读/写穿生产库
+    import agent.care as care_module
+    import utils.events as events_module
+    original_care_get_db = care_module.get_db
+    original_events_get_db = events_module.get_db
+    care_module.get_db = mock_get_db
+    events_module.get_db = mock_get_db
+
     yield app
 
     # 恢复
     soul_module.get_db = original_soul_get_db
     hb.get_db = original_hb_get_db
     chat_archive_module.get_db = original_archive_get_db
+    care_module.get_db = original_care_get_db
+    events_module.get_db = original_events_get_db
 
 
 @pytest.fixture
@@ -403,6 +414,134 @@ async def test_chat_history_strips_time_and_gps_block(client, integration_app):
     resp = await client.get("/api/chat/history?session_id=hist-time")
     assert resp.status_code == 200
     assert resp.json()["messages"][0]["content"] == "睡不着"
+
+
+# ── Spec B：异常感知关心注入（深夜/冷却/降级）──────────────────
+
+
+async def test_chat_late_night_injects_care_hint_and_records_ledger(
+    client, integration_app, tmp_db
+):
+    """深夜请求：时间块 + 关心提示同居一块；注入即记账（台账落库）。"""
+    import datetime as dt
+    from utils.timezone import HKT
+
+    captured = _install_capturing_stream(integration_app)
+    fake_now = dt.datetime(2026, 8, 5, 2, 14, tzinfo=HKT)
+
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        resp = await client.post("/api/chat/stream", json={
+            "message": "睡不着", "session_id": "s-care-1",
+        })
+    _, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "现在是 2026-08-05 周三 02:14，深夜。" in content
+    assert "冷冷现在还没睡。" in content
+    assert content.count("[系统信息：") == 1   # 与时间行同居一块
+
+    cursor = await tmp_db.execute(
+        "SELECT last_at FROM care_ledger WHERE type = 'late_night'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None and row[0] == "2026-08-05 02:14"  # 注入即记账
+
+
+async def test_chat_late_night_second_request_cooled_down(
+    client, integration_app, tmp_db
+):
+    """冷却台账生效：72h 内第二个深夜不再注入 late_night 提示。"""
+    import datetime as dt
+    from utils.timezone import HKT
+
+    captured = _install_capturing_stream(integration_app)
+    fake_now = dt.datetime(2026, 8, 5, 2, 14, tzinfo=HKT)
+
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        await client.post("/api/chat/stream", json={
+            "message": "第一条", "session_id": "s-care-2",
+        })
+        resp = await client.post("/api/chat/stream", json={
+            "message": "第二条", "session_id": "s-care-2",
+        })
+    _, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "现在是" in content        # 时间块永远在场（层次设计）
+    assert "还没睡" not in content    # 提示被 72h 冷却滤掉
+
+
+async def test_chat_daytime_only_time_block(client, integration_app, tmp_db):
+    """白天请求：只注入时间块，无关心提示，不落台账。"""
+    import datetime as dt
+    from utils.timezone import HKT
+
+    captured = _install_capturing_stream(integration_app)
+    fake_now = dt.datetime(2026, 8, 5, 15, 0, tzinfo=HKT)
+
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        resp = await client.post("/api/chat/stream", json={
+            "message": "下午好", "session_id": "s-care-day",
+        })
+    _, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "现在是 2026-08-05 周三 15:00，下午。" in content
+    assert "还没睡" not in content
+
+    cursor = await tmp_db.execute("SELECT COUNT(*) FROM care_ledger")
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_chat_care_pipeline_failure_degrades(client, integration_app, monkeypatch):
+    """care 读库全炸 → 时间块照注入、提示省略，对话不阻断。"""
+    import datetime as dt
+    from agent import care
+    from utils.timezone import HKT
+
+    async def broken_get_db():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(care, "get_db", broken_get_db)
+
+    captured = _install_capturing_stream(integration_app)
+    fake_now = dt.datetime(2026, 8, 5, 2, 14, tzinfo=HKT)
+
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        resp = await client.post("/api/chat/stream", json={
+            "message": "在吗", "session_id": "s-care-broken",
+        })
+    _, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "现在是" in content
+    assert "还没睡" not in content
+
+
+async def test_chat_rest_path_also_injects_time_block(client, integration_app):
+    """REST /api/chat 与 SSE 共用单一入口：同样带时间块。"""
+    import datetime as dt
+    from utils.timezone import HKT
+
+    fake_now = dt.datetime(2026, 8, 5, 15, 0, tzinfo=HKT)
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        resp = await client.post("/api/chat", json={
+            "message": "你好", "session_id": "s-rest-time",
+        })
+    assert resp.status_code == 200
+
+    call = integration_app.state.agent.ainvoke.await_args
+    content = call[0][0]["messages"][0].content
+    assert "现在是 2026-08-05 周三 15:00，下午。" in content
 
 
 # ── SSE 错误事件（失败不伪装成成功回复）──────────────────────

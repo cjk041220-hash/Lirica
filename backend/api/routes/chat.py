@@ -223,7 +223,17 @@ async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -
             await location_store.update(sid, req.latitude, req.longitude)
         lat_lon = await location_store.get(sid)
 
-    return user_message + _system_info_block(now_dt, [], lat_lon)
+    # 异常感知关心（Spec B）：检测 + 冷却过滤 + 注入即记账。
+    # collect_care_lines 内部已全兜底，这里再包一层只是纵深防御——
+    # 关心提示任何失败都不得阻断对话
+    try:
+        from agent.care import collect_care_lines
+        care_lines = await collect_care_lines(now_dt)
+    except Exception:
+        log.warning("异常感知关心整体失败，跳过", exc_info=True)
+        care_lines = []
+
+    return user_message + _system_info_block(now_dt, care_lines, lat_lon)
 
 
 async def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:

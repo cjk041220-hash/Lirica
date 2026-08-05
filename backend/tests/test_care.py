@@ -89,6 +89,14 @@ def test_returned_not_fired_for_empty_history():
     assert care.detect_care_hints(_now(h=15), [], []) == []
 
 
+def test_persona_has_late_night_care_discipline():
+    """人格补一行：深夜劝睡纪律进了 BASE_PERSONA（防唠叨的模型侧另一半）。"""
+    from agent.soul import BASE_PERSONA
+
+    assert "劝睡可以" in BASE_PERSONA
+    assert "别每次都提" in BASE_PERSONA
+
+
 # ── 冷却台账（care_ledger，迁移 v19）──────────────────────────
 
 

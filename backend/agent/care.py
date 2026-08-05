@@ -113,6 +113,68 @@ def detect_care_hints(now_dt, recent_user_times, active_events, *,
     return hints
 
 
+# ── 信号取数（只取时间戳，不取内容）──────────────────────────
+
+
+def _parse_ts(s: str):
+    try:
+        return datetime.datetime.strptime(s, _TIME_FMT).replace(tzinfo=HKT)
+    except (ValueError, TypeError):
+        return None
+
+
+async def user_message_times(now_dt: datetime.datetime,
+                             days: int = _NIGHT_COUNT_WINDOW_DAYS) -> list[datetime.datetime]:
+    """近 days 天用户消息的 created_at（HKT，升序）。只取时间戳不取内容。"""
+    conn = await get_db()
+    cutoff = (now_dt - datetime.timedelta(days=days)).strftime(_TIME_FMT)
+    cursor = await conn.execute(
+        "SELECT created_at FROM chat_messages "
+        "WHERE role = 'user' AND created_at >= ? ORDER BY created_at ASC",
+        (cutoff,),
+    )
+    return [t for t in (_parse_ts(r[0]) for r in await cursor.fetchall()) if t]
+
+
+async def last_user_message_time():
+    """最近一条用户消息的时间（无窗口——消失 30 天也要能算出间隔）。"""
+    conn = await get_db()
+    cursor = await conn.execute(
+        "SELECT created_at FROM chat_messages WHERE role = 'user' "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    row = await cursor.fetchone()
+    return _parse_ts(row[0]) if row else None
+
+
+async def collect_care_lines(now_dt: datetime.datetime) -> list[str]:
+    """请求路径一行接入：取数 → 检测 → 冷却过滤 → 注入即记账 → 提示行。
+
+    任何环节失败 → 返回空列表（关心提示缺了不阻断对话；宁可漏一次
+    关心，不可让请求路径挂掉）。注意调用时机：chat 路由在归档当前
+    消息**之前**调用本函数，故「最近一条用户消息」天然是上一条。
+    """
+    try:
+        times = await user_message_times(now_dt)
+        last = await last_user_message_time()
+        from utils import events as events_mgr
+        active = await events_mgr.get_active_events()
+    except Exception:
+        log.warning("异常感知：读取信号失败，本次不注入关心提示", exc_info=True)
+        return []
+
+    hints = detect_care_hints(now_dt, times, active, last_user_time=last)
+    if not hints:
+        return []
+
+    ledger = await load_ledger()
+    passed = filter_cooled(hints, ledger, now_dt)
+    for h in passed:
+        if h["type"] in COOLDOWN_HOURS:   # returned 不记账（间隔条件天然单次）
+            await record_hint(h["type"], now_dt.strftime(_TIME_FMT))
+    return [h["text"] for h in passed]
+
+
 # ── 冷却台账（care_ledger，迁移 v19）──────────────────────────
 
 

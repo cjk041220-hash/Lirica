@@ -18,6 +18,20 @@ def _clean_location_cache():
     location_store._location_cache.clear()
 
 
+@pytest.fixture
+def route_care_to_tmp(tmp_db, monkeypatch):
+    """care 流水线（台账/消息时间/活跃事件）读库接到临时库，不碰生产库。"""
+    from agent import care
+    from utils import events as events_mgr
+
+    async def fake_get_db():
+        return tmp_db
+
+    monkeypatch.setattr(care, "get_db", fake_get_db)
+    monkeypatch.setattr(events_mgr, "get_db", fake_get_db)
+    return tmp_db
+
+
 async def test_forget_removes_cached_coords():
     """location_store.forget：删掉会话缓存并如实回报。"""
     await location_store.update("s-optout", 22.3, 114.17)
@@ -29,7 +43,7 @@ async def test_forget_removes_cached_coords():
     assert await location_store.forget("s-optout") is False
 
 
-async def test_gps_disabled_clears_cache_and_skips_injection():
+async def test_gps_disabled_clears_cache_and_skips_injection(route_care_to_tmp):
     """gps_enabled=False：缓存被清 + 不注入坐标（时间块永远在场，Spec B）。"""
     from api.routes.chat import ChatRequest, _build_input_with_location
 
@@ -45,7 +59,7 @@ async def test_gps_disabled_clears_cache_and_skips_injection():
     assert await location_store.get("s-off") is None  # 缓存已清
 
 
-async def test_gps_enabled_still_updates_and_injects():
+async def test_gps_enabled_still_updates_and_injects(route_care_to_tmp):
     """gps_enabled=True（或未表态）：行为不变，更新缓存并注入后缀。"""
     from api.routes.chat import ChatRequest, _build_input_with_location
 
@@ -61,7 +75,7 @@ async def test_gps_enabled_still_updates_and_injects():
     assert await location_store.get("s-on") == (22.3, 114.17)
 
 
-async def test_gps_legacy_client_no_signal_unchanged():
+async def test_gps_legacy_client_no_signal_unchanged(route_care_to_tmp):
     """gps_enabled 缺省（None，旧客户端）：无坐标可注入（时间块除外，Spec B）。"""
     from api.routes.chat import ChatRequest, _build_input_with_location
 
