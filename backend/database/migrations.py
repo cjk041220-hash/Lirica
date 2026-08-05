@@ -30,8 +30,9 @@ log = get_logger(__name__)
 #     周年事件。种子来自环境变量 XIAOXI_FIRST_MEET（YYYY-MM-DD）
 # v8: 对话档案 — 新增 chat_sessions + chat_messages 表。与 checkpoint
 #     （prune_checkpoints 每 2h 裁剪、30 天清线程）和 memories（LLM
-#     上下文专用）完全解耦：档案仅供历史列表与回看，永远不会被
-#     读进 LLM 上下文（只有 chat.py 写入、sessions.py 读取）
+#     上下文专用）解耦：档案供历史列表与回看；除 Spec A 例外外不被
+#     读进 LLM 上下文（chat.py 写入、sessions.py 读取；2026-08-05
+#     Spec A 起 heartbeat 经 recent_messages 注入历史尾巴，是唯一例外）
 # v9: 事件软删墓碑 — dedupe 部分唯一索引谓词从 status='active' 扩为
 #     status IN ('active','deleted')。日历面板的「删除」从此是墓碑：
 #     同 key 重建（LLM 重新提取 / 检测器再生成）会被索引挡下，不再

@@ -258,20 +258,35 @@ async def test_format_recent_messages_time_marks(archive_db):
 
 
 def test_archive_isolation_from_llm_context_paths():
-    """静态自检：能触及 LLM 上下文的路径（agent/、heartbeat、
-    记忆叙事）不得 import 对话档案——档案永不回喂上下文的结构性
-    隔离，防止谁顺手加个 import 把历史塞进提示词。"""
+    """静态自检：agent/ 与记忆叙事不得 import 对话档案。
+
+    2026-08-05（Spec A）起 heartbeat 成为唯一例外：主动消息与早安经
+    recent_messages 注入「历史尾巴」是用户批准的设计（见
+    docs/superpowers/specs/2026-08-05-proactive-history-awareness-design.md）。
+    例外只开给 heartbeat.py 一个文件，且只准走专用读函数
+    （见下方 test_heartbeat_only_uses_dedicated_archive_read_api）。
+    """
     from pathlib import Path
 
     backend_root = Path(__file__).parent.parent
-    candidates = [
-        backend_root / "heartbeat.py",
-        backend_root / "memory" / "narrative.py",
-    ]
+    candidates = [backend_root / "memory" / "narrative.py"]
     candidates += list((backend_root / "agent").glob("*.py"))
 
     for f in candidates:
         assert "chat_archive" not in f.read_text(encoding="utf-8"), (
             f"{f.relative_to(backend_root)} 引用了对话档案——"
             "档案内容会沿此路径渗入 LLM 上下文，违反设计约束"
+        )
+
+
+def test_heartbeat_only_uses_dedicated_archive_read_api():
+    """heartbeat 的档案例外只准走专用读函数：不得出现整表读写 API
+    （防止例外扩大化——历史尾巴之外的任何档案访问都是违约）。"""
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "heartbeat.py").read_text(encoding="utf-8")
+    for forbidden in ("get_messages", "list_sessions", "record_user_message",
+                      "record_assistant_message", "delete_session"):
+        assert forbidden not in text, (
+            f"heartbeat.py 出现了 {forbidden}——档案例外访问扩大化"
         )

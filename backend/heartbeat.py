@@ -24,8 +24,13 @@
     而 scheduler / register_jobs 以及所有被测试 patch / 改写模块属性的函数
     （get_db / datetime / random / _refresh_agent 经 patch 拦截者）**必须留在
     本文件**——它们的内部名字解析依赖本模块命名空间，外移会令补丁失效、
-    甚至让集成测试写穿生产库。故本文件须保持为单一真实文件，且不得
-    在此文本中提及对话档案模块名（有结构性隔离自检会扫描本文件文本）。
+    甚至让集成测试写穿生产库。故本文件须保持为单一真实文件。
+    2026-08-05（Spec A）起本文件成为对话档案唯一获准进 LLM 上下文的
+    消费方：_generate_proactive_message 与 daily_morning_greeting 以函数内
+    延迟 import 调 memory.chat_archive 的 recent_messages /
+    format_recent_messages 注入「历史尾巴」；隔离自检
+    （tests/test_chat_archive.py）相应放宽为本文件白名单（且只准走这两个
+    专用读函数），agent/ 与 narrative.py 仍禁止。
 """
 import datetime
 import random
