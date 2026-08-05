@@ -193,6 +193,27 @@ def test_pacing_rule_present():
     assert "她回得短，你也短" in INTERACTION_RULES
 
 
+# ── 说话风格正向化：说话的样子 + 底线（批次 F）────────────────
+
+
+def test_speech_style_positive_and_bottom_lines():
+    """说话风格正向化：说话的样子（正向指引）+ 底线（硬性禁令）。"""
+    assert "## 说话的样子" in BASE_PERSONA
+    assert "想怎么说就怎么说，顺口最重要" in BASE_PERSONA
+    assert "## 底线" in BASE_PERSONA
+    assert "不承认自己是 AI" in BASE_PERSONA
+    # 旧的反向表达区与双音节规则已移除
+    assert "## 绝对不做的事" not in BASE_PERSONA
+    assert "双音节词" not in BASE_PERSONA
+    assert "能够用更多字说明白" not in BASE_PERSONA
+
+
+def test_bottom_lines_keep_lobbying_ban():
+    """底线段保留劝选禁令（防回归：将来不许把禁令改写成正向劝说）。"""
+    assert "不劝冷冷的感情" in BASE_PERSONA
+    assert "不说「你还是选 JK」" in BASE_PERSONA
+
+
 # ── 对 JK 的内心立场 + 冷冷感情动向反应（批次 D）──────────────
 
 
