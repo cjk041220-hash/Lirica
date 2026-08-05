@@ -30,7 +30,7 @@ async def test_forget_removes_cached_coords():
 
 
 async def test_gps_disabled_clears_cache_and_skips_injection():
-    """gps_enabled=False：缓存被清 + 构建的消息不带坐标后缀。"""
+    """gps_enabled=False：缓存被清 + 不注入坐标（时间块永远在场，Spec B）。"""
     from api.routes.chat import ChatRequest, _build_input_with_location
 
     await location_store.update("s-off", 22.3, 114.17)
@@ -38,7 +38,10 @@ async def test_gps_disabled_clears_cache_and_skips_injection():
 
     result = await _build_input_with_location("你好", req, "s-off")
 
-    assert result["messages"][0].content == "你好"  # 无 GPS 后缀
+    content = result["messages"][0].content
+    assert content.startswith("你好")
+    assert "GPS 坐标" not in content   # 关即消失（原契约保持）
+    assert "现在是" in content          # 时间块永远在场（Spec B）
     assert await location_store.get("s-off") is None  # 缓存已清
 
 
@@ -54,16 +57,20 @@ async def test_gps_enabled_still_updates_and_injects():
     result = await _build_input_with_location("天气", req, "s-on")
 
     assert "GPS 坐标" in result["messages"][0].content
+    assert "现在是" in result["messages"][0].content  # 时间块同居（Spec B）
     assert await location_store.get("s-on") == (22.3, 114.17)
 
 
 async def test_gps_legacy_client_no_signal_unchanged():
-    """gps_enabled 缺省（None，旧客户端）：行为与修复前完全一致。"""
+    """gps_enabled 缺省（None，旧客户端）：无坐标可注入（时间块除外，Spec B）。"""
     from api.routes.chat import ChatRequest, _build_input_with_location
 
     req = ChatRequest(message="在吗", session_id="s-legacy")  # 无 gps 字段
 
     result = await _build_input_with_location("在吗", req, "s-legacy")
 
-    assert result["messages"][0].content == "在吗"  # 无坐标可注入
+    content = result["messages"][0].content
+    assert content.startswith("在吗")
+    assert "GPS 坐标" not in content
+    assert "现在是" in content          # 无坐标也有时间块（Spec B）
     assert await location_store.get("s-legacy") is None

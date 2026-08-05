@@ -94,7 +94,7 @@ def _should_hold_mood(current_mood: str | None, new_mood: str, is_morning_reset:
 # _apply_signal_offsets 取代（情绪视觉空间模型，见 heartbeat_moods 模块头）。
 from heartbeat_moods import (
     LATE_NIGHT, MORNING, DAYTIME, EVENING, TIME_PERIODS,
-    get_current_period, weekend_label,
+    get_current_period, period_label, weekend_label,
     MOOD_VECTORS, _gauss_weights, _apply_signal_offsets, _choose_mood,
 )
 

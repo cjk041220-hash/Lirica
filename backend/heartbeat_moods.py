@@ -126,6 +126,21 @@ def get_current_period(hour: int):
         return TIME_PERIODS[EVENING]
 
 
+def period_label(hour: int) -> str:
+    """时段词：深夜（0-6）/早晨（7-11）/下午（12-18）/晚上（19-23）。
+
+    小时边界与 get_current_period 的四个时段完全一致，供 api 请求路径
+    注入「现在是……深夜」时间块复用（Spec B），禁止另立划分口径。
+    """
+    if hour < 7:
+        return "深夜"
+    if hour < 12:
+        return "早晨"
+    if hour < 19:
+        return "下午"
+    return "晚上"
+
+
 def weekend_label(now_dt: datetime.datetime) -> str | None:
     """HKT 星期六/日 → 「周六」/「周日」；工作日返回 None（不注入噪音）。
 

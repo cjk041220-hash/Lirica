@@ -6,6 +6,7 @@
 每次请求实时构建 Agent，确保读取最新的生命状态和运行时配置。
 """
 import asyncio
+import datetime
 import json
 import re
 import uuid
@@ -15,8 +16,10 @@ from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, field_validator
 
+from heartbeat_moods import period_label
 from memory import chat_archive, location_store
 from utils.logger import get_logger
+from utils.timezone import HKT as _HKT
 
 log = get_logger(__name__)
 
@@ -143,21 +146,54 @@ def _ensure_sid(req: ChatRequest) -> str:
     return req.session_id or str(uuid.uuid4())
 
 
-def _location_suffix(lat: float, lon: float) -> str:
-    """GPS 上下文注入文本（REST 与 SSE 两条路径共用）。
+_WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
-    措辞同时服务两类工具：
+
+def _time_line(now_dt: datetime.datetime) -> str:
+    """当前时间行（Spec B 地基）：她总知道现在几点。
+
+    格式与设计文档逐字一致：`现在是 2026-08-05 周三 02:14，深夜。`
+    时段词走 heartbeat_moods.period_label（与心跳同一口径）。
+    """
+    return (
+        f"现在是 {now_dt.strftime('%Y-%m-%d')} "
+        f"{_WEEKDAY_LABELS[now_dt.weekday()]} {now_dt.strftime('%H:%M')}，"
+        f"{period_label(now_dt.hour)}。"
+    )
+
+
+def _gps_line(lat: float, lon: float) -> str:
+    """GPS 坐标行。措辞同时服务两类工具：
     - 天气工具要 latitude/longitude 分参，故纬度/经度各自带标签可辨；
     - 地图工具的 location 参数要求「经度,纬度」整串（map_tools.py 契约），
       故直接拼好可复制的串，消除 LLM 对「谁在前」的推理负担——
       此前注入「(lat, lon)」与工具契约相反，LLM 照抄会命中高德
       INVALID_PARAMS 后软失败成「没找到附近有什么」。
-    前缀 `\n\n[系统信息：` 与 _strip_location_suffix 的切分耦合，勿改。
     """
     return (
-        f"\n\n[系统信息：冷冷当前 GPS 坐标：纬度 {lat}，经度 {lon}"
-        f"（地图工具的 location 参数请用「经度,纬度」格式：{lon},{lat}）。]"
+        f"冷冷当前 GPS 坐标：纬度 {lat}，经度 {lon}"
+        f"（地图工具的 location 参数请用「经度,纬度」格式：{lon},{lat}）。"
     )
+
+
+def _location_suffix(lat: float, lon: float) -> str:
+    """仅 GPS 的系统信息块（兼容旧契约；请求路径现走 _system_info_block）。"""
+    return "\n\n[系统信息：" + _gps_line(lat, lon) + "]"
+
+
+def _system_info_block(now_dt: datetime.datetime, care_lines: list[str],
+                       lat_lon: tuple[float, float] | None) -> str:
+    """统一的 [系统信息：…] 块：时间行永远在场，关心提示行（Spec B
+    ④ 接入）与 GPS 行按需加入。
+
+    前缀 `\n\n[系统信息：` 与 _strip_location_suffix 的切分耦合，勿改：
+    三类行同居一块，历史回显按同一前缀整块剥离。
+    """
+    lines = [_time_line(now_dt)]
+    lines.extend(care_lines)
+    if lat_lon:
+        lines.append(_gps_line(*lat_lon))
+    return "\n\n[系统信息：" + "\n".join(lines) + "]"
 
 
 async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -> str:
@@ -168,24 +204,26 @@ async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -
     开关在生产路径上失效而测试全绿（测的是没人调的抽象层）。凡请求
     预处理需要「两端口共用」的逻辑，一律收敛到本函数，禁止内联副本。
 
-    语义：gps_enabled=False → 清本会话缓存 + 跳过注入（关即消失）；
-    带坐标 → 更新缓存；有缓存 → 追加 _location_suffix。
+    语义：gps_enabled=False → 清本会话缓存 + 不注入 GPS 行；
+    带坐标 → 更新缓存；有缓存 → 追加 GPS 行。
+    当前时间行永远注入（Spec B：她总知道现在几点）；时间行、关心
+    提示行与 GPS 行同住一个 [系统信息：…] 块，剥离契约不变。
     """
+    now_dt = datetime.datetime.now(_HKT)
+
+    lat_lon = None
     if req.gps_enabled is False:
         # 显式关闭信号：立即清掉本会话缓存坐标（体检「GPS 关不净」：
         # 此前前端开关只写 localStorage，后端缓存按 TTL 最长 8h 持续
-        # 注入旧坐标——关了还在用。清缓存 + 跳过注入，关即消失）。
+        # 注入旧坐标——关了还在用。清缓存 + 不注入 GPS 行，关即消失）。
+        # 时间行不受影响——关 GPS 关不掉时钟
         await location_store.forget(sid)
-        return user_message
+    else:
+        if req.latitude is not None and req.longitude is not None:
+            await location_store.update(sid, req.latitude, req.longitude)
+        lat_lon = await location_store.get(sid)
 
-    if req.latitude is not None and req.longitude is not None:
-        await location_store.update(sid, req.latitude, req.longitude)
-
-    cached = await location_store.get(sid)
-    if cached:
-        lat, lon = cached
-        return user_message + _location_suffix(lat, lon)
-    return user_message
+    return user_message + _system_info_block(now_dt, [], lat_lon)
 
 
 async def _build_input_with_location(user_message: str, req: ChatRequest, sid: str) -> dict:

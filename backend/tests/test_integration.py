@@ -355,6 +355,56 @@ def test_location_suffix_serves_both_tools():
     assert s.startswith("\n\n[系统信息：")
 
 
+# ── Spec B：当前时间注入（请求路径地基）──────────────────────
+
+
+async def test_chat_injects_time_block_with_period_word(client, integration_app):
+    """请求路径注入当前时间块：日期 + 星期 + 时分 + 时段词，与 GPS 同居一块。"""
+    import datetime as dt
+    from utils.timezone import HKT
+
+    captured = _install_capturing_stream(integration_app)
+    fake_now = dt.datetime(2026, 8, 5, 2, 14, tzinfo=HKT)  # 周三凌晨
+
+    with patch("api.routes.chat.datetime") as mock_dt:
+        mock_dt.datetime.now.return_value = fake_now
+        resp = await client.post("/api/chat/stream", json={
+            "message": "睡不着", "session_id": "s-time",
+            "latitude": 22.3, "longitude": 114.17,
+        })
+    _, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "现在是 2026-08-05 周三 02:14，深夜。" in content
+    assert "GPS 坐标" in content
+    # 同一个 [系统信息：…] 块：一个前缀、一个收尾括号
+    assert content.count("[系统信息：") == 1
+    assert content.rstrip().endswith("]")
+
+
+async def test_chat_history_strips_time_and_gps_block(client, integration_app):
+    """时间行 + GPS 行同居的整块，剥离后历史回显干净（补断言）。"""
+    from types import SimpleNamespace
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    combined = (
+        "\n\n[系统信息：现在是 2026-08-05 周三 02:14，深夜。\n"
+        "冷冷当前 GPS 坐标：纬度 22.3，经度 114.1"
+        "（地图工具的 location 参数请用「经度,纬度」格式：114.1,22.3）。]"
+    )
+    integration_app.state.agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={
+        "messages": [
+            HumanMessage(content="睡不着" + combined),
+            AIMessage(content="小汐陪你。"),
+        ]
+    }))
+
+    resp = await client.get("/api/chat/history?session_id=hist-time")
+    assert resp.status_code == 200
+    assert resp.json()["messages"][0]["content"] == "睡不着"
+
+
 # ── SSE 错误事件（失败不伪装成成功回复）──────────────────────
 
 async def _collect_sse(resp):
@@ -553,7 +603,8 @@ async def test_chat_stream_gps_disabled_clears_cache_and_skips_injection(
     """SSE 端点收到 gps_enabled=false：清缓存 + 图输入不带坐标后缀。
 
     预置 8h TTL 旧缓存模拟「用户刚关掉 GPS」，断言三件事：
-    ① 图输入 content == 原始消息（无 [系统信息 后缀）；
+    ① 图输入 content 以原始消息开头、无 GPS 行（Spec B 起时间块永远
+       在场——关 GPS 关不掉时钟）；
     ② 本会话缓存被清；
     ③ get_any() 也读不到——钉死早安问候天气的降级契约
        （heartbeat 用 get_any 读坐标，关 GPS 后应自动降级默认坐标文案）。
@@ -572,8 +623,9 @@ async def test_chat_stream_gps_disabled_clears_cache_and_skips_injection(
     assert done
 
     content = captured["input"]["messages"][0].content
-    assert content == "陪我说说话"
-    assert "[系统信息" not in content
+    assert content.startswith("陪我说说话")
+    assert "GPS 坐标" not in content
+    assert "现在是" in content           # 时间块永远在场（Spec B）
     assert await location_store.get("s-stream-off") is None
     assert await location_store.get_any() is None
 

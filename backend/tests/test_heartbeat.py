@@ -549,6 +549,20 @@ async def test_should_send_quiet_hours(tmp_db, monkeypatch):
 # ── 周末感知（批次 A）──────────────────────────────────────────
 
 
+def test_period_label_boundaries():
+    """时段词与 get_current_period 同一口径：0/6 深夜，7 早晨，12 下午，19 晚上。"""
+    from heartbeat import period_label
+
+    assert period_label(0) == "深夜"
+    assert period_label(6) == "深夜"
+    assert period_label(7) == "早晨"
+    assert period_label(11) == "早晨"
+    assert period_label(12) == "下午"
+    assert period_label(18) == "下午"
+    assert period_label(19) == "晚上"
+    assert period_label(23) == "晚上"
+
+
 def test_weekend_label():
     """周六/日 → 标签；工作日 → None（固定日期构造，不依赖运行当天）。"""
     import datetime as dt
