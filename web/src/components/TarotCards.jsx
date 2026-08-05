@@ -99,7 +99,7 @@ function TarotCard({ card, flipped, compact }) {
                   <span key={k} className="text-[7px] px-1 py-px rounded-full bg-blush/40 text-plum/70">{k}</span>
                 ))}
               </div>
-              <span className="mt-auto pt-0.5 text-center text-[8px] leading-snug text-plum/50 line-clamp-2">{card.fortune}</span>
+              <span className="mt-auto pt-0.5 text-center text-[10px] leading-snug text-plum/50 line-clamp-2">{card.fortune}</span>
             </>
           )}
         </div>
