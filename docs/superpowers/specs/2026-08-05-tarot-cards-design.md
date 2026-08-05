@@ -59,7 +59,7 @@ MessageBubble → tool_hint 分支 → TarotCards 组件（卡背 → 逐张翻�
 
 ### `backend/api/routes/chat.py`（约 15 行）
 
-5. `_tool_end_payload` 泛化：artifact 为 dict 且校验通过 → `payload["tarot"]`（与 `nav` 并列互不干扰）；校验失败只透传文本，不炸流
+5. `_tool_end_payload` 泛化：artifact 为 dict 且含非空 `cards` 列表 → `payload["tarot"]`（与 `nav` 并列互不干扰）；不满足只透传文本，不炸流。后端校验宽松（类型 + 非空），严格 shape 校验由前端 `isValidTarot` 兜底
 
 ### 后端测试
 
@@ -96,7 +96,7 @@ MessageBubble → tool_hint 分支 → TarotCards 组件（卡背 → 逐张翻�
 |------|------|---------|
 | 单牌 | 1 张居中（宽卡 ~140px） | 全信息 |
 | 三牌 | 3 列横排 | 全信息 |
-| 凯尔特十字 | 2 行×5 列紧凑网格 | 位置缩写 + 图标 + 牌名（含义由文本承载） |
+| 凯尔特十字 | 2 行×5 列紧凑网格 | 位置文字 + 图标 + 牌名（含义由文本承载）。位置用原文案 CSS truncate 单行截断（不手工缩写，如「外在因素与他人影响」→ 截断显示） |
 
 ### 前端文件改动
 
