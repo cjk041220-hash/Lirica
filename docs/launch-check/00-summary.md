@@ -22,12 +22,12 @@
 | 03 主动陪伴 | 03-companion.md | 22 | 22 | 0 | 0 | 0 |
 | 04 事件与工具 | 04-events-tools.md | 26 | 26 | 0 | 0 | 1 |
 | 05 视觉与界面 | 05-visual.md | 24 | 24 | 0 | 0 | 0 |
-| 06 数据与持久化 | 06-data.md | 20 | 0 | 0 | 0 | 0 |
+| 06 数据与持久化 | 06-data.md | 20 | 20 | 0 | 0 | 1 |
 | 07 安全与隐私 | 07-security.md | 26 | 0 | 0 | 0 | 0 |
 | 08 部署与运维 | 08-deploy.md | 20 | 0 | 0 | 0 | 0 |
 | 09 性能与资源 | 09-performance.md | 16 | 0 | 0 | 0 | 0 |
 | 10 用户旅程回归 | 10-user-journey.md | 14 | 0 | 0 | 0 | 0 |
-| **合计** | | **217** | **121** | 0 | 0 | 3 |
+| **合计** | | **217** | **141** | 0 | 0 | 4 |
 
 ## 问题台账
 
@@ -39,6 +39,7 @@
 | P2-4 | 04 | 日历编辑表单不能改日期：后端 update_event 支持 event_date（含归档复活），但 CalendarPanel 编辑表单日期只读展示（`{!editing && ...}`），冷冷记错日子只能删了重记 | P2 | ✅ 已修复 | 2026-08-06 用户要求修：CalendarPanel 编辑态加 `<input type="date">` 日期控件（openForm 带 event_date、handleSave payload 带 event_date、form state 加字段）；不加 min（改到过去 = 修正记错的日子，看门狗自然翻篇，与后端语义一致）；dedupe_key 不随编辑改写（后端既有语义，不会撞去重）。Playwright E2E：创建 8/7 → 编辑表单出现日期控件（初始值 2026-08-07）→ 改 8/10 → 后端 event_date=2026-08-10 → 8/7 详情空、8/10 详情出现 → 删除。E2E 教训：全局 `text=` 匹配会命中月视图格子的标题条（改日期后新日期的格子），断言须限定详情 sheet 作用域。前端 41 passed + 重新构建 dist |
 | P2-5 | 05 | E2E 记忆面板断言写死「喜欢喝椰子水」，与库中夹具真实内容「喜欢喝椰青水（椰子水）」不匹配 → body=0 脆断（记忆内容可被 LLM/用户改写，文本断言不稳）；同类隐患：latestAssistant 过滤器 `items-center` 挡不住工具提示气泡（`items-start`），工具轮次会把工具提示误当助手正文断言 | P2 | ✅ 已修复 | 2026-08-06 05 板块发现并修：① ui_test.cjs 记忆面板断言改为结构断言（面板内正文 p 计数 + 分类/状态标签 span 计数，验证「真实记忆被渲染」而非写死文本）；② latestAssistant 过滤 `items-center`→`items-`（排除工具提示）。修复后 E2E 29/29 全过 |
 | P2-6 | 05 | Edge headless 对 `<meta name="apple-mobile-web-app-capable">` 报弃用警告（缺标准版 `mobile-web-app-capable`），5.18 控制台零错误判据下 warning 不达标 | P2 | ✅ 已修复 | 2026-08-06 05 板块发现并修：index.html 加标准版 `mobile-web-app-capable`（Apple 私有版保留），重建 dist。修复后 5.18 综合操作全程 0 error / 0 warning |
+| P2-7 | 06 | `backend/data/` 根目录残留 `userdata_backup_pre_memfix_20260805.db`（8/5 v0.4.3 修记忆前的手动备份，不在 backups/ 轮换体系内），6.13「无异常残留」判据下属残留 | P2 | ⏳ 待用户点头 | 建议：移入 `backend/data/backups/`（若按命名规则带时间戳可参与轮换）或删除；不擅删。6.13 其余判据已校准：.api-token 属部署态产物（docker-entrypoint.sh 生成），dev 直跑 uvicorn 无 = 正常态 |
 
 ## 二测安排
 
@@ -56,4 +57,4 @@
 
 - 所有板块全勾 + 无未决 P0/P1 → ✅ 可上线
 - 有未决 P0/P1 → ❌ 阻塞，列于上表
-- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）完成，06 起待推进
+- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）完成，07 起待推进
