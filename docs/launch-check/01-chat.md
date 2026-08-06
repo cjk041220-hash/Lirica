@@ -1,11 +1,11 @@
 # 01 · 对话体验体检
 
 > 板块状态：25/25 ✅ 全过 · 已知问题：见问题台账 · 续跑指引：从第一个未勾选项开始，看→修→确认→勾选
-> 取证前置：export TOKEN=$(grep XIAOXI_API_TOKEN backend/config/.env | cut -d= -f2)；基准 URL http://127.0.0.1:8000
+> 取证前置：基准 URL http://127.0.0.1:8000。⚠️ 认证模式说明（08-06 校准）：本地 .env **未配** XIAOXI_API_TOKEN → dev 模式认证关闭，`grep XIAOXI_API_TOKEN` 为空是正常的；1.1/1.2 类认证判据一律用临时副本 :8001 模拟部署态（`XIAOXI_API_TOKEN=xxx .venv/Scripts/python -m uvicorn api.server:app --port 8001`，验完即 kill）。前端 token 来自 localStorage（web/src/api/client.js 的 TOKEN_KEY）。
 
 - [x] **1.1 /api/chat 基本契约**
       · 查：POST /api/chat 带 Bearer 认证返回 200 与 ChatResponse 结构
-      · 取证：先写 payload 文件再 curl（Windows curl 内联中文是已知坑）：`printf '{"message":"你好","session_id":"check-1"}' > /tmp/payload.json && curl -s -X POST http://127.0.0.1:8000/api/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @/tmp/payload.json`；对照 `backend/api/routes/chat.py` 响应模型（清单写 `backend/api/chat.py`，实际路径已改）
+      · 取证：先写 payload 文件再 curl（Windows curl 内联中文是已知坑）：`printf '{"message":"你好","session_id":"check-1"}' > /tmp/payload.json && curl -s -X POST http://127.0.0.1:8000/api/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @/tmp/payload.json`；对照 `backend/api/routes/chat.py` 响应模型（路径已校准：原清单写 `backend/api/chat.py`，路由在 routes/ 子目录）
       · 判据：200，JSON 含回复文本字段（非 LLM 错误文案）；真实 key 下回复内容合理
       · 严重度：P0
       · 结果：✅ 200（1.54s）。`{"reply":"嗯，下午好呀。我刚打了个盹儿，正醒着呢。你今天过得怎么样？","session_id":"check-1"}` 与 ChatResponse{reply, session_id} 逐字段一致；回复自然含时间感知（14:44 说"下午好"），非错误文案。
@@ -29,7 +29,7 @@
       · 结果：✅ 逐行时间戳观测：169 个 content 事件在 ~2s 内分块到达（非整包）；完整 273 字睡前故事（小鲸鱼篇）无截断，结尾「睡吧，冷冷」自然收尾；最后一条 data: [DONE]；0 工具/0 错误事件。
 - [x] **1.5 流式事件格式**
       · 查：SSE 事件名与 data 载荷结构符合前端解析预期
-      · 取证：对照 `web/src/hooks/useChat.js`（清单写 client.js，实际解析在 useChat.js feed()）与后端 `backend/api/routes/chat.py` stream 端点
+      · 取证：对照 `web/src/hooks/useChat.js`（路径已校准：流式解析在 useChat.js 的 feed()，原清单写 web/src/api/client.js 只负责 token/请求层）与后端 `backend/api/routes/chat.py` stream 端点
       · 判据：事件名、结束标志与前端消费代码一致（前后端契约核对）
       · 严重度：P0
       · 结果：✅ 5 类事件逐项对齐：`{content}` 无 type→追加文本；tool_start{name}；tool_end{name,output,nav,tarot}（nav/tarot 判据与前端 isValidNav/isValidTarot 结构一致）；error{content} 终结性；`data: [DONE]`。前端 state 事件为协议预留（后端不发，兼容不冲突）。实流（1.4）抓包与解析路径一致。
@@ -42,7 +42,7 @@
 - [x] **1.7 记忆叙事注入**
       · 查：narrative 最近 5 条注入 llm_input_messages，不进 checkpoint
       · 取证：代码核验 `backend/agent/graph.py` pre_model_hook 与 `backend/memory/narrative.py`；真实对话问一句已存记忆（如「我上次说我喜欢什么」）看是否浮现
-      · 判据：注入逻辑存在且真实对话中记忆能被唤起（记忆存在的前提下）
+      · 判据：注入逻辑存在且真实对话中记忆能被唤起（记忆存在的前提下）。⚠️ 判据校准（08-06）：名字/住址类回答可能来自 COLD_INFO 静态档案而非叙事注入——判别题须选「只存在于 memories 表」的内容（如椰青水），并配合遥测 session_tools 区分注入/recall 工具路径
       · 严重度：P1
       · 结果：✅ 代码核验：graph.py pre_model_hook（→middleware.before_model 桥接）经 llm_input_messages 注入、不进 checkpoint；NarrativeBuilder hybrid 检索（相关性 top-K×时间衰减×热度 + 最新补足，max_items=5，query 带话题加权）。实对话：全新会话 check-mem-2 问「我最近开始喜欢喝什么？」→ 答「椰青水呀。（笑了笑）你上个月才说的」——该条仅存于 memories 表（2026-08-01），不在 COLD_INFO/任何提示词中，遥测确认走 recall 工具（session_tools=[recall]）。另：check-mem-1 问住址答「南京江宁」经核实来自 COLD_INFO 静态档案（本名金潘悦/Selena/南京江宁），非叙事路径——两条链路均已独立实证。⚠️ 发现：memories 表含过期测试数据「冷冷住在香港尖沙咀/九龙附近」（2026-08-03），与真实住址并存，未来可能混淆——见台账 P2-1，待用户决定清理。
 - [x] **1.8 系统提示词拼接完整**
@@ -82,7 +82,7 @@
       · 结果：✅ 临时副本 :8001 + 假 key（env 覆盖，真实 .env 未动）。REST：500 + `{"detail":"小汐被浪花打了一下……等浪退了再试一次好不好？"}`，0.43s 快失败（401 认证错误不拖重试链），body 无堆栈；日志 `[ERROR] api.routes.chat | 聊天请求处理失败` + AuthenticationError 全栈结构化记录。SSE：`data: {"type":"error","content":"呜，小汐被浪花打了一下……"}` + [DONE]，前端按终结性错误处理。另注意 memory.extract 同场景优雅降级（水位高保护 79 条待抽取，fail-open）。
 - [x] **1.14 错误响应统一**
       · 查：RequestId 中间件与错误 JSON 结构
-      · 取证：触发一个 4xx（如无 token 401）看响应头 X-Request-Id 与 body 结构；读 `backend/api/middleware/`（清单写 utils/errors.py 与 server.py，实际在 request_id.py/auth.py）
+      · 取证：触发一个 4xx（如无 token 401）看响应头 X-Request-Id 与 body 结构；读 `backend/api/middleware/request_id.py` 与 `auth.py`（路径已校准：原清单写 utils/errors.py 与 server.py，中间件实现已迁至 middleware/ 目录）
       · 判据：有 request_id 头；错误体结构一致；无堆栈泄露
       · 严重度：P1
       · 结果：✅ 运行时：422（空消息）与 404（未知路径）响应头均带 `x-request-id`（12 位 hex），body 统一 `{"detail":…}` 结构、无堆栈。代码：RequestIdMiddleware 生成 rid 并回写头，兜底未捕获异常 → 统一 500 JSON + rid，异常文本经 sanitize 绝不回客户端（流式中途炸只记日志）；401/429 亦为 `{"detail":…}` 统一结构（429 带 Retry-After）。
@@ -125,7 +125,7 @@
 - [x] **1.21 会话隔离**
       · 查：不同 session_id 上下文互不串
       · 取证：session A 说「我叫小明」，session B 问「我叫什么」
-      · 判据：B 不知道小明（历史按 session 隔离）
+      · 判据：B 不知道小明（历史按 session 隔离）。⚠️ 判据校准（08-06）：全局记忆共享是设计语义——被 remember 收走的信息任何会话都能 recall 出来，行为层「B 不知道」不可达；正确判据 = /api/chat/history 端点隔离实证 + 遥测 session_tools 确认信息来源（历史 or 记忆）
       · 严重度：P1
       · 结果：✅ 端点实证：iso-a 发「幸运数字 777」后，iso-b 的 /api/chat/history 返回空、iso-a 返回完整 2 条——checkpoint 级历史严格按 session 隔离。行为层：iso-b 问起时她能答出 777——遥测显示 iso-a 触发了 remember（记忆入库 e0109574）、iso-b 触发了 recall（读全局记忆）——**记忆全局共享是设计语义（跨会话陪伴连续性），非会话历史泄漏**。清单原判据「B 不知道」在本架构下不可达：只要信息被全局记忆收走，任何会话都能想起；正确判据=历史隔离（实证通过）+ 信息来源可区分（遥测可审计，实证通过）。
 - [x] **1.22 会话档案读面**
