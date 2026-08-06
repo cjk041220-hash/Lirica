@@ -167,6 +167,16 @@ async def test_health_check(client):
     assert "status" in data
 
 
+async def test_health_check_head_allowed(client):
+    """HEAD /api/health 也返回 200（体检 P2-8 回归）。
+
+    FastAPI 0.139 会用 route.methods 重置抹掉 Starlette 自动追加的
+    HEAD，导致 HEAD 探针误报 404；health 端点显式声明 GET+HEAD。
+    """
+    resp = await client.head("/api/health")
+    assert resp.status_code == 200
+
+
 async def test_get_config(client):
     """GET /api/config 返回模型列表和思考强度。"""
     resp = await client.get("/api/config")

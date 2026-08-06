@@ -499,9 +499,15 @@ async def chat_stream(req: ChatRequest, request: Request):
 
 # ── 健康检查 ────────────────────────────────────────────────
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 async def health(request: Request):
-    """健康检查。未认证时只返回基本状态，已认证时返回完整诊断信息。"""
+    """健康检查。未认证时只返回基本状态，已认证时返回完整诊断信息。
+
+    显式放行 HEAD（体检 P2-8）：FastAPI 0.139 的 routing 会用
+    ``route.methods = {…}`` 重置方法集，抹掉 Starlette 给 GET 自动追加的
+    HEAD，导致 HEAD 探针（UptimeRobot 等默认姿势）打 /api/health 得 404。
+    显式声明两方法即可；HEAD 的响应体由 uvicorn h11 层强制清空，协议安全。
+    """
     checkpointer = getattr(request.app.state, "checkpointer", None)
 
     # 检查是否已认证（持有有效 Bearer Token）。

@@ -1,6 +1,6 @@
 # 07 · 安全与隐私体检（公网暴露面档）
 
-> 板块状态：25/26 · 已知问题：P2-8（HEAD 请求 quirk，挂台账）· 7.9 待用户确认 Gitee 可见性 · 续跑指引：7.9 确认后勾掉即板块完结
+> 板块状态：26/26 ✅ · 已知问题：无（P1-1 已修、P2-8 已修，见台账）· 本板块完结
 > 依据：deploy/README.md §0 上线前安全前置 + settings.py 全部开关
 > 本轮取证姿势：分类器拒绝直起 :8000 真实实例 → 全程走 :8001 净化副本（假 DEEPSEEK key + 64 hex 假 token，tar 副本 DB 天然隔离），部署态判据等效；副本已销毁、生产库行数前后逐项一致（零污染）
 
@@ -52,12 +52,12 @@
       · 判据：有轮换计划或已轮换；无测试密钥残留
       · 严重度：P0
       · 结果：✅ README §0 有四把密钥轮换清单（含 VAPID 私钥泄露=可冒充推送的后果说明）；.env 内四把均为实际使用密钥（长度探针 35/32/57/184，无测试占位残留）；私有仓库前提下无泄露事件 → 无需轮换动作。前提：7.9 可见性确认
-- [ ] **7.9 仓库敏感数据**
+- [x] **7.9 仓库敏感数据**
       · 查：git 历史含真实生理期日期（v4 种子/test_cycle_tracker）——按泄露处理决策
       · 取证：`grep -r '2026\|cycle' backend/tests/test_cycle_tracker.py backend/database/migrations.py` 评估；确认仓库可见性
       · 判据：仓库私有（可见性确认）或已按 runbook 处理；决策记录到台账
       · 严重度：P0
-      · 结果：⏳ 待用户确认。敏感面已核实：migrations.py v4 种子 4 条真实日期（2026-04-22/05-20/06-15/07-18，末条带备注「近期周期波动较大…」）+ test_cycle_tracker.py 同日期，均在 git 历史。remote=gitee.com/oscarjk/xiao-xi；匿名 curl/WebFetch 均被 Gitee 拦截（403），无法远程判定可见性 → 需仓库主人确认：私有→判据过（决策记录）；曾公开/将公开→按 runbook 处理（源码占位化 + git filter-repo + 轮换四密钥）
+      · 结果：✅ 用户 2026-08-07 确认：Gitee 仓库 oscarjk/xiao-xi **一直私有** → 判据过，无需按泄露处理。决策记录：敏感面为 migrations.py v4 种子 4 条真实日期（2026-04-22/05-20/06-15/07-18，末条带备注）+ test_cycle_tracker.py 同日期；若未来改为公开，必须先按 deploy/README.md §0 处理（源码占位化 + git filter-repo 清历史 + 轮换 DeepSeek/高德/Tavily/VAPID 四密钥）。匿名 curl/WebFetch 被 Gitee 拦截（403）无法远程判定，故以仓库主人确认为准
 - [x] **7.10 scrub 开关**
       · 查：BACKUP_SCRUB_SENSITIVE 语义正确（备份剔除 cycle/chat）
       · 取证：代码核验 + 若开启验证备份内容（交叉 6.7）
