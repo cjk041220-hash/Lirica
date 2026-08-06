@@ -108,7 +108,7 @@ cd E:/小汐sonetto && git add docs/launch-check/00-summary.md && git commit -m 
 
 - [ ] **1.1 /api/chat 基本契约**
       · 查：POST /api/chat 带 Bearer 认证返回 200 与 ChatResponse 结构
-      · 取证：`curl -s -X POST http://127.0.0.1:8000/api/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data '{"message":"你好","session_id":"check-1"}'`；对照 `backend/api/chat.py` 响应模型
+      · 取证：先写 payload 文件再 curl（Windows curl 内联中文是已知坑）：`printf '{"message":"你好","session_id":"check-1"}' > /tmp/payload.json && curl -s -X POST http://127.0.0.1:8000/api/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @/tmp/payload.json`；对照 `backend/api/chat.py` 响应模型
       · 判据：200，JSON 含回复文本字段（非 LLM 错误文案）；真实 key 下回复内容合理
       · 严重度：P0
       · 结果：
@@ -126,7 +126,7 @@ cd E:/小汐sonetto && git add docs/launch-check/00-summary.md && git commit -m 
       · 结果：
 - [ ] **1.4 流式 /api/chat/stream**
       · 查：SSE 流式响应正常逐 token 输出
-      · 取证：`curl -N -s -X POST http://127.0.0.1:8000/api/chat/stream -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data '{"message":"讲个睡前故事","session_id":"check-1"}'` 观察输出节奏
+      · 取证：`printf '{"message":"讲个睡前故事","session_id":"check-1"}' > /tmp/payload.json && curl -N -s -X POST http://127.0.0.1:8000/api/chat/stream -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @/tmp/payload.json` 观察输出节奏
       · 判据：事件按 SSE 格式逐块到达（非一次性整包）、无断流、结束时正常收尾
       · 严重度：P0
       · 结果：
@@ -222,7 +222,7 @@ cd E:/小汐sonetto && git add docs/launch-check/00-summary.md && git commit -m 
       · 结果：
 - [ ] **1.20 边界输入健壮性**
       · 查：空消息、超长消息、纯 emoji 不崩溃
-      · 取证：分别发 `{"message":""}`、2000 字长文、`{"message":"😂😂"}` 观察
+      · 取证：分别发 `{"message":""}`、2000 字长文、`{"message":"😂😂"}` 观察（含非 ASCII 的 payload 一律用文件方式 `--data @file` 传）
       · 判据：空/超长被合理处理（校验或截断），emoji 正常对话，均 200 且无 500
       · 严重度：P2
       · 结果：
