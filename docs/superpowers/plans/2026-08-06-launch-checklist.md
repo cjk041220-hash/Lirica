@@ -914,7 +914,7 @@ cd E:/小汐sonetto && git add docs/launch-check/04-events-tools.md && git commi
       · 严重度：P1
       · 结果：
 - [ ] **5.19 离线缓存**
-      · 查：sw.js 版本（CACHE_NAME v5）与 stale-while-revalidate 行为
+      · 查：sw.js 版本（CACHE_NAME v6）与 stale-while-revalidate 行为
       · 取证：读 web/public/sw.js 版本号与缓存策略；部署后改立绘验证更新（runbook 4 步）
       · 判据：版本号清晰、更新策略正确
       · 严重度：P2
