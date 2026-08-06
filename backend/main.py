@@ -32,7 +32,7 @@ def main():
         _p("")
         _p("常见原因：")
         _p("  1. config\\.env 文件中的 API Key 未配置或无效")
-        _p("  2. 依赖包缺失 — 请运行: .venv\\Scripts\\pip.exe install -r requirements.txt")
+        _p("  2. 依赖包缺失 — 请运行: .venv\\Scripts\\pip.exe install -r requirements-dev.txt")
         _p("  3. 端口 8000 被占用 — 请关闭占用程序后重试")
         _p("")
         input("按 Enter 退出……")

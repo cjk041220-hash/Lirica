@@ -22,6 +22,15 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── 运行阶段 ──────────────────────────────────────────────────
 FROM python:3.12-slim
 
+# 容器时区与业务时区一致（HKT）。业务时间全部显式走 utils/timezone.py 的
+# HKT（心跳 cron 也逐个带 timezone="Asia/Hong_Kong"），但日志时间戳与
+# APScheduler 的默认时区取系统本地——不设 TZ 时容器为 UTC，日志时间与实际
+# 相差 8 小时，排障时误导。glibc 解析 TZ 需要系统 zoneinfo，故装 tzdata。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/*
+ENV TZ=Asia/Hong_Kong
+
 WORKDIR /app/backend
 
 # 从 builder 复制已安装的 Python 包

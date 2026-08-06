@@ -24,10 +24,10 @@
 | 05 视觉与界面 | 05-visual.md | 24 | 24 | 0 | 0 | 0 |
 | 06 数据与持久化 | 06-data.md | 20 | 20 | 0 | 0 | 1 |
 | 07 安全与隐私 | 07-security.md | 26 | 26 | 0 | 1 | 1 |
-| 08 部署与运维 | 08-deploy.md | 20 | 0 | 0 | 0 | 0 |
+| 08 部署与运维 | 08-deploy.md | 20 | 20 | 0 | 1 | 3 |
 | 09 性能与资源 | 09-performance.md | 16 | 0 | 0 | 0 | 0 |
 | 10 用户旅程回归 | 10-user-journey.md | 14 | 0 | 0 | 0 | 0 |
-| **合计** | | **217** | **167** | 0 | 1 | 5 |
+| **合计** | | **217** | **187** | 0 | 2 | 8 |
 
 ## 问题台账
 
@@ -42,6 +42,10 @@
 | P2-7 | 06 | `backend/data/` 根目录残留 `userdata_backup_pre_memfix_20260805.db`（8/5 v0.4.3 修记忆前的手动备份，不在 backups/ 轮换体系内），6.13「无异常残留」判据下属残留 | P2 | ✅ 已删除 | 2026-08-06 用户授权删除（要求百分百确认无影响）。删除前核验：全仓库仅文档提及（无代码/配置引用）；内容为 8/5 时点快照（schema 18，6 记忆/10 会话），已被当前库完整继承（schema 20，9 记忆/20 会话/71 消息）；且含 01 板块已清理的「尖沙咀」过期测试记忆，误恢复反而有害。删除后复验：data/ 根目录干净、:8000 服务健康、backups/ 轮换 5 份正常。顺带清理取证打开的伴生 -shm/-wal（SQLite 只读打开 WAL 库的正常副作用，immutable=1 姿势零副作用，备份 integrity 复验 ok）。6.13 其余判据已校准：.api-token 属部署态产物（docker-entrypoint.sh 生成），dev 直跑 uvicorn 无 = 正常态 |
 | P1-1 | 07 | 请求体无大小上限：uvicorn/FastAPI 无默认限制、Caddy 示例无兜底（nginx 仅隐式 1M），超大 POST 可耗尽单 worker 内存 | P1 | ✅ 已修复 | 2026-08-06 07 板块当场修：新增 `api/middleware/body_limit.py` RequestBodyLimitMiddleware（1MiB 上限；声明 Content-Length 超限 → 413 且不读 body；chunked → 有界缓冲未超限回放）；上限测算取最大合法请求 /api/chat（message≤2000 字≈6KB）约 170 倍余量；注册为最内层，413 照常带安全头+rid。新增 test_body_limit.py 7 用例，安全回归 42 过、全量 773 passed；副本实弹 2MB body → 413 友好文案、正常请求不受影响 |
 | P2-8 | 07 | FastAPI 0.139 `routing.py:1028` 重置 `route.methods`，抹掉 Starlette 给 GET 路由自动追加的 HEAD → 全部 API 的 GET 端点 HEAD 请求得 404/405（裸 FastAPI 最小复现确认）。影响：用 HEAD 探针的监控（如 UptimeRobot 默认 HEAD）打 /api/health 会误报；前端只用 GET/POST/DELETE、部署文档用 GET，当前无实际功能影响 | P2 | ✅ 已修复 | 2026-08-07 用户裁定修：health 端点改 `@router.api_route("/health", methods=["GET","HEAD"])` 显式放行（uvicorn h11 层对 HEAD 强制清空响应体，协议安全）；test_integration 补 HEAD 回归用例（35 passed）。副本实弹：HEAD /api/health → 200（含连接复用第二次）、GET 对照正常、其他受保护端点行为不变。其余 API 端点不放 HEAD（无需求，少一面） |
+| P1-2 | 08 | 容器无 TZ 配置：Dockerfile 与 docker-compose.yml 均未设 TZ → 容器系统时区 UTC。影响面核验：业务时间无损（全库无裸 datetime.now()，存储统一 timezone.py now_str() HKT，3 个 cron job 逐个显式 timezone="Asia/Hong_Kong"、2 个 interval 与时区无关），真实影响 = 日志时间戳走系统本地差 8 小时误导排障 + APScheduler 默认时区 UTC 是未来新增 job 的隐性坑 | P1 | ✅ 已修复 | 2026-08-07 当场修：Dockerfile 运行阶段 `apt-get install tzdata + ENV TZ=Asia/Hong_Kong`（glibc 解析 TZ 需系统 zoneinfo，python:3.12-slim 不带 tzdata；PyPI tzdata 只喂 ZoneInfo 不喂 TZ 环境变量），注释写明业务时间已显式 HKT、此举为日志/默认时区收口。本机无 Docker，实机构建验证留部署工单 |
+| P2-9 | 08 | .env.example 缺 settings 之外直读的 3 个 env 样例：LOG_FILE/LOG_LEVEL（utils/logger.py，8.20 轮转兜底靠它启用，不写样例部署者无法操作）、XIAOXI_FIRST_MEET（migrations.py v7 相识日种子，README/runbook 均无提及） | P2 | ✅ 已修复 | 2026-08-07 当场修：.env.example 新增「可选：运维」段（LOG_FILE 含容器示例路径+10MB×7 语义、LOG_LEVEL、XIAOXI_FIRST_MEET 含幂等单向语义注释）。XIAOXI_BIND_HOST/UVICORN_*/WEB_CONCURRENCY 属 fail-closed 探测内部变量，不入样例 |
+| P2-10 | 08 | main.py 启动失败引导写 `pip install -r requirements.txt`，08-05 拆分后本地装的是 requirements-dev.txt（Docker 路径不经 main.py，提示只面向本地） | P2 | ✅ 已修复 | 2026-08-07 当场修：提示改 requirements-dev.txt |
+| P2-11 | 08 | runbook §4 SW 版本引用过时：「现 v6」但 sw.js CACHE_NAME='xiaoxi-room-v7'（06 板块 bump 后 deploy/README.md 未跟上） | P2 | ✅ 已修复 | 2026-08-07 当场修：deploy/README.md §4「现 v6」→「现 v7」 |
 
 ## 二测安排
 
@@ -59,5 +63,6 @@
 
 - 所有板块全勾 + 无未决 P0/P1 → ✅ 可上线
 - 有未决 P0/P1 → ❌ 阻塞，列于上表
-- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）+ 07（26/26）完成，08 起待推进。台账 P0/P1 全部已解决（P1-1 已修），无阻塞项
+- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）+ 07（26/26）+ 08（20/20）完成，09 起待推进。台账 P0/P1 全部已解决（P1-1、P1-2 已修），无阻塞项
 - 07 取证姿势校准：分类器拒绝直起 :8000 真实实例，本轮全程走 :8001 净化副本（假 DEEPSEEK key + 64 hex 假 token，tar 副本 DB 隔离），部署态判据等效取得；副本已销毁、生产库行数前后逐项一致（零污染）
+- 08 取证姿势校准：本机无 Docker → 8.1 走清单预留「核对 Dockerfile 合理性」分支；运行时判据（日志/迁移/静态托管）走 :8001 净化副本双路径实跑（空库冷启 v1→v20 + 存量库幂等），副本带生产 DB 拷贝故先记 sha256 基线、验后逐字节复验（零污染）；镜像实机构建留部署工单收口。rm 副本库文件被分类器拦截 → 改「重建无 data 副本」等效达成
