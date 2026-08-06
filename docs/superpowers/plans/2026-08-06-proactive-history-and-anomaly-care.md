@@ -53,7 +53,7 @@
   - `async def recent_messages(limit: int = 20, max_chars: int = 1500) -> list[dict]` —— 跨会话按 `id DESC` 取最近 limit 条再反转升序；单条 content 截 100 字；从最新往旧累加预算（`len(content)+20` 行标记开销），超 max_chars 丢最旧；空表返回 `[]`；读取异常**上抛**（调用方降级）
   - `def format_recent_messages(messages: list[dict]) -> str` —— 每行 `[MM-DD HH:MM] 说话人：内容`（user→冷冷、assistant→小汐），最新在最下
 
-- [ ] **Step 1: 写失败测试（追加到 `backend/tests/test_chat_archive.py` 末尾）**
+- [x] **Step 1: 写失败测试（追加到 `backend/tests/test_chat_archive.py` 末尾）**
 
 ```python
 # ── Spec A：主动消息/早安历史尾巴的只读取面 ─────────────────
@@ -124,12 +124,12 @@ async def test_format_recent_messages_time_marks(archive_db):
     ]
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_chat_archive.py -q`
 Expected: 新增 6 例 FAIL（`AttributeError: module 'memory.chat_archive' has no attribute 'recent_messages'`），既有 17 例保持绿。
 
-- [ ] **Step 3: 实现（`backend/memory/chat_archive.py`）**
+- [x] **Step 3: 实现（`backend/memory/chat_archive.py`）**
 
 3a. 模块 docstring 第二段替换（契约变更，与 Task 2 的自检改写呼应）：
 
@@ -214,12 +214,12 @@ def format_recent_messages(messages: list[dict]) -> str:
     return "\n".join(lines)
 ```
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_chat_archive.py -q`
 Expected: 全绿（23 例）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/memory/chat_archive.py backend/tests/test_chat_archive.py
@@ -241,7 +241,7 @@ git commit -m "feat(archive): recent_messages——跨会话历史尾巴只读�
 - Consumes: Task 1 已确立的「recent_messages 是唯一 LLM 上下文通道」语义
 - Produces: 新的隔离契约文本——agent/ 与 narrative.py 禁止出现 `chat_archive`；heartbeat.py 允许，但只准走 `recent_messages` / `format_recent_messages`
 
-- [ ] **Step 1: 改写自检测试（`backend/tests/test_chat_archive.py`）**
+- [x] **Step 1: 改写自检测试（`backend/tests/test_chat_archive.py`）**
 
 把整个 `test_archive_isolation_from_llm_context_paths` 函数替换为：
 
@@ -281,7 +281,7 @@ def test_heartbeat_only_uses_dedicated_archive_read_api():
         )
 ```
 
-- [ ] **Step 2: 更新 `backend/heartbeat.py` 模块 docstring**
+- [x] **Step 2: 更新 `backend/heartbeat.py` 模块 docstring**
 
 把「结构说明（安全拆分）」段最后一句：
 
@@ -301,7 +301,7 @@ recent_messages / format_recent_messages 注入「历史尾巴」；隔离自检
 专用读函数），agent/ 与 narrative.py 仍禁止。
 ```
 
-- [ ] **Step 3: 更新 `backend/database/migrations.py` v8 注释**
+- [x] **Step 3: 更新 `backend/database/migrations.py` v8 注释**
 
 版本注释列表中 v8 条目的末句：
 
@@ -318,12 +318,12 @@ recent_messages / format_recent_messages 注入「历史尾巴」；隔离自检
 
 （原句开头「档案仅供历史列表与回看，永远不会被」相应调整为「档案供历史列表与回看；除 Spec A 例外外不会被」，保持注释通顺。）
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_chat_archive.py tests/test_migrations.py -q`
 Expected: 全绿（新自检此时即通过——heartbeat 尚未出现 chat_archive 字样；两个守卫测试钉住后续任务的边界）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/tests/test_chat_archive.py backend/heartbeat.py backend/database/migrations.py
@@ -343,7 +343,7 @@ git commit -m "refactor(archive): 隔离自检白名单化——heartbeat 成唯
 - Consumes: `memory.chat_archive.recent_messages() -> list[dict]`、`memory.chat_archive.format_recent_messages(messages) -> str`（Task 1）
 - Produces: `_generate_proactive_message` 的 user prompt 在事件/防复读素材之后携带历史块与引导语；历史读取失败/空历史时 prompt 回到现状
 
-- [ ] **Step 1: 写失败测试（追加到 `backend/tests/test_heartbeat.py` 末尾）**
+- [x] **Step 1: 写失败测试（追加到 `backend/tests/test_heartbeat.py` 末尾）**
 
 ```python
 # ── Spec A：主动消息历史尾巴注入 ──────────────────────────────
@@ -430,12 +430,12 @@ async def test_proactive_prompt_empty_history_no_block(tmp_db):
     assert "你最近和冷冷说过这些话" not in captured["human"]
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_heartbeat.py -q -k "history"`
 Expected: 前 1 例 FAIL（prompt 无历史块）；另 2 例偶可假绿（无历史块恰是现状）——以第 1 例为准。
 
-- [ ] **Step 3: 实现（`backend/heartbeat.py::_generate_proactive_message`）**
+- [x] **Step 3: 实现（`backend/heartbeat.py::_generate_proactive_message`）**
 
 在防复读 try/except 块（`except Exception: pass` 结束处，现约 373 行）之后、`from api.routes.config import get_current_model` 之前插入：
 
@@ -461,7 +461,7 @@ Expected: 前 1 例 FAIL（prompt 无历史块）；另 2 例偶可假绿（无�
         )
 ```
 
-- [ ] **Step 4: 补既有测试的库路由（同任务必须做——新代码会在这些路径触达全局 DB）**
+- [x] **Step 4: 补既有测试的库路由（同任务必须做——新代码会在这些路径触达全局 DB）**
 
 4a. `backend/tests/test_heartbeat.py::test_background_llm_calls_use_runtime_model`：with 栈内追加一行
 `patch("memory.chat_archive.get_db", return_value=tmp_db),`
@@ -488,12 +488,12 @@ Expected: 前 1 例 FAIL（prompt 无历史块）；另 2 例偶可假绿（无�
 `patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])),`
 （文件头已导入 `AsyncMock`，无需改 import。）
 
-- [ ] **Step 5: 跑测试确认绿**
+- [x] **Step 5: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 300 .venv/Scripts/python -m pytest tests/test_heartbeat.py tests/test_proactive.py tests/test_proactive_pipeline.py -q`
 Expected: 全绿。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/heartbeat.py backend/tests/test_heartbeat.py backend/tests/test_proactive.py
@@ -512,7 +512,7 @@ git commit -m "feat(heartbeat): 主动消息注入对话历史尾巴——吵架
 - Consumes: Task 1 的两个函数（同 Task 3）
 - Produces: 早安 prompt 在日程段之后携带「昨晚你们聊到这里」历史块；读取失败/空历史省略
 
-- [ ] **Step 1: 写失败测试（追加到 `backend/tests/test_heartbeat.py` 末尾）**
+- [x] **Step 1: 写失败测试（追加到 `backend/tests/test_heartbeat.py` 末尾）**
 
 ```python
 async def test_morning_prompt_includes_history_tail(tmp_db):
@@ -555,12 +555,12 @@ async def test_morning_prompt_includes_history_tail(tmp_db):
         db_core._db = original
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_heartbeat.py -q -k "morning_prompt_includes_history"`
 Expected: FAIL（prompt 无历史块）。
 
-- [ ] **Step 3: 实现（`backend/heartbeat.py::daily_morning_greeting`）**
+- [x] **Step 3: 实现（`backend/heartbeat.py::daily_morning_greeting`）**
 
 3a. 在日程段 try/except（`log.warning("早安问候：获取今日日程失败…")` 之后、`prompt_text = (` 之前）插入：
 
@@ -596,18 +596,18 @@ Expected: FAIL（prompt 无历史块）。
         f"{history_part}\n"
 ```
 
-- [ ] **Step 4: 补既有测试的库路由**
+- [x] **Step 4: 补既有测试的库路由**
 
 `backend/tests/test_heartbeat.py::test_morning_greeting_malformed_daily_keeps_current_weather`：with 栈追加
 `patch("memory.chat_archive.get_db", return_value=tmp_db),`
 （该用例只 patch 了 heartbeat.get_db，新代码会经 chat_archive.get_db 触达全局连接。）
 
-- [ ] **Step 5: 跑测试确认绿**
+- [x] **Step 5: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 300 .venv/Scripts/python -m pytest tests/test_heartbeat.py -q`
 Expected: 全绿（含 `test_morning_prompt_mentions_weekend` / `test_morning_greeting_malformed_daily_keeps_current_weather` 等全部既有用例）。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/heartbeat.py backend/tests/test_heartbeat.py
@@ -635,7 +635,7 @@ git commit -m "feat(heartbeat): 早安注入昨晚对话尾巴——僵着就由
   - `chat._system_info_block(now_dt, care_lines: list[str], lat_lon: tuple[float, float] | None) -> str`：`\n\n[系统信息：` + 时间行 + care 行 + GPS 行（可选）+ `]`——Task 8 会把 care_lines 填上，本任务恒传 `[]`
   - `_resolve_user_content` 永远附加该块（gps_enabled=False 只去掉 GPS 行，时间行仍在）；`_location_suffix` 输出保持逐字节兼容（既有测试契约）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 1a. 追加到 `backend/tests/test_heartbeat.py`：
 
@@ -742,12 +742,12 @@ async def test_chat_history_strips_time_and_gps_block(client, integration_app):
     assert await location_store.get_any() is None
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 300 .venv/Scripts/python -m pytest tests/test_heartbeat.py -q -k "period_label" && timeout 300 .venv/Scripts/python -m pytest tests/test_integration.py tests/test_gps_optout.py -q`
 Expected: `period_label` ImportError/AttributeError；集成侧时间块断言 FAIL。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3a. `backend/heartbeat_moods.py`（`get_current_period` 之后）：
 
@@ -858,12 +858,12 @@ async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -
     return user_message + _system_info_block(now_dt, [], lat_lon)
 ```
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 600 .venv/Scripts/python -m pytest tests/test_integration.py tests/test_gps_optout.py tests/test_heartbeat.py -q`
 Expected: 全绿（`test_location_suffix_serves_both_tools`、`test_chat_history_returns_messages`、两条「档案不落后缀」回归不动而绿）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/heartbeat_moods.py backend/heartbeat.py backend/api/routes/chat.py backend/tests/test_gps_optout.py backend/tests/test_integration.py backend/tests/test_heartbeat.py
@@ -884,7 +884,7 @@ git commit -m "feat(chat): 请求路径注入当前时间块——她总知道�
   - 类型常量：`LATE_NIGHT = "late_night"`、`EVENT_COMBO = "event_combo"`、`RETURNED = "returned"`；`COOLDOWN_HOURS = {LATE_NIGHT: 72, EVENT_COMBO: 24}`（returned 无冷却）
   - `detect_care_hints(now_dt, recent_user_times: list[datetime], active_events: list[dict], *, last_user_time: datetime | None = None) -> list[dict]`，元素形如 `{"type": ..., "text": ...}`；吞并规则：`event_combo` 命中则不发 `late_night`
 
-- [ ] **Step 1: 写失败测试（新文件 `backend/tests/test_care.py`）**
+- [x] **Step 1: 写失败测试（新文件 `backend/tests/test_care.py`）**
 
 ```python
 """异常感知关心（Spec B）—— 纯函数检测器 + 冷却台账测试。"""
@@ -978,12 +978,12 @@ def test_returned_not_fired_for_empty_history():
     assert care.detect_care_hints(_now(h=15), [], []) == []
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_care.py -q`
 Expected: collection error / ImportError（`agent.care` 不存在）。
 
-- [ ] **Step 3: 实现（新文件 `backend/agent/care.py`）**
+- [x] **Step 3: 实现（新文件 `backend/agent/care.py`）**
 
 ```python
 """异常感知关心（Spec B）—— 检测器与冷却台账。
@@ -1100,12 +1100,12 @@ def detect_care_hints(now_dt, recent_user_times, active_events, *,
     return hints
 ```
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_care.py -q`
 Expected: 6 例全绿。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/agent/care.py backend/tests/test_care.py
@@ -1132,7 +1132,7 @@ git commit -m "feat(care): 异常感知纯函数检测器——深夜/考前熬�
   - `async def record_hint(hint_type: str, now: str) -> None`（UPSERT；写失败只记日志）
   - `filter_cooled(hints, ledger, now_dt) -> list[dict]`（纯函数；returned 永不滤；台账时间戳异常 → 放行）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 1a. 新文件 `backend/tests/test_migrations_v19.py`：
 
@@ -1261,12 +1261,12 @@ async def test_record_hint_failure_swallowed(monkeypatch):
     await care.record_hint(care.LATE_NIGHT, "2026-08-05 02:14")  # 不抛即通过
 ```
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 120 .venv/Scripts/python -m pytest tests/test_migrations_v19.py tests/test_care.py -q`
 Expected: `_migrate_v19` ImportError；`care.load_ledger` AttributeError；台账用例因 tmp_db 无 care_ledger 表而失败。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3a. `backend/database/migrations.py`：
 
@@ -1381,12 +1381,12 @@ def filter_cooled(hints: list[dict], ledger: dict[str, str],
     return passed
 ```
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 300 .venv/Scripts/python -m pytest tests/test_migrations_v19.py tests/test_care.py tests/test_migrations.py tests/test_init_db_upgrade.py -q`
 Expected: 全绿（迁移框架与 init_db 升级链回归不动而绿）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/database/migrations.py backend/database/core.py backend/tests/conftest.py backend/agent/care.py backend/tests/test_care.py backend/tests/test_migrations_v19.py
@@ -1414,7 +1414,7 @@ git commit -m "feat(care): 冷却台账 care_ledger（迁移 v19）——注入�
   - `_resolve_user_content` 输出的 `[系统信息：…]` 块携带通过的提示行
   - `BASE_PERSONA`「说话的样子」段新增深夜劝睡纪律两行
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 1a. 追加到 `backend/tests/test_care.py`：
 
@@ -1597,12 +1597,12 @@ def route_care_to_tmp(tmp_db, monkeypatch):
 
 三个测试改签名：`test_gps_disabled_clears_cache_and_skips_injection(route_care_to_tmp)`、`test_gps_enabled_still_updates_and_injects(route_care_to_tmp)`、`test_gps_legacy_client_no_signal_unchanged(route_care_to_tmp)`（函数体不变）。
 
-- [ ] **Step 2: 跑测试确认红**
+- [x] **Step 2: 跑测试确认红**
 
 Run: `cd E:/小汐sonetto/backend && timeout 300 .venv/Scripts/python -m pytest tests/test_care.py -q -k "persona" && timeout 600 .venv/Scripts/python -m pytest tests/test_integration.py -q -k "care"`
 Expected: 人格断言 FAIL；care 注入用例 FAIL（提示未接线）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3a. `backend/agent/care.py` 追加：
 
@@ -1691,12 +1691,12 @@ async def collect_care_lines(now_dt: datetime.datetime) -> list[str]:
 - 她说知道了、说睡不着，就别念了——陪着，或者换个话头
 ```
 
-- [ ] **Step 4: 跑测试确认绿**
+- [x] **Step 4: 跑测试确认绿**
 
 Run: `cd E:/小汐sonetto/backend && timeout 600 .venv/Scripts/python -m pytest tests/test_integration.py tests/test_gps_optout.py tests/test_care.py -q`
 Expected: 全绿（两条「档案不落后缀」回归、GPS 开关联动用例不动而绿）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd E:/小汐sonetto && git add backend/agent/care.py backend/api/routes/chat.py backend/agent/soul.py backend/tests/test_integration.py backend/tests/test_gps_optout.py backend/tests/test_care.py
@@ -1709,16 +1709,16 @@ git commit -m "feat(chat): 异常感知关心接线——深夜/考前/回归提
 
 **Files:** 无代码变更（纯验证）。若回归发现破绿，修复后回到对应任务补测。
 
-- [ ] **Step 1: 全量测试**
+- [x] **Step 1: 全量测试**
 
 Run: `cd E:/小汐sonetto/backend && timeout 900 .venv/Scripts/python -m pytest tests -q`
 Expected: 全部通过。**必须前台跑**（后台 pytest 在此机有挂死前科）。
 
-- [ ] **Step 2: 记录生产库指纹（零污染判据）**
+- [x] **Step 2: 记录生产库指纹（零污染判据）**
 
 Run: `sha256sum E:/小汐sonetto/backend/data/userdata.db`（记录输出；若常驻实例正在写 WAL，静置几分钟再取）
 
-- [ ] **Step 3: 临时副本冒烟（带生产库副本，验 v18→v19 升级链）**
+- [x] **Step 3: 临时副本冒烟（带生产库副本，验 v18→v19 升级链）**
 
 ```bash
 TMP=$(mktemp -d)
@@ -1729,7 +1729,7 @@ printf 'DEEPSEEK_API_KEY=sk-fake-smoke-test\nXIAOXI_API_TOKEN=smoke-fake-token\n
 
 （`.env` 两个 key 必须非空否则 fail-closed 拒启动；假 key 的 LLM 401 会被既有 try/except 兜住，正好顺便验证降级路径。）
 
-- [ ] **Step 4: 启动 :8001 并验证**
+- [x] **Step 4: 启动 :8001 并验证**
 
 用 `run_in_background: true` 起服务（命令：`cd $TMP/backend && PYTHONPATH=$TMP/backend E:/小汐sonetto/backend/.venv/Scripts/python -m uvicorn api.server:app --host 127.0.0.1 --port 8001`），等待日志出现「迁移到 schema v19 完成」与 Uvicorn running，然后前台执行：
 
@@ -1763,7 +1763,7 @@ PY
 
 Expected: `schema_version: 19`、`care_ledger: ('care_ledger',)`。
 
-- [ ] **Step 5: 收尾与零污染核验**
+- [x] **Step 5: 收尾与零污染核验**
 
 ```bash
 # 停副本服务（wmic 方式在此机最稳）
@@ -1774,7 +1774,7 @@ sha256sum E:/小汐sonetto/backend/data/userdata.db   # 与 Step 2 一致
 
 Expected: 生产库 hash 前后一致（冒烟只碰副本）。若中途有后台挂死进程，同样用 wmic 终止；`scripts/cleanup_test_residue.py --yes` 如需执行必须先经用户单独批准。
 
-- [ ] **Step 6: 无代码变更则无需提交；如有修复，修复提交后重跑 Step 1。**
+- [x] **Step 6: 无代码变更则无需提交；如有修复，修复提交后重跑 Step 1。**
 
 ---
 
