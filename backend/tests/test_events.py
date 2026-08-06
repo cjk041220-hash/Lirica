@@ -776,7 +776,7 @@ async def test_calendar_range_filters_types_and_status(events_db):
 
     events = await ev.list_events_for_calendar("2026-08-01", "2026-08-31")
     got = {e["id"] for e in events}
-    assert got == {"c1", "c6"}                       # 台风与回声是内心戏，不上日历；7 月归档不在范围
+    assert got == {"c1", "c6"}    # 默认读面（提醒路径）：台风不可见（日历面板显式 include_weather）；回声永远不上日历
     events_jul = await ev.list_events_for_calendar("2026-07-01", "2026-07-31")
     assert {e["id"] for e in events_jul} == {"c2"}   # 过往月份可翻看
 
@@ -787,6 +787,99 @@ async def test_calendar_range_intersection_multiday(events_db):
     assert {e["id"] for e in await ev.list_events_for_calendar("2026-08-01", "2026-08-31")} == {"t1"}
     assert {e["id"] for e in await ev.list_events_for_calendar("2026-09-01", "2026-09-30")} == {"t1"}
     assert await ev.list_events_for_calendar("2026-09-03", "2026-09-30") == []  # 结束后不再出现
+
+
+async def test_calendar_weather_visible_when_include_weather(events_db):
+    """天气事件默认不上日历（提醒路径保持内心戏），日历面板开 include_weather 后可见。"""
+    for i, etype in enumerate(["typhoon", "gale", "thunderstorm", "rainstorm"]):
+        await events_db.execute(
+            "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+            "status, created_at) VALUES "
+            f"('w{i}', '2026-08-{7 + i:02d} 有{etype}', '{etype}', '2026-08-{7 + i:02d}', "
+            f"'normal', 'weather', 'active', '2026-07-25 10:00')"
+        )
+    await events_db.commit()
+
+    assert await ev.list_events_for_calendar("2026-08-01", "2026-08-31") == []
+    got = {e["id"] for e in await ev.list_events_for_calendar(
+        "2026-08-01", "2026-08-31", include_weather=True)}
+    assert got == {"w0", "w1", "w2", "w3"}
+
+
+# ── 完成态（v20：「办完了，别再惦记」）────────────────────────
+
+
+async def test_set_event_completed_marks_and_unmarks(events_db):
+    """勾完成写时间戳、取消勾清空；重复勾幂等（刷新时间戳）。"""
+    await _insert_event(events_db, "d1", "期中考试", "2099-08-05")
+    updated = await ev.set_event_completed("d1", True)
+    assert updated["completed_at"] is not None
+    updated2 = await ev.set_event_completed("d1", True)
+    assert updated2["completed_at"] >= updated["completed_at"]
+    unmarked = await ev.set_event_completed("d1", False)
+    assert unmarked["completed_at"] is None
+
+
+async def test_set_event_completed_rejects_readonly(events_db):
+    """生日/相识纪念日与天气事件拒勾（预报是自动检测的信息，不是要办的事）。"""
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES "
+        "('b1', '冷冷的生日', 'birthday', '2099-06-03', 'high', 'profile', 'active', '2026-07-25 10:00'),"
+        "('w1', '2026-08-08 有雷暴', 'thunderstorm', '2026-08-08', 'normal', 'weather', 'active', '2026-07-25 10:00')"
+    )
+    await events_db.commit()
+    with pytest.raises(ValueError, match="readonly"):
+        await ev.set_event_completed("b1", True)
+    with pytest.raises(ValueError, match="readonly"):
+        await ev.set_event_completed("w1", True)
+
+
+async def test_set_event_completed_not_found(events_db):
+    assert await ev.set_event_completed("nonexistent12345", True) is None
+
+
+async def test_get_active_events_excludes_completed(events_db):
+    """完成的事件从 LLM 读侧消失（小汐不再惦记）；取消完成即回来。"""
+    await _insert_event(events_db, "e1", "期中考试", "2099-08-05")
+    await _insert_event(events_db, "e2", "体检", "2099-08-10")
+    await ev.set_event_completed("e1", True)
+    assert {e["id"] for e in await ev.get_active_events()} == {"e2"}
+    await ev.set_event_completed("e1", False)
+    assert {e["id"] for e in await ev.get_active_events()} == {"e1", "e2"}
+
+
+async def test_get_events_context_excludes_completed(events_db):
+    """完成的事件不进提示词注入（主动消息/早安不再围绕它关心）。"""
+    await _insert_event(events_db, "e1", "期中考试", "2099-08-05")
+    await _insert_event(events_db, "e2", "台北旅行", "2099-08-20")
+    await ev.set_event_completed("e2", True)
+    context = await ev.get_events_context()
+    assert context is not None
+    assert "期中考试" in context
+    assert "台北旅行" not in context
+
+
+async def test_calendar_completed_visibility(events_db):
+    """日历读面：已完成的事件默认不打扰提醒路径，include_completed=True 时可见（划线 ✓）。"""
+    await _insert_event(events_db, "d1", "期中考试", "2099-08-05")
+    await _insert_event(events_db, "d2", "台北旅行", "2099-08-20")
+    await ev.set_event_completed("d1", True)
+    assert {e["id"] for e in await ev.list_events_for_calendar("2099-08-01", "2099-08-31")} == {"d2"}
+    got = {e["id"] for e in await ev.list_events_for_calendar(
+        "2099-08-01", "2099-08-31", include_completed=True)}
+    assert got == {"d1", "d2"}
+
+
+async def test_create_event_force_revive_clears_completed(events_db):
+    """墓碑 force 复活（冷冷重加同一件事）清空完成态——重新开始惦记。"""
+    event, _ = await ev.create_event("期中考试", "exam", "2099-08-05", source="user")
+    await ev.set_event_completed(event["id"], True)
+    await ev.soft_delete_event(event["id"])
+    revived, created = await ev.create_event(
+        "期中考试", "exam", "2099-08-05", source="user", force=True)
+    assert created is True
+    assert revived["completed_at"] is None
 
 
 async def test_find_similar_active_bidirectional(events_db):

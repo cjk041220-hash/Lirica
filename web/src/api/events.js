@@ -12,10 +12,13 @@ async function parse(res) {
   return { ok: res.ok, status: res.status, data }
 }
 
-/** 月范围查询：{events: [...], count}；失败返回空列表（面板降级不白屏） */
+/** 月范围查询：{events: [...], count}；失败返回空列表（面板降级不白屏）。
+ * 日历是冷冷视角的完整视图：天气事件（台风/雷暴/大雨）与已完成事件
+ * 都可见——后两者由 include_* 参数显式开启（heartbeat 提醒路径消费的
+ * 是 manager 层默认，不受影响）。 */
 export async function fetchEvents(from, to) {
   try {
-    const res = await apiFetch(`/api/events?from=${from}&to=${to}`)
+    const res = await apiFetch(`/api/events?from=${from}&to=${to}&include_weather=1&include_completed=1`)
     if (!res.ok) return { events: [] }
     const data = await res.json()
     return { events: Array.isArray(data.events) ? data.events : [] }
@@ -40,3 +43,9 @@ export const updateEvent = (id, payload) =>
 /** 软删事件（置墓碑：挡住小汐偷偷记回来）→ {ok, status, data} */
 export const deleteEvent = (id) =>
   apiFetch(`/api/events/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(parse)
+
+/** 勾/取消勾选完成态（「办完了，别再惦记」）→ {ok, status, data} */
+export const setEventCompleted = (id, completed) =>
+  apiFetch(`/api/events/${encodeURIComponent(id)}/complete`, {
+    method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ completed }),
+  }).then(parse)

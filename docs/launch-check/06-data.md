@@ -4,27 +4,27 @@
 > 取证前置：sqlite 查询统一用 `backend/.venv/Scripts/python - backend/data/userdata.db <<'PY'` 模式
 
 - [ ] **6.1 当前 schema 版本**
-      · 查：生产库 schema_version 应为 19
+      · 查：生产库 schema_version 应为 20
       · 取证：`SELECT MAX(version) FROM schema_version`
-      · 判据：= 19
+      · 判据：= 20（v20 = events.completed_at 完成态，2026-08-06 产品决策）
       · 严重度：P0
       · 结果：
 - [ ] **6.2 迁移链完整**
-      · 查：v1→v19 全部迁移有实现且注册
-      · 取证：代码核验 migrations.py `_migrations` 字典键 2..19 连续（v1 为基线 schema，无 v1 迁移）
-      · 判据：2..19 无缺号
+      · 查：v1→v20 全部迁移有实现且注册
+      · 取证：代码核验 migrations.py `_migrations` 字典键 2..20 连续（v1 为基线 schema，无 v1 迁移）
+      · 判据：2..20 无缺号
       · 严重度：P1
       · 结果：
-- [ ] **6.3 v18→v19 实升**
-      · 查：真实库完成 v19 迁移（care_ledger 表存在）
-      · 取证：查库 `SELECT name FROM sqlite_master WHERE name='care_ledger'`
-      · 判据：表存在即可（勾选并注明日期）
+- [ ] **6.3 v19→v20 实升**
+      · 查：真实库完成 v20 迁移（events.completed_at 列存在）
+      · 取证：查库 `PRAGMA table_info(events)` 含 completed_at；迁移 SQL 本身由 test_migrations_v20 钉死（自建 v19 裸库 + 幂等重跑）
+      · 判据：列存在即可（勾选并注明日期）
       · 严重度：P0
       · 结果：
 - [ ] **6.4 全新安装升级链**
-      · 查：空库 init 到 v19 全程无错
+      · 查：空库 init 到 v20 全程无错
       · 取证：临时副本删库重启（或读 test_init_db_upgrade 语义）验证
-      · 判据：init 直达 19、无中间态错误
+      · 判据：init 直达 20、无中间态错误
       · 严重度：P1
       · 结果：
 - [ ] **6.5 备份轮换**

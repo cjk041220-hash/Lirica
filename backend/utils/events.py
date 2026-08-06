@@ -76,9 +76,13 @@ _EVENT_TYPES = ("exam", "trip", "appointment", "health", "general")
 # 它们的节奏由检测器自己掌握，人手动改只会和明年的自动生成打架
 _READONLY_EVENT_TYPES = {"birthday", "anniversary"}
 
-# 日历面板可见类型白名单：日程类 + 只读纪念日。weather（台风/大雨）
-# 与 memory_echo（内心戏）是有意不对称——它们是给小汐看的，不上日历
+# 日历面板可见类型白名单：日程类 + 只读纪念日。memory_echo（内心戏）
+# 是有意不对称——它是给小汐看的，不上日历。weather（台风/大风/雷暴/
+# 大雨）由 list_events_for_calendar 的 include_weather 参数控制：日历
+# 面板（冷冷视角）可见，提醒路径（早安/前夜，heartbeat 消费）默认
+# 不可见——天气关心走主动消息事件上下文，不双重打扰（heartbeat.py:790 钉死）
 _CALENDAR_VISIBLE_TYPES = _EVENT_TYPES + ("birthday", "anniversary")
+_WEATHER_EVENT_TYPES = ("typhoon", "gale", "thunderstorm", "rainstorm")
 
 
 def normalize_event_date(s: str) -> str:
@@ -167,11 +171,13 @@ async def create_event(
     if event["status"] == "deleted":
         if not force:
             return None, False                 # 墓碑：尊重删除，不重建
-        # force 复活：原 id 翻回 active，新内容覆盖旧内容
+        # force 复活：原 id 翻回 active，新内容覆盖旧内容。
+        # completed_at 一并清空——「重新记这件事」= 重新开始惦记
         await conn.execute(
             """UPDATE events
                SET title = ?, event_type = ?, event_date = ?, end_date = ?,
-                   severity = ?, source = ?, memo = ?, status = 'active'
+                   severity = ?, source = ?, memo = ?, status = 'active',
+                   completed_at = NULL
                WHERE id = ?""",
             (title, event_type, event_date, end_date,
              severity, source, memo, event["id"]),
@@ -189,12 +195,18 @@ async def create_event(
 
 
 async def get_active_events(limit: int = 20) -> list[dict]:
-    """返回所有活跃事件，按发生日期正序（最近的在前）。"""
+    """返回所有「还惦记着」的活跃事件，按发生日期正序（最近的在前）。
+
+    完成的事件（completed_at 非空）不在此列——勾过完成 = 办完了，
+    LLM 读侧（提示词注入 / 主动消息 / care / 小本本查询）都不再惦记它。
+    取消完成勾选即回到本读面（日历上再点一下 ✓）。
+    """
     conn = await get_db()
     today = _today().isoformat()
     cursor = await conn.execute(
         """SELECT * FROM events
            WHERE status = 'active'
+             AND completed_at IS NULL
              AND COALESCE(end_date, event_date) >= ?
            ORDER BY event_date ASC, created_at ASC
            LIMIT ?""",
@@ -258,6 +270,39 @@ async def soft_delete_event(event_id: str) -> dict | None:
     await conn.commit()
     log.info("事件软删（墓碑）：[%s] %s", event_id, event["title"])
     return event
+
+
+async def set_event_completed(event_id: str, completed: bool) -> dict | None:
+    """勾/取消勾选事件完成态（「办完了，别再惦记」）。返回更新后的行。
+
+    完成 ≠ 删除（soft_delete_event）：删除是墓碑——挡 LLM/检测器重建，
+    冷冷否决这件事；完成是「这件事办完了」——小汐不再惦记它（读侧
+    get_active_events 排除、提醒路径排除），日历上仍保留（划线 ✓），
+    冷冷反悔了再点一下即可取消。
+
+    只读型（birthday/anniversary）与天气事件（天气预报是自动检测的
+    信息，不是要办的事）拒改 → ValueError("readonly")。archived 行
+    允许勾（翻看过去月份补个勾），deleted 行不存在 → None。
+    """
+    conn = await get_db()
+    cursor = await conn.execute(
+        "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
+        (event_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    event = rows_to_dicts(cursor, [row])[0]
+    if event["event_type"] in _READONLY_EVENT_TYPES or event["source"] == "weather":
+        raise ValueError("readonly")
+    completed_at = _now() if completed else None
+    await conn.execute(
+        "UPDATE events SET completed_at = ? WHERE id = ?",
+        (completed_at, event_id),
+    )
+    await conn.commit()
+    cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+    return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
 
 async def update_event(
@@ -337,23 +382,42 @@ async def update_event(
     return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
 
-async def list_events_for_calendar(date_from: str, date_to: str) -> list[dict]:
+async def list_events_for_calendar(
+    date_from: str,
+    date_to: str,
+    *,
+    include_weather: bool = False,
+    include_completed: bool = False,
+) -> list[dict]:
     """日历面板的月范围查询：与 [date_from, date_to] 相交的日程类事件。
 
     与 get_active_events（LLM 视角，全类型活跃事件）是有意不对称的两个
     读面：日历只给用户看日程类 + 只读纪念日，且含 archived 供翻看过往
-    月份；台风/记忆回声是内心戏，照旧只在聊天里。
+    月份；记忆回声（memory_echo）是内心戏，照旧只在聊天里。
+
+    参数：
+    - include_weather=True：天气事件（台风/大风/雷暴/大雨）也上日历——
+      冷冷翻日历能看见「8/8 有雷暴」。默认 False 保持提醒路径语义：
+      早安/前夜提醒消费本函数时天气仍是内心戏（天气关心走主动消息
+      事件上下文，不双重打扰，heartbeat.py:790 钉死）。
+    - include_completed=True：已完成的事件也留在日历上（划线 ✓）。
+      默认 False：提醒/注入路径把「办完了」的事当不存在。
     """
     conn = await get_db()
-    placeholders = ",".join("?" * len(_CALENDAR_VISIBLE_TYPES))
+    types = list(_CALENDAR_VISIBLE_TYPES)
+    if include_weather:
+        types += list(_WEATHER_EVENT_TYPES)
+    placeholders = ",".join("?" * len(types))
+    completed_filter = "" if include_completed else "AND completed_at IS NULL"
     cursor = await conn.execute(
         f"""SELECT * FROM events
             WHERE status IN ('active', 'archived')
               AND event_type IN ({placeholders})
+              {completed_filter}
               AND event_date <= ?
               AND COALESCE(end_date, event_date) >= ?
             ORDER BY event_date ASC, created_at ASC""",
-        (*_CALENDAR_VISIBLE_TYPES, date_to, date_from),
+        (*types, date_to, date_from),
     )
     return rows_to_dicts(cursor, await cursor.fetchall())
 

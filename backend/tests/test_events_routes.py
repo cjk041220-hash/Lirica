@@ -219,6 +219,69 @@ async def test_update_end_date_bad_format_still_422(client, tmp_db):
     assert (await client.post(f"/api/events/{eid}", json={"end_date": "2026-8-1"})).status_code == 422
 
 
+# ── POST 完成态（v20：「办完了，别再惦记」）───────────────────
+
+
+async def test_complete_marks_and_unmarks(client, tmp_db):
+    r = await client.post("/api/events", json={"title": "期中考试", "event_date": _d(3)})
+    eid = r.json()["event"]["id"]
+    r2 = await client.post(f"/api/events/{eid}/complete", json={"completed": True})
+    assert r2.status_code == 200
+    assert r2.json()["event"]["completed_at"] is not None
+    r3 = await client.post(f"/api/events/{eid}/complete", json={"completed": False})
+    assert r3.json()["event"]["completed_at"] is None
+
+
+async def test_complete_readonly_403(client, tmp_db):
+    await _seed_birthday(tmp_db)
+    r = await client.post(f"/api/events/{_BDAY_ID}/complete", json={"completed": True})
+    assert r.status_code == 403
+
+
+async def test_complete_weather_403(client, tmp_db):
+    """天气事件是自动检测的预报，不是要办的事——拒勾。"""
+    await tmp_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES ('c100000000000001', '有雷暴', "
+        "'thunderstorm', ?, 'normal', 'weather', 'active', '2026-07-25 10:00')",
+        (_d(5),),
+    )
+    await tmp_db.commit()
+    r = await client.post("/api/events/c100000000000001/complete", json={"completed": True})
+    assert r.status_code == 403
+
+
+async def test_complete_not_found_404(client):
+    r = await client.post("/api/events/ffffffffffffffff/complete", json={"completed": True})
+    assert r.status_code == 404
+
+
+async def test_get_range_includes_weather_and_completed(client, tmp_db):
+    """日历面板默认全视图：天气事件与已完成事件都可见；关参数回到提醒读面。"""
+    r = await client.post("/api/events", json={"title": "期中考试", "event_date": _d(3)})
+    eid = r.json()["event"]["id"]
+    await client.post(f"/api/events/{eid}/complete", json={"completed": True})
+    await tmp_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at) VALUES ('c200000000000002', '有雷暴', "
+        "'thunderstorm', ?, 'normal', 'weather', 'active', '2026-07-25 10:00')",
+        (_d(5),),
+    )
+    await tmp_db.commit()
+
+    r2 = await client.get("/api/events", params={"from": _d(0), "to": _d(10)})
+    titles = {e["title"] for e in r2.json()["events"]}
+    assert {"期中考试", "有雷暴"} <= titles
+
+    # include_completed=false → 已完成的事件从提醒读面消失，天气仍在（默认可见）
+    r3 = await client.get("/api/events", params={
+        "from": _d(0), "to": _d(10), "include_completed": "false",
+    })
+    titles3 = {e["title"] for e in r3.json()["events"]}
+    assert "期中考试" not in titles3
+    assert "有雷暴" in titles3
+
+
 # ── DELETE 软删 ───────────────────────────────────────────────
 
 

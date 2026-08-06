@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconCalendar from '../assets/icons/IconCalendar'
-import { fetchEvents, createEvent, updateEvent, deleteEvent } from '../api/events'
+import { fetchEvents, createEvent, updateEvent, deleteEvent, setEventCompleted } from '../api/events'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // 「今天」按 HKT 判定（同 SessionsPanel 的时区纪律：天空/深夜/日历同一口钟）
@@ -13,6 +13,12 @@ const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
 const TYPE_LABELS = { exam: '考试', trip: '旅行', appointment: '约定', health: '身体', general: '其他' }
 // 系统派生的日子（生日/相识纪念日）：日历上可见、只读——节奏由小汐的检测器掌握
 const READONLY_TYPES = new Set(['birthday', 'anniversary'])
+// 天气事件（天气预报自动检测的）：日历可见、只读——它们是信息不是日程，
+// 不可改不可删不可勾完成。event_type 与检测器（utils/events.py）对齐
+const WEATHER_TYPES = new Set(['typhoon', 'gale', 'thunderstorm', 'rainstorm'])
+const WEATHER_ICONS = { typhoon: '🌬️', gale: '🌬️', thunderstorm: '⚡', rainstorm: '☔️' }
+// 检测器的标题带日期前缀（「2026-08-08 有雷暴」是给提示词读的），日历格子里太挤，剥掉
+const weatherLabel = ev => (ev.title || '').replace(/^\d{4}-\d{2}-\d{2}\s*/, '')
 
 const pad = n => String(n).padStart(2, '0')
 const isoOf = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
@@ -45,15 +51,19 @@ function expandByDay(events, cells) {
   return map
 }
 
-// pill 三色语义：✦琥珀=小汐记的 / 疗愈绿=冷冷记的 / 陶土玫瑰=很重要
+// pill 四色语义：✦琥珀=小汐记的 / 疗愈绿=冷冷记的 / 陶土玫瑰=很重要 / 灰雾=天气预报
 function pillClasses(ev) {
+  if (ev.source === 'weather') return 'bg-plum/10 border-plum/30 text-plum/55'
   if (ev.severity === 'high') return 'bg-raspberry/15 border-raspberry text-plum/85'
   if (ev.source === 'user') return 'bg-strawberry/15 border-strawberry text-plum/85'
   return 'bg-honey/20 border-honey text-plum/85'   // llm / profile
 }
 const isXiaoxiNoted = ev => ev.source === 'llm' || ev.source === 'profile'
 const sourceLabel = ev =>
-  ev.source === 'user' ? '冷冷记的' : READONLY_TYPES.has(ev.event_type) ? '小汐派生的日子' : '小汐从聊天里记的'
+  ev.source === 'user' ? '冷冷记的'
+  : ev.source === 'weather' ? '天气预报自动记的'
+  : READONLY_TYPES.has(ev.event_type) ? '小汐派生的日子'
+  : '小汐从聊天里记的'
 
 export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   const today = hktTodayISO()
@@ -163,6 +173,16 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
     }
   }
 
+  const handleComplete = (ev) => {
+    const next = !ev.completed_at
+    setEventCompleted(ev.id, next).then(({ ok, data }) => {
+      if (ok) {
+        showToast(next ? '办完啦，小汐不惦记了 ✓' : '好，小汐继续惦记着 ✦')
+        refresh()
+      } else showToast((data && data.detail) || '呜，没勾上……')
+    })
+  }
+
   const handleDelete = (ev) => {
     if (confirmDelId === ev.id) {
       setConfirmDelId(null)
@@ -246,12 +266,17 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                       {c.day}
                       {isToday && <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(233,180,76,0.9)]" />}
                     </span>
-                    {items.slice(0, 2).map(({ ev, first }, j) => (
-                      <div key={ev.id + j}
-                        className={`mt-0.5 min-w-0 truncate rounded-md border-l-2 px-1 text-[9px] leading-[1.6] ${pillClasses(ev)}`}>
-                        {isXiaoxiNoted(ev) && first ? '✦ ' : ''}{first ? ev.title : '·'}
-                      </div>
-                    ))}
+                    {items.slice(0, 2).map(({ ev, first }, j) => {
+                      const done = !!ev.completed_at
+                      return (
+                        <div key={ev.id + j}
+                          className={`mt-0.5 min-w-0 truncate rounded-md border-l-2 px-1 text-[9px] leading-[1.6] ${pillClasses(ev)} ${done ? 'opacity-50' : ''}`}>
+                          {ev.source === 'weather'
+                            ? `${WEATHER_ICONS[ev.event_type] || '☁️'} ${first ? weatherLabel(ev) : '·'}`
+                            : `${isXiaoxiNoted(ev) && first ? '✦ ' : ''}${done && first ? '✓ ' : ''}${first ? ev.title : '·'}`}
+                        </div>
+                      )
+                    })}
                     {items.length > 2 && <div className="text-[8px] text-plum/35 pl-0.5">＋{items.length - 2}</div>}
                   </button>
                 )
@@ -263,6 +288,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
             <span><b className="text-honey">✦</b> 小汐记的</span>
             <span><b className="text-strawberry">▎</b> 冷冷记的</span>
             <span><b className="text-raspberry">▎</b> 很重要</span>
+            <span><b className="text-plum/50">☁️</b> 天气预报</span>
           </div>
         </div>
 
@@ -289,13 +315,19 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 </div>
               ) : dayEvents.map(ev => {
                 const readonly = READONLY_TYPES.has(ev.event_type)
+                const isWeather = WEATHER_TYPES.has(ev.event_type)
+                const done = !!ev.completed_at
                 return (
                   <div key={ev.id} className="flex items-center gap-2.5 rounded-2xl bg-[#FFF0F4] border border-peach-light px-3.5 py-3 mb-2">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      ev.severity === 'high' ? 'bg-raspberry' : ev.source === 'user' ? 'bg-strawberry' : 'bg-honey shadow-[0_0_6px_rgba(233,180,76,0.5)]'}`} />
+                      ev.severity === 'high' && !isWeather ? 'bg-raspberry'
+                      : ev.source === 'weather' ? 'bg-plum/40'
+                      : ev.source === 'user' ? 'bg-strawberry' : 'bg-honey shadow-[0_0_6px_rgba(233,180,76,0.5)]'}`} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold text-plum/85 truncate">
-                        {isXiaoxiNoted(ev) ? '✦ ' : ''}{ev.title}
+                      <p className={`text-[13px] font-semibold truncate ${done ? 'text-plum/45 line-through decoration-raspberry/50' : 'text-plum/85'}`}>
+                        {isXiaoxiNoted(ev) ? '✦ ' : ''}
+                        {isWeather ? `${WEATHER_ICONS[ev.event_type] || '☁️'} ` : ''}
+                        {done ? '✓ ' : ''}{ev.title}
                       </p>
                       <p className="text-[10.5px] text-plum/40">
                         {sourceLabel(ev)}
@@ -303,13 +335,23 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                         {ev.memo ? ` · ${ev.memo}` : ''}
                       </p>
                     </div>
-                    {ev.severity === 'high' && (
+                    {ev.severity === 'high' && !isWeather && (
                       <span className="shrink-0 text-[9.5px] text-raspberry border border-raspberry/50 rounded-full px-2 py-0.5">很重要</span>
                     )}
-                    {readonly ? (
+                    {isWeather ? (
+                      <span className="shrink-0 text-[9.5px] text-plum/40 border border-plum/25 rounded-full px-2 py-0.5">天气预报</span>
+                    ) : readonly ? (
                       <span className="shrink-0 text-[9.5px] text-plum/40 border border-blush rounded-full px-2 py-0.5">只读</span>
                     ) : (
                       <>
+                        {ev.status === 'active' && (
+                          <button aria-label={done ? `取消完成${ev.title}` : `完成${ev.title}`} title={done ? '取消完成' : '标记完成'}
+                            onClick={() => handleComplete(ev)}
+                            className={`btn-press shrink-0 w-7 h-7 rounded-lg border text-[12px] ${
+                              done ? 'bg-honey/25 border-honey text-[#946312]' : 'bg-cream border-peach-light text-plum/55'}`}>
+                            {done ? '↺' : '✓'}
+                          </button>
+                        )}
                         <button aria-label={`编辑${ev.title}`} title="编辑" onClick={() => openForm(ev)}
                           className="btn-press shrink-0 w-7 h-7 rounded-lg bg-cream border border-peach-light text-plum/55 text-[12px]">✎</button>
                         <button aria-label={confirmDelId === ev.id ? '再点一次确认删除' : `删除${ev.title}`} title="删除"

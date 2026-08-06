@@ -10,8 +10,10 @@
 - 只读型（birthday/anniversary）由检测器派生：日历可见、不可改删（403）。
 
 与 LLM 读侧（get_active_events 全类型）是有意不对称的两个视角：日历
-只给用户看日程类（_CALENDAR_VISIBLE_TYPES），台风/记忆回声是内心戏，
-照旧只在聊天里碎碎念。
+是冷冷视角——日程类 + 只读纪念日 + 天气事件（自动检测的预报，只读）
++ 已完成事件（划线 ✓）；记忆回声（memory_echo）是内心戏，照旧只在
+聊天里碎碎念。天气与完成的可见性由 manager 层参数控制，提醒路径
+（heartbeat 消费 manager 默认）不受影响。
 
 写操作后显式刷新缓存的系统提示词（与心跳同入口 rebuild_agent_for_app），
 否则小汐对日程的看法要滞留到下一次心跳（最长 ~2h）。
@@ -83,8 +85,15 @@ async def _refresh_prompt(app) -> None:
 async def list_events_range(
     from_: str = Query(..., alias="from", pattern=_DATE_PATTERN),
     to: str = Query(..., alias="to", pattern=_DATE_PATTERN),
+    include_weather: bool = Query(True, description="天气事件（台风/大风/雷暴/大雨）也上日历"),
+    include_completed: bool = Query(True, description="已完成的事件也留在日历上（划线 ✓）"),
 ):
-    """月范围查询：与 [from, to] 相交的日程类事件（含 archived 供翻看过往月份）。"""
+    """月范围查询：与 [from, to] 相交的日程类事件（含 archived 供翻看过往月份）。
+
+    日历是冷冷视角的月历：天气事件（自动检测的预报）与已完成事件都
+    可见——前者标「天气预报」、后者划线打勾。默认 True 即完整视图；
+    heartbeat 消费的是 manager 层默认（False），提醒路径不受影响。
+    """
     try:
         date_from = events_mgr.normalize_event_date(from_)
         date_to = events_mgr.normalize_event_date(to)
@@ -92,7 +101,11 @@ async def list_events_range(
         raise HTTPException(422, "日期格式应为 YYYY-MM-DD，如 2026-08-01")
     if date_to < date_from:
         raise HTTPException(422, "结束日期不能早于开始日期")
-    events = await events_mgr.list_events_for_calendar(date_from, date_to)
+    events = await events_mgr.list_events_for_calendar(
+        date_from, date_to,
+        include_weather=include_weather,
+        include_completed=include_completed,
+    )
     return {"events": events, "count": len(events)}
 
 
@@ -180,6 +193,33 @@ async def update_event_route(
     if updated is None:
         raise HTTPException(404, "没有找到这件事")
     await _refresh_prompt(request.app)
+    return {"event": updated}
+
+
+class EventComplete(BaseModel):
+    completed: bool = True
+
+
+@router.post("/events/{event_id}/complete")
+async def complete_event_route(
+    request: Request,
+    body: EventComplete,
+    event_id: str = Path(pattern=_EID_PATTERN),
+):
+    """勾/取消勾选事件完成态（「办完了，别再惦记」）。
+
+    完成 ≠ 删除：完成后日历仍可见（划线 ✓），但小汐不再惦记——
+    早安/前夜提醒、提示词注入、主动消息都会把它当「办完了」；
+    冷冷反悔了再点一下取消。只读纪念日与天气事件拒绝（403）。
+    """
+    try:
+        updated = await events_mgr.set_event_completed(event_id, body.completed)
+    except ValueError:
+        raise HTTPException(403, "生日纪念日和天气提醒是小汐自动记的，不用勾完成哦")
+    if updated is None:
+        raise HTTPException(404, "没有找到这件事")
+    await _refresh_prompt(request.app)
+    log.info("日历事件完成态：[%s] completed=%s", event_id, body.completed)
     return {"event": updated}
 
 

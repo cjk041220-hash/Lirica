@@ -1,9 +1,36 @@
-// v6（体检 T1-3 第二阶段）：展示体自托管取代 Google Fonts 外链——
-// bump 版本让旧缓存在 activate 时整体退役，避免过渡期继续供旧
-// index.html 引用的外链字体
-const CACHE_NAME = 'xiaoxi-room-v6'
+// v7（体检 06 产品决策与优化）：立绘/图标/清单纳入 install 预缓存——
+// 首次打开页面时 SW 尚未接管，立绘靠 HTTP 缓存，弱网首访可能闪图；
+// 预缓存后首访立绘从 SW 缓存直接出。bump 版本让旧缓存在 activate 时
+// 整体退役（上一版 v6 是展示体自托管取代 Google Fonts 外链）
+const CACHE_NAME = 'xiaoxi-room-v7'
 
-self.addEventListener('install', () => {
+// install 预缓存清单：立绘（弱网首访闪图的主要来源）+ PWA 图标 + 清单。
+// addAll 任一失败会拖垮 install（离线首装）→ catch 兜底：预缓存尽力而为，
+// 不因资源失败导致 SW 装不上（fetch 层 cache-first/SWR 策略照常兜底）
+const PRECACHE_URLS = [
+  '/sprites/exploring.webp',
+  '/sprites/halfawake.webp',
+  '/sprites/happy.webp',
+  '/sprites/idle.webp',
+  '/sprites/listening.webp',
+  '/sprites/reading.webp',
+  '/sprites/sad.webp',
+  '/sprites/sleeping.webp',
+  '/sprites/speaking.webp',
+  '/sprites/thinking.webp',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png',
+  '/favicon.svg',
+  '/manifest.json',
+]
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(PRECACHE_URLS))
+      .catch(() => undefined)  // 预缓存尽力而为，失败不拖垮 install
+  )
   self.skipWaiting()
 })
 

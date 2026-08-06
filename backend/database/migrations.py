@@ -73,7 +73,7 @@ log = get_logger(__name__)
 #     Spec B：late_night 72h / event_combo 24h 各自独立冷却，「注入即
 #     记账」——LLM 最后没提这茬也算冷却开始；防唠叨由确定性状态保证，
 #     不押在模型自觉上（记忆写路径 31 条消息零触发的前科）。
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -346,7 +346,8 @@ EVENTS_SCHEMA_SQL = """
         memo        TEXT,
         status      TEXT NOT NULL DEFAULT 'active',
         created_at  TEXT NOT NULL,
-        dedupe_key  TEXT
+        dedupe_key  TEXT,
+        completed_at TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_status_date
@@ -856,6 +857,39 @@ async def _migrate_v19(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[19] = _migrate_v19
+
+
+# ── v20 迁移：事件完成态 ──────────────────────────────────────
+
+
+async def _migrate_v20(conn: aiosqlite.Connection) -> None:
+    """v20: events.completed_at（事件完成态——「办完了，别再惦记」）。
+
+    背景（2026-08-06 体检产品决策 2）：日历只有删除（墓碑），没有
+    「完成」。冷冷 8/5 考完试，只能等看门狗翻篇或删掉，不能打个勾。
+    完成 ≠ 删除：删除是否决（墓碑挡重建），完成是「这件事办完了，
+    小汐别再惦记」——LLM 读侧（get_active_events）与提醒（早安/前夜
+    提醒）都排除已完成，日历上仍可见（划线 + ✓）。
+
+    ALTER TABLE ADD COLUMN 幂等守卫（同 v16 模式）；不回填——老库
+    无完成历史，全部视为未完成（completed_at IS NULL）。
+    """
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(EVENTS_SCHEMA_SQL)
+    else:
+        cursor = await conn.execute("PRAGMA table_info(events)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "completed_at" not in columns:
+            await conn.execute("ALTER TABLE events ADD COLUMN completed_at TEXT")
+
+    await conn.commit()
+    log.info("迁移 v20 完成：events.completed_at 已就绪")
+
+
+_migrations[20] = _migrate_v20
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

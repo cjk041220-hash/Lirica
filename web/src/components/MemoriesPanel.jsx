@@ -26,6 +26,28 @@ export default function MemoriesPanel({ onClose }) {
 
   const reload = () => setReloadKey(k => k + 1)
 
+  // 导出备份（体检产品决策 3：GET /api/memories/export 只有 API 层，
+  // 面板加入口——冷冷的记忆主权包括「可以带走」）。含冷藏记忆与否
+  // 跟随「已归档」开关状态；浏览器下载 xiaoxi_memories.json
+  const exportMemories = () => {
+    const url = showArchived
+      ? '/api/memories/export?include_archived=1'
+      : '/api/memories/export'
+    apiFetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`export ${res.status}`)
+        return res.blob()
+      })
+      .then(blob => {
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = `xiaoxi_memories_${new Date().toISOString().slice(0, 10)}.json`
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+      })
+      .catch(e => console.warn('[MemoriesPanel] export failed:', e))
+  }
+
   const saveEdit = (id) => {
     const content = editText.trim()
     if (!content) return
@@ -118,17 +140,26 @@ export default function MemoriesPanel({ onClose }) {
             </button>
           ))}
           {tab === 'memories' && (
-            <button
-              onClick={() => setShowArchived(v => !v)}
-              aria-pressed={showArchived}
-              className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ml-auto ${
-                showArchived
-                  ? 'bg-plum/10 text-plum/60'
-                  : 'text-plum/25 hover:text-plum/45'
-              }`}
-            >
-              已归档 {showArchived ? '✓' : ''}
-            </button>
+            <>
+              <button
+                onClick={exportMemories}
+                title="把所有记忆导出成一个 JSON 文件，随时带走或备份"
+                className="btn-press text-[11px] px-3 py-1 rounded-full transition-colors text-plum/25 hover:text-plum/45"
+              >
+                ↧ 导出
+              </button>
+              <button
+                onClick={() => setShowArchived(v => !v)}
+                aria-pressed={showArchived}
+                className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ml-auto ${
+                  showArchived
+                    ? 'bg-plum/10 text-plum/60'
+                    : 'text-plum/25 hover:text-plum/45'
+                }`}
+              >
+                已归档 {showArchived ? '✓' : ''}
+              </button>
+            </>
           )}
         </div>
 
