@@ -87,6 +87,66 @@ async def _fetch_open_meteo(
     return resp.json()
 
 
+# 地名归一化后缀（去行政区划尾缀后做名称一致性比较；长后缀在前）。
+# 注意：「州」绝不能在表内——广州/杭州/苏州/郑州/兰州都是地名固有部分
+#（体检 P2-3 回归：曾把「广州市」剥成「广」）；「自治州」单独在表里即可
+#（「湘西自治州」→「湘西」）。
+_NORM_SUFFIXES = (
+    "特别行政区", "直辖市", "自治区", "自治州", "自治县", "地区", "盟",
+    "新区", "市", "区", "县", "省", "镇", "街道", "乡",
+)
+
+
+def _norm_name(s: str) -> str:
+    """地名归一化：小写 + 去行政区划后缀，用于名称一致性比较。
+
+    「洛阳市」→「洛阳」、「浦东新区」→「浦东」。空串/纯后缀返回空串
+    （调用方视为无匹配，不参与判断）。
+    """
+    if not s:
+        return ""
+    s = s.strip().lower()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _NORM_SUFFIXES:
+            if s.endswith(suffix):
+                s = s[: -len(suffix)]
+                changed = True
+                break
+    return s
+
+
+# 高德 geocode 接受的最小行政区划级别（高德返回中文枚举：市/区县/乡镇）。
+# 省/国家级太粗（「广东省」「中国」不能当城市定位）；「兴趣点」是 POI
+# 模糊匹配（P2-3 实测「不存在的城市xyz」→ 海珠区兴趣点），必须拒。
+_GEOCODE_MIN_LEVELS = ("市", "区县", "乡镇")
+
+
+def _geocode_is_trustworthy(input_city: str, geocode: dict) -> bool:
+    """高德 geocode 结果可信度校验：名称与输入城市归一化后一致才算数。
+
+    体检 P2-3：高德对不存在/错别字的地名会模糊匹配返回最接近的城市
+    （实测「不存在的城市xyz」→ 广州市），直接采信会把冷冷问的地方
+    报成另一座城市的天气。校验：候选集（province/city/district/name
+    /formatted_address）去后缀归一化后，输入被任一候选包含或反向
+    包含即可信；级别低于 city/district 或名称对不上 → 拒绝（走
+    「没有找到」降级，好过报错城市的天气）。
+    """
+    if geocode.get("level") not in _GEOCODE_MIN_LEVELS:
+        return False
+    target = _norm_name(input_city)
+    # 单字/空串输入没有区分度，不冒险（LLM 转述的城市名不会短于此）
+    if len(target) < 2:
+        return False
+    candidates = {
+        _norm_name(geocode.get(k, ""))
+        for k in ("province", "city", "district", "name", "formatted_address")
+    }
+    candidates.discard("")
+    return any(target in c or c in target for c in candidates)
+
+
 async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
     """解析城市名到坐标。优先查本地字典，回退到高德地理编码。
 
@@ -110,9 +170,15 @@ async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
                 )
                 data = resp.json()
                 geocodes = data.get("geocodes", [])
-                if geocodes:
+                # P2-3：模糊匹配兜底的结果必须过可信度校验（名称一致 +
+                # 级别够细），否则不采信——宁缺毋滥，不报错城市天气
+                if geocodes and _geocode_is_trustworthy(city, geocodes[0]):
                     location = geocodes[0].get("location", "")
-                    resolved_name = geocodes[0].get("city", city) or geocodes[0].get("district", city)
+                    resolved_name = (
+                        geocodes[0].get("city", city)
+                        or geocodes[0].get("district", city)
+                        or city
+                    )
                     if "," in location:
                         lon_s, lat_s = location.split(",")
                         return float(lat_s), float(lon_s), resolved_name

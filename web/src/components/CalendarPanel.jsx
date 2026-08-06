@@ -66,7 +66,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   const [selectedDay, setSelectedDay] = useState(null)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState(null)        // 事件对象 or null=新建
-  const [form, setForm] = useState({ title: '', event_type: 'exam', severity: 'normal', memo: '', end_date: '' })
+  const [form, setForm] = useState({ title: '', event_type: 'exam', severity: 'normal', memo: '', end_date: '', event_date: '' })
   const [similar, setSimilar] = useState(null)        // 409 相似提示
   const [confirmDelId, setConfirmDelId] = useState(null)
   const [toast, setToast] = useState(null)
@@ -130,18 +130,21 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
     setEditing(ev)
     setSimilar(null)
     setForm(ev
-      ? { title: ev.title, event_type: ev.event_type, severity: ev.severity, memo: ev.memo || '', end_date: ev.end_date || '' }
-      : { title: '', event_type: 'exam', severity: 'normal', memo: '', end_date: '' })
+      ? { title: ev.title, event_type: ev.event_type, severity: ev.severity, memo: ev.memo || '', end_date: ev.end_date || '', event_date: ev.event_date }
+      : { title: '', event_type: 'exam', severity: 'normal', memo: '', end_date: '', event_date: '' })
     setFormOpen(true)
   }
 
   const handleSave = async (confirm = false) => {
     const title = form.title.trim()
     if (!title) { showToast('先告诉小汐是什么事呀'); return }
-    const date = editing ? editing.event_date : selectedDay
+    // 编辑可改日期（后端 update_event 支持，dedupe_key 不随编辑改写；
+    // 改到过去 = 修正记错的日子，看门狗会自然翻篇）。新建日期来自选日。
+    const date = form.event_date || (editing ? editing.event_date : selectedDay)
     const payload = {
       title, event_type: form.event_type, severity: form.severity,
       memo: form.memo.trim(), end_date: form.end_date || '',
+      event_date: date,
     }
     if (editing) {
       const { ok, data } = await updateEvent(editing.id, payload)
@@ -352,6 +355,14 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 <>
                   <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">日期</label>
                   <div className="rounded-xl bg-peach-light/25 border border-peach-light px-3.5 py-2.5 text-[13px] text-plum/70">{selectedDay}</div>
+                </>
+              )}
+              {editing && (
+                <>
+                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">日期</label>
+                  <input type="date" value={form.event_date}
+                    onChange={e => setForm(f => ({ ...f, event_date: e.target.value }))}
+                    className="w-full rounded-xl bg-[#FFF6F8] border border-blush px-3.5 py-2.5 text-[16px] text-plum/85 outline-none focus:border-strawberry" />
                 </>
               )}
 
