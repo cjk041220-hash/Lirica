@@ -23,11 +23,11 @@
 | 04 事件与工具 | 04-events-tools.md | 26 | 26 | 0 | 0 | 1 |
 | 05 视觉与界面 | 05-visual.md | 24 | 24 | 0 | 0 | 0 |
 | 06 数据与持久化 | 06-data.md | 20 | 20 | 0 | 0 | 1 |
-| 07 安全与隐私 | 07-security.md | 26 | 0 | 0 | 0 | 0 |
+| 07 安全与隐私 | 07-security.md | 26 | 25 | 0 | 0 | 1 |
 | 08 部署与运维 | 08-deploy.md | 20 | 0 | 0 | 0 | 0 |
 | 09 性能与资源 | 09-performance.md | 16 | 0 | 0 | 0 | 0 |
 | 10 用户旅程回归 | 10-user-journey.md | 14 | 0 | 0 | 0 | 0 |
-| **合计** | | **217** | **141** | 0 | 0 | 4 |
+| **合计** | | **217** | **166** | 0 | 0 | 5 |
 
 ## 问题台账
 
@@ -40,6 +40,8 @@
 | P2-5 | 05 | E2E 记忆面板断言写死「喜欢喝椰子水」，与库中夹具真实内容「喜欢喝椰青水（椰子水）」不匹配 → body=0 脆断（记忆内容可被 LLM/用户改写，文本断言不稳）；同类隐患：latestAssistant 过滤器 `items-center` 挡不住工具提示气泡（`items-start`），工具轮次会把工具提示误当助手正文断言 | P2 | ✅ 已修复 | 2026-08-06 05 板块发现并修：① ui_test.cjs 记忆面板断言改为结构断言（面板内正文 p 计数 + 分类/状态标签 span 计数，验证「真实记忆被渲染」而非写死文本）；② latestAssistant 过滤 `items-center`→`items-`（排除工具提示）。修复后 E2E 29/29 全过 |
 | P2-6 | 05 | Edge headless 对 `<meta name="apple-mobile-web-app-capable">` 报弃用警告（缺标准版 `mobile-web-app-capable`），5.18 控制台零错误判据下 warning 不达标 | P2 | ✅ 已修复 | 2026-08-06 05 板块发现并修：index.html 加标准版 `mobile-web-app-capable`（Apple 私有版保留），重建 dist。修复后 5.18 综合操作全程 0 error / 0 warning |
 | P2-7 | 06 | `backend/data/` 根目录残留 `userdata_backup_pre_memfix_20260805.db`（8/5 v0.4.3 修记忆前的手动备份，不在 backups/ 轮换体系内），6.13「无异常残留」判据下属残留 | P2 | ✅ 已删除 | 2026-08-06 用户授权删除（要求百分百确认无影响）。删除前核验：全仓库仅文档提及（无代码/配置引用）；内容为 8/5 时点快照（schema 18，6 记忆/10 会话），已被当前库完整继承（schema 20，9 记忆/20 会话/71 消息）；且含 01 板块已清理的「尖沙咀」过期测试记忆，误恢复反而有害。删除后复验：data/ 根目录干净、:8000 服务健康、backups/ 轮换 5 份正常。顺带清理取证打开的伴生 -shm/-wal（SQLite 只读打开 WAL 库的正常副作用，immutable=1 姿势零副作用，备份 integrity 复验 ok）。6.13 其余判据已校准：.api-token 属部署态产物（docker-entrypoint.sh 生成），dev 直跑 uvicorn 无 = 正常态 |
+| P1-1 | 07 | 请求体无大小上限：uvicorn/FastAPI 无默认限制、Caddy 示例无兜底（nginx 仅隐式 1M），超大 POST 可耗尽单 worker 内存 | P1 | ✅ 已修复 | 2026-08-06 07 板块当场修：新增 `api/middleware/body_limit.py` RequestBodyLimitMiddleware（1MiB 上限；声明 Content-Length 超限 → 413 且不读 body；chunked → 有界缓冲未超限回放）；上限测算取最大合法请求 /api/chat（message≤2000 字≈6KB）约 170 倍余量；注册为最内层，413 照常带安全头+rid。新增 test_body_limit.py 7 用例，安全回归 42 过、全量 773 passed；副本实弹 2MB body → 413 友好文案、正常请求不受影响 |
+| P2-8 | 07 | FastAPI 0.139 `routing.py:1028` 重置 `route.methods`，抹掉 Starlette 给 GET 路由自动追加的 HEAD → 全部 API 的 GET 端点 HEAD 请求得 404/405（裸 FastAPI 最小复现确认）。影响：用 HEAD 探针的监控（如 UptimeRobot 默认 HEAD）打 /api/health 会误报；前端只用 GET/POST/DELETE、部署文档用 GET，当前无实际功能影响 | P2 | 待裁定 | 2026-08-06 07 板块深挖发现。修复方向（小改）：health 端点改 `@router.api_route("/health", methods=["GET","HEAD"])` 显式放行 HEAD；或约定监控一律 GET 探针。docker-compose healthcheck 已是 GET（不受影响） |
 
 ## 二测安排
 
@@ -57,4 +59,5 @@
 
 - 所有板块全勾 + 无未决 P0/P1 → ✅ 可上线
 - 有未决 P0/P1 → ❌ 阻塞，列于上表
-- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）完成，07 起待推进
+- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）+ 07（25/26，仅剩 7.9 待用户确认 Gitee 仓库可见性）完成，08 起待推进
+- 07 取证姿势校准：分类器拒绝直起 :8000 真实实例，本轮全程走 :8001 净化副本（假 DEEPSEEK key + 64 hex 假 token，tar 副本 DB 隔离），部署态判据等效取得；副本已销毁、生产库行数前后逐项一致（零污染）

@@ -22,6 +22,7 @@ from api.routes.status import router as status_router
 from api.middleware import (
     AuthAndRateLimitMiddleware,
     RejectWebSocketMiddleware,
+    RequestBodyLimitMiddleware,
     SecurityHeadersMiddleware,
 )
 from api.middleware.request_id import RequestIdMiddleware
@@ -240,6 +241,10 @@ def create_app() -> FastAPI:
     # WebSocket 拒绝 → 路由，这样认证/限流短路返回的 401/429
     # 也会带上 CORS 头，跨域前端才能读到错误体并走 401 引导流程。
     # 因此 CORS 放在最后注册。
+    # 请求体上限最先注册 = 最内层：413 响应向外穿过 SecurityHeaders /
+    # RequestId 时照常拿到安全头与 rid；限流计数在 Auth 层先行，超大
+    # 请求一样占桶（防无认证洪泛刷大请求体）。
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(RejectWebSocketMiddleware)
     app.add_middleware(
         AuthAndRateLimitMiddleware,
