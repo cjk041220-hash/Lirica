@@ -11,6 +11,9 @@
     <!-- 展示体「站酷快乐体」已自托管（fontsource 分片包，main.jsx 引入）：
          不再外链 Google Fonts——隐私陪伴应用不该每次加载送出访客 IP，
          且同源字体可进 SW 缓存，离线时展示体照常工作 -->
+    <!-- 标准版 + Apple 私有版成对声明：Edge headless 对仅 apple- 版本报
+         "is deprecated" 弃用警告，标准版（mobile-web-app-capable）消除之 -->
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <!-- black-translucent：standalone PWA 下状态栏透明、房间天空透到刘海后，
          页面内容上移——顶栏胶囊已叠 env(safe-area-inset-top) 避让（App.jsx）。

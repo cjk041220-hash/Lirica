@@ -24,7 +24,7 @@ const latestAssistant = () => {
   const ws = [...document.querySelectorAll('div')].filter(d => {
     const c = typeof d.className === 'string' ? d.className : '';
     return c.includes('animate-fade-in-up') && c.includes('flex') &&
-      !c.includes('justify-end') && !c.includes('items-center');
+      !c.includes('justify-end') && !c.includes('items-');
   });
   const ts = ws.map(w => (w.querySelector('p') ? w.querySelector('p').textContent : '').trim()).filter(Boolean);
   return ts[ts.length - 1] || '';
@@ -150,9 +150,13 @@ const apiFails = [];
     await page.locator('button[aria-label="小汐的记忆"]').click();
     await page.waitForSelector('text=小汐的记忆', { timeout: 5000 });
     await page.waitForTimeout(500);
-    const mBody = await page.locator('text=喜欢喝椰子水').count();
-    const mCat = await page.locator('text=冷冷喜欢的').count();
-    (mBody && mCat) ? ok('记忆面板渲染真实记忆（正文 + 分类标签 + 日期）') : bad('记忆面板', `body=${mBody} cat=${mCat}`);
+    // 断言「真实记忆被渲染」而非写死内容文本：曾写死「喜欢喝椰子水」，与库中夹具
+    // 「喜欢喝椰青水（椰子水）」不匹配而脆断——记忆内容可被 LLM/用户改写，文本断言不稳。
+    // 结构断言：面板内至少 1 条正文（p）+ 1 个分类/状态标签（span.rounded-full）。
+    // 空库新部署下面板为空列表，此断言按设计失败（环境依赖，非缺陷）。
+    const mBody = await page.locator('div[aria-label="小汐的记忆"] .springy p').count();
+    const mCat = await page.locator('div[aria-label="小汐的记忆"] .springy span.rounded-full').count();
+    (mBody > 0 && mCat > 0) ? ok(`记忆面板渲染真实记忆（正文 ${mBody} 条 + 标签 ${mCat} 个）`) : bad('记忆面板', `body=${mBody} cat=${mCat}`);
     await shot(page, '04-memories');
     await page.locator('button[aria-label="关闭记忆"]').click();
     await page.waitForTimeout(300);
