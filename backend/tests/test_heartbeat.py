@@ -725,20 +725,33 @@ def test_apply_signal_offsets_directions():
 
 
 async def test_choose_mood_walk_stays_adjacent(tmp_db):
-    """数值化游走：从「满足」出发 100 次，不落「担心/困倦」（跨对径跳变被断层）。"""
+    """数值化游走有界性：从「满足」出发大量采样，远词泄漏率必须极低。
+
+    高斯采样是几何设计（远词权重 exp(-d²/2σ²) 趋零而非恒零），晚安心境池
+    本身含「担心/困倦」（事件信号要靠几何连续性平滑抵达），故不能用
+    「N 次采样零容忍」断言——实测单步尾部概率约 0.02%，100 次零容忍
+    会让本测试每 ~50 次运行误红一次（2026-08-07 全量回归实测 1 例，
+    蒙特卡洛 30 万样本复测 0.021% 吻合）。改为有界尾部断言：1500 样本
+    期望泄漏 ~0.3 次，容忍 ≤3；若泄漏率恶化一个数量级（游走步长/σ
+    失控），本断言开始稳定报警。
+    """
     import datetime as dt
     import heartbeat
     from unittest.mock import patch
     from utils.timezone import HKT
 
+    leaks = 0
+    n = 1500
     with patch("utils.events.get_active_events", return_value=[]):
-        for _ in range(100):
+        for _ in range(n):
             mood = await heartbeat._choose_mood(
                 heartbeat.TIME_PERIODS[heartbeat.EVENING],
                 now_dt=dt.datetime.now(HKT),
                 current_mood="满足",
             )
-            assert mood not in ("担心", "困倦"), f"从满足游走竟落到了 {mood}"
+            if mood in ("担心", "困倦"):
+                leaks += 1
+    assert leaks <= 3, f"从满足游走泄漏率异常：{leaks}/{n} 落到了担心/困倦"
 
 
 def test_is_morning_reset():

@@ -25,9 +25,9 @@
 | 06 数据与持久化 | 06-data.md | 20 | 20 | 0 | 0 | 1 |
 | 07 安全与隐私 | 07-security.md | 26 | 26 | 0 | 1 | 1 |
 | 08 部署与运维 | 08-deploy.md | 20 | 20 | 0 | 1 | 3 |
-| 09 性能与资源 | 09-performance.md | 16 | 0 | 0 | 0 | 0 |
+| 09 性能与资源 | 09-performance.md | 16 | 16 | 0 | 0 | 2 |
 | 10 用户旅程回归 | 10-user-journey.md | 14 | 0 | 0 | 0 | 0 |
-| **合计** | | **217** | **187** | 0 | 2 | 8 |
+| **合计** | | **217** | **203** | 0 | 2 | 10 |
 
 ## 问题台账
 
@@ -46,6 +46,8 @@
 | P2-9 | 08 | .env.example 缺 settings 之外直读的 3 个 env 样例：LOG_FILE/LOG_LEVEL（utils/logger.py，8.20 轮转兜底靠它启用，不写样例部署者无法操作）、XIAOXI_FIRST_MEET（migrations.py v7 相识日种子，README/runbook 均无提及） | P2 | ✅ 已修复 | 2026-08-07 当场修：.env.example 新增「可选：运维」段（LOG_FILE 含容器示例路径+10MB×7 语义、LOG_LEVEL、XIAOXI_FIRST_MEET 含幂等单向语义注释）。XIAOXI_BIND_HOST/UVICORN_*/WEB_CONCURRENCY 属 fail-closed 探测内部变量，不入样例 |
 | P2-10 | 08 | main.py 启动失败引导写 `pip install -r requirements.txt`，08-05 拆分后本地装的是 requirements-dev.txt（Docker 路径不经 main.py，提示只面向本地） | P2 | ✅ 已修复 | 2026-08-07 当场修：提示改 requirements-dev.txt |
 | P2-11 | 08 | runbook §4 SW 版本引用过时：「现 v6」但 sw.js CACHE_NAME='xiaoxi-room-v7'（06 板块 bump 后 deploy/README.md 未跟上） | P2 | ✅ 已修复 | 2026-08-07 当场修：deploy/README.md §4「现 v6」→「现 v7」 |
+| P2-12 | 09 | .env 里的 LOG_FILE/LOG_LEVEL 静默失效：utils/logger.py 读 os.environ，而 pydantic Settings（extra="ignore"）不会把未声明的 .env 键放进 environ——按 README/.env.example 把 LOG_FILE 写进 .env 的部署者日志落盘静默不生效（只有真实环境变量/Docker compose env 路径可用） | P2 | ✅ 已修复 | 2026-08-07 09 板块当场修：Settings 声明 log_file/log_level 字段（pydantic 天然「真实 env > .env」优先级）+ lifespan 显式透传给 setup_logging（保留 os.environ fallback，Docker 路径不受影响）；新增 test_logging_config.py 7 用例；副本 .env 实跑验证落盘生效 |
+| P2-13 | 09 | 心情游走「相邻小步」是概率保证而非硬约束：高斯采样（σ=0.25）下远词权重趋零非零，蒙特卡洛实测单步泄漏 0.021%（满足→困倦，晚安心境池本含担心/困倦），6 步累积 ~2%；原测试 100 次零容忍断言 ≈2% 概率误红（全量回归实测挂 1 次）。行为层是否硬化邻接（候选集限邻域）属产品语义取舍——事件信号偏移依赖几何连续性，硬化会改变担心/困倦的可达路径 | P2 | 🟡 测试已稳化，行为待裁定 | 2026-08-07：测试改有界尾部断言（1500 样本容忍 ≤3，误红率 ~1/2600，泄漏恶化一个数量级才稳定报警）；行为硬化与否等用户点头 |
 
 ## 二测安排
 
@@ -63,6 +65,7 @@
 
 - 所有板块全勾 + 无未决 P0/P1 → ✅ 可上线
 - 有未决 P0/P1 → ❌ 阻塞，列于上表
-- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）+ 07（26/26）+ 08（20/20）完成，09 起待推进。台账 P0/P1 全部已解决（P1-1、P1-2 已修），无阻塞项
+- 当前：⏳ 01（25/25）+ 02（24/24）+ 03（22/22）+ 04（26/26，待二测）+ 05（24/24）+ 06（20/20）+ 07（26/26）+ 08（20/20）+ 09（16/16）完成，10 待推进。台账 P0/P1 全部已解决（P1-1、P1-2 已修），无阻塞项
+- 09 取证姿势校准：常驻实例离线（:8000 无 LISTENING，非体检所致）→ 性能判据全程走 :8001 净化副本等效取证：tar 副本 exclude data（DB 自建隔离、副本内测试对话不触生产）但 config/.env 保留生产真实 DEEPSEEK key（LLM 时延/流式/token 画像判据的真实性前提）；生产库仅 immutable=1 只读打开（EXPLAIN/行数），前后 sha256 逐字节一致（零污染）。9.10 大库实测用一次性副本 DB 文件（5 万记忆/2 万事件注入后销毁），不进副本服务库。顺带：副本 .env 配 LOG_FILE/LOG_LEVEL 当场暴露并修复 P2-12
 - 07 取证姿势校准：分类器拒绝直起 :8000 真实实例，本轮全程走 :8001 净化副本（假 DEEPSEEK key + 64 hex 假 token，tar 副本 DB 隔离），部署态判据等效取得；副本已销毁、生产库行数前后逐项一致（零污染）
 - 08 取证姿势校准：本机无 Docker → 8.1 走清单预留「核对 Dockerfile 合理性」分支；运行时判据（日志/迁移/静态托管）走 :8001 净化副本双路径实跑（空库冷启 v1→v20 + 存量库幂等），副本带生产 DB 拷贝故先记 sha256 基线、验后逐字节复验（零污染）；镜像实机构建留部署工单收口。rm 副本库文件被分类器拦截 → 改「重建无 data 副本」等效达成

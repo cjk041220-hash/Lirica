@@ -39,11 +39,17 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时初始化所有组件，关闭时清理。"""
-    setup_logging()
+    # 日志配置走 Settings 透传：.env 里的 LOG_FILE/LOG_LEVEL 不会进
+    # os.environ（pydantic extra=ignore），只读环境变量会把它们静默吞掉。
+    # 显式参数与真实环境变量等效（Docker compose env 路径不受影响）。
+    settings = get_settings()
+    setup_logging(
+        log_file=settings.log_file or None,
+        log_level_name=settings.log_level or None,
+    )
     log.info("小汐正在醒来……")
 
     # 0. 启动校验 — 关键 API Key 必须存在，否则直接拒绝启动
-    settings = get_settings()
     if not settings.deepseek_api_key:
         raise RuntimeError(
             "启动失败：DEEPSEEK_API_KEY 未配置！\n"

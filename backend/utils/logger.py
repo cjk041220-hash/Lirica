@@ -32,24 +32,32 @@ class _GbkSafeStreamHandler(logging.StreamHandler):
             self.handleError(record)
 
 
-def _level_from_env(default: int) -> int:
-    """读取 LOG_LEVEL 环境变量（DEBUG/INFO/WARNING/...），无效或未设则回退 default。"""
-    name = (os.environ.get("LOG_LEVEL") or "").strip().upper()
+def _level_from_env(default: int, override_name: str | None = None) -> int:
+    """解析日志级别：显式级别名参数 > LOG_LEVEL 环境变量 > default。
+
+    级别名取 DEBUG/INFO/WARNING/...，无效或未设则回退 default。
+    """
+    name = (override_name or os.environ.get("LOG_LEVEL") or "").strip().upper()
     if not name:
         return default
     return getattr(logging, name, default)
 
 
-def setup_logging(level: int | None = None):
+def setup_logging(level: int | None = None, log_file: str | None = None,
+                  log_level_name: str | None = None):
     """配置全局日志。在应用启动时调用一次。
 
-    级别优先取显式参数，其次 LOG_LEVEL 环境变量，都未给时为 INFO。
-    默认仅输出 stderr（与旧版行为一致）；设置 LOG_FILE 环境变量后才额外
-    落盘到带轮转的文件（UTF-8，10MB×7）。落盘失败仅告警、不阻断启动——
-    因此测试 / 未配置环境绝不会产生日志文件。
+    级别优先取显式 level 参数，其次 log_level_name / LOG_LEVEL 环境变量，
+    都未给时为 INFO。默认仅输出 stderr（与旧版行为一致）；给了 log_file
+    参数或 LOG_FILE 环境变量后才额外落盘到带轮转的文件（UTF-8，10MB×7）。
+    落盘失败仅告警、不阻断启动——因此测试 / 未配置环境绝不会产生日志文件。
+
+    log_file / log_level_name 显式参数的存在意义：.env 里的值经 pydantic
+    Settings 加载后不会进 os.environ，server 启动时把 Settings 字段透传
+    进来，保证「写在 .env 里」与「设为真实环境变量」等效（体检 9.13）。
     """
     if level is None:
-        level = _level_from_env(logging.INFO)
+        level = _level_from_env(logging.INFO, log_level_name)
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -61,8 +69,8 @@ def setup_logging(level: int | None = None):
         root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
         root.addHandler(handler)
 
-    # 文件：仅当 LOG_FILE 设置时落盘（默认不启用 → 测试/未配置无副作用）
-    log_file = (os.environ.get("LOG_FILE") or "").strip()
+    # 文件：显式 log_file 参数 > LOG_FILE 环境变量（默认不启用 → 测试/未配置无副作用）
+    log_file = (log_file or os.environ.get("LOG_FILE") or "").strip()
     if log_file and not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         try:
             os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)

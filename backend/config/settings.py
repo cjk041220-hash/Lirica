@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # CORS 允许的前端来源（逗号分隔，开发默认 localhost:3000）
     cors_origins: str = "http://localhost:3000"
 
+    # 日志落盘/级别（utils/logger.py 消费）。必须作为 Settings 字段声明：
+    # logger 读的是 os.environ，而 pydantic 对未声明的 .env 键只「extra: ignore」，
+    # 不声明的话写在 .env 里的 LOG_FILE 会被静默吞掉（体检 9.13 发现）
+    log_file: str = ""
+    log_level: str = ""
+
     model_config = {
         "env_file": str(_CONFIG_DIR / ".env"),
         "env_file_encoding": "utf-8",
