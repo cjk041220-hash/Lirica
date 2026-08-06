@@ -11,7 +11,7 @@
 4. 可随时中断：下次新窗口读本看板 + 目标板块文件头部即续跑。
 5. 禁止破坏性操作（删生产库/清数据）——确需时先问用户。
 6. 新窗口接管协议：用户说「继续体检」→ 读本看板 → 读目标板块文件 → 从第一个未勾项开始。
-7. 取证环境：真实实例 :8000（低风险只读 + 少量必要写入）；token 取 `backend/config/.env` 或 `backend/data/.api-token`。
+7. 取证环境：真实实例 :8000（低风险只读 + 少量必要写入）；先 `export TOKEN=$(grep XIAOXI_API_TOKEN backend/config/.env | cut -d= -f2)`；sqlite 只读查询用 `backend/.venv/Scripts/python - backend/data/userdata.db <<'PY'` 模板。
 
 ## 板块进度
 

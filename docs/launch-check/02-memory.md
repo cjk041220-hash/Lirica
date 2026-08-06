@@ -1,7 +1,7 @@
 # 02 · 记忆系统体检
 
 > 板块状态：0/24 · 已知问题：无 · 续跑指引：从第一个未勾选项开始，看→修→确认→勾选
-> 取证前置：TOKEN 同上；sqlite 只读查询统一用 `backend/.venv/Scripts/python - backend/data/userdata.db <<'PY'` 模式
+> 取证前置：export TOKEN=$(grep XIAOXI_API_TOKEN backend/config/.env | cut -d= -f2)；sqlite 只读查询统一用 `backend/.venv/Scripts/python - backend/data/userdata.db <<'PY'` 模式
 
 - [ ] **2.1 提取管线推进**
       · 查：真实对话后 memory_extract_state 水位线推进（提取不空转）

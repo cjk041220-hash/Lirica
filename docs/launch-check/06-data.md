@@ -11,14 +11,14 @@
       · 结果：
 - [ ] **6.2 迁移链完整**
       · 查：v1→v19 全部迁移有实现且注册
-      · 取证：代码核验 migrations.py `_migrations` 字典键 1..19 连续
-      · 判据：1..19 无缺号
+      · 取证：代码核验 migrations.py `_migrations` 字典键 2..19 连续（v1 为基线 schema，无 v1 迁移）
+      · 判据：2..19 无缺号
       · 严重度：P1
       · 结果：
 - [ ] **6.3 v18→v19 实升**
       · 查：真实库完成 v19 迁移（care_ledger 表存在）
       · 取证：查库 `SELECT name FROM sqlite_master WHERE name='care_ledger'`
-      · 判据：表存在（本会话已验，勾选并注明日期即可）
+      · 判据：表存在即可（勾选并注明日期）
       · 严重度：P0
       · 结果：
 - [ ] **6.4 全新安装升级链**
@@ -70,7 +70,7 @@
       · 严重度：P0
       · 结果：
 - [ ] **6.12 checkpoint 裁剪**
-      · 查：checkpoints.db 有裁剪/看门狗（chat_watchdog）防无限膨胀
+      · 查：checkpoints.db 有裁剪（prune_checkpoints：每 2h 触发、30 天不活跃裁剪）防无限膨胀
       · 取证：代码核验 watchdog 逻辑与触发
       · 判据：有上限机制
       · 严重度：P1
@@ -100,13 +100,13 @@
       · 严重度：P1
       · 结果：
 - [ ] **6.17 事件墓碑索引**
-      · 查：idx_events_dedupe 唯一部分索引（status≠deleted 谓词）
+      · 查：idx_events_dedupe 唯一部分索引（谓词 `WHERE dedupe_key IS NOT NULL AND status IN ('active','deleted')`）
       · 取证：查 sqlite_master 索引 SQL
       · 判据：谓词与 v9 语义一致
       · 严重度：P2
       · 结果：
 - [ ] **6.18 记忆表字段**
-      · 查：memories 含 last_mention_ts/valence/arousal/_relevance_score 列
+      · 查：memories 含 last_mention_ts/valence/arousal 列（_relevance_score 为计算函数非列）
       · 取证：查 PRAGMA table_info(memories)
       · 判据：v17/v18 新增列都在
       · 严重度：P0

@@ -11,7 +11,7 @@
       · 结果：
 - [ ] **7.2 token 强度**
       · 查：生产 token 为强随机（≥32 hex）
-      · 取证：读 `backend/config/.env`（只查是否存在/长度，不打印值）`grep -c XIAOXI_API_TOKEN=…` 长度判断
+      · 取证：读 `backend/config/.env` 长度探针（只查长度不打印值）：`awk -F= '/^XIAOXI_API_TOKEN=/{print length($2)}' backend/config/.env`
       · 判据：≥32 字符随机值（或入口自动生成逻辑存在）
       · 严重度：P0
       · 结果：
@@ -155,7 +155,7 @@
       · 结果：
 - [ ] **7.26 认证旁路检查**
       · 查：静态页面/资源不泄露受保护数据
-      · 取证：无 token 访问 /、/assets/*、/api/* 对比
+      · 取证：无 token 访问 /、`/assets/*`、`/api/*` 对比
       · 判据：静态可访问但不含业务数据（业务数据全在认证 API 后）
       · 严重度：P1
       · 结果：

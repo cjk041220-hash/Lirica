@@ -28,7 +28,7 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 ## 4. 验证
 - `curl -I https://你的域名` → 见有效证书 + `Strict-Transport-Security`。
 - 浏览器打开能正常聊天；`/api/health` 返回 ok。
-- **SW 版本过渡人工复核**（现 v5，CACHE_NAME 见 web/public/sw.js）：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
+- **SW 版本过渡人工复核**（现 v6，CACHE_NAME 见 web/public/sw.js）：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
 
 ## 5. 数据与备份
 - 数据在 named volume `xiaoxi-data`（即 `userdata.db` + `checkpoints.db`）。可 `docker compose down` 不丢数据；要导出：`docker cp xiaoxi:/app/backend/data ./backup`。
