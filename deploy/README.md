@@ -42,5 +42,14 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
   ```
   正常升级/回滚整个镜像无需此步（代码与迁移始终同批上线）。
 
+## 6. 存量数据迁移（把本地记忆库搬上服务器）
+- 一条命令（本机 Git Bash，仓库根）：
+  ```bash
+  scripts/upload_data_to_server.sh user@服务器IP [服务器仓库目录,缺省~/xiao-xi] [本地数据目录,缺省backend/data]
+  ```
+- 流程：本地 Online Backup API 一致性快照 → scp 加密上传 → 停容器 → **以应用用户 xiaoxi 身份**复制进 `xiaoxi-data` 卷（属主天然正确）→ 启动（若库 schema 落后于代码，迁移自动升级，幂等）→ 清临时目录。`.api-token` 不受影响。
+- 搬快照而非当前库：第三参指向快照目录即可，如 `E:/xiaoxi-pre-handoff-backup-20260807`。
+- 反向（服务器 → 本地留底）手工做：`ssh 服务器 "docker cp xiaoxi:/app/backend/data -" > data.tar` 或先 `scp`。
+
 ## 容器加固说明
 `docker-compose.yml` 已 `cap_drop: [ALL]` + `no-new-privileges`（Python web 无需任何 capability，收敛逃逸面）。资源上限 `mem_limit/cpus` 默认**注释**——请按 `docker stats` 实测 RSS 后填，过低会 OOMKill 致中断，故不替你用拍脑袋的数字。
