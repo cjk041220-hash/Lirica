@@ -51,5 +51,29 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 - 搬快照而非当前库：第三参指向快照目录即可，如 `E:/xiaoxi-pre-handoff-backup-20260807`。
 - 反向（服务器 → 本地留底）手工做：`ssh 服务器 "docker cp xiaoxi:/app/backend/data -" > data.tar` 或先 `scp`。
 
+## 7. 云端备份（异地第二层）
+应用内每 2h 快照轮换 5 份是**第一层**（防误删/库损坏）；但它和主库在同一块卷上，服务器没了就全没了。云端备份是**第二层**：
+
+1. 服务器装 rclone：`curl https://rclone.org/install.sh | sudo bash`
+2. `rclone config`：先配一个云存储 remote（OSS/COS/WebDAV/OneDrive 任选），再建一个 **crypt 加密 overlay remote**（例名 `xiaoxicrypt`）指向它——**库含生理期/对话隐私，明文上云不可接受，必须走 crypt**。首次运行 `rclone/rclone` 镜像会拉取镜像（~几十 MB）。
+3. 挂定时任务（库仅几百 KB，间隔可以很密）：
+   ```
+   */30 * * * * cd ~/xiao-xi && scripts/cloud_backup_server.sh xiaoxicrypt:xiaoxi >> /var/log/xiaoxi-cloud-backup.log 2>&1
+   ```
+   脚本流程：以应用镜像打 Online Backup API 新鲜快照（原子替换，云端永不出现半截文件）→ rclone sync 上传 userdata.db + checkpoints.db。
+4. **从云端恢复**（服务器重建/卷丢失后）：
+   ```bash
+   mkdir -p /tmp/xiaoxi-restore && chmod 700 /tmp/xiaoxi-restore
+   docker run --rm -v /tmp/xiaoxi-restore:/dst -v "$HOME/.config/rclone":/config/rclone:ro \
+     rclone/rclone:latest copy xiaoxicrypt:xiaoxi /dst --config /config/rclone/rclone.conf
+   cd ~/xiao-xi && docker compose stop xiaoxi
+   docker compose run --rm --no-deps -v /tmp/xiaoxi-restore:/src:ro --entrypoint sh xiaoxi -c \
+     'cp /src/userdata.db /app/backend/data/userdata.db && \
+      cp /src/checkpoints.db /app/backend/data/checkpoints.db && \
+      rm -f /app/backend/data/*.db-wal /app/backend/data/*.db-shm'
+   docker compose start xiaoxi && rm -rf /tmp/xiaoxi-restore
+   ```
+   （若服务器代码比快照新，启动时迁移自动升级；.api-token 不受影响。）
+
 ## 容器加固说明
 `docker-compose.yml` 已 `cap_drop: [ALL]` + `no-new-privileges`（Python web 无需任何 capability，收敛逃逸面）。资源上限 `mem_limit/cpus` 默认**注释**——请按 `docker stats` 实测 RSS 后填，过低会 OOMKill 致中断，故不替你用拍脑袋的数字。
