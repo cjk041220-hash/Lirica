@@ -58,8 +58,17 @@ async def test_get_current_period_boundary_23():
 
 
 async def test_check_and_proactive_message_updates_db(tmp_db):
-    """心跳任务执行后 life_state 表被更新。"""
-    from unittest.mock import patch
+    """心跳任务执行后 life_state 表被更新。
+
+    二测（04 板块）：原用例两处非确定性——① `_should_send_proactive`
+    的 random.random()<0.5 门 50% 概率真实调 DeepSeek LLM（.env 有 key
+    即真打，慢/花钱/网络抖动靠 fallback 碰巧绿）；② `_periodic_maintenance`
+    对**生产库**（backup_database 走模块级 DB_PATH，不认 patched get_db）
+    每跑一次写一份备份进 backups/ 轮换 + 裁剪 checkpoints.db。两腿都钉死：
+    主动消息生成/推送路径由 test_proactive.py 与同文件早安用例各自带
+    patch 覆盖，维护腿由 test_backup_rotation/test_backup_permissions 覆盖。
+    """
+    from unittest.mock import AsyncMock, patch
     import heartbeat as hb
 
     async def mock_get_db():
@@ -67,14 +76,16 @@ async def test_check_and_proactive_message_updates_db(tmp_db):
 
     original = hb.get_db
     hb.get_db = mock_get_db
-    # 50% 概率走进 _generate_proactive_message → recent_messages，
-    # 档案读库同样接到临时库，不碰生产 userdata.db
     import database.core as db_core
     original_core_db = db_core._db
     db_core._db = tmp_db
 
     try:
-        await hb.check_and_proactive_message()
+        with (
+            patch("heartbeat._should_send_proactive", new=AsyncMock(return_value=False)),
+            patch("heartbeat._periodic_maintenance", new=AsyncMock(return_value=None)),
+        ):
+            await hb.check_and_proactive_message()
 
         cursor = await tmp_db.execute("SELECT mood, daily_event FROM life_state WHERE id = 1")
         row = await cursor.fetchone()
@@ -928,6 +939,20 @@ async def _run_heartbeat_at(tmp_db, monkeypatch, now_dt, fake_mood):
         return fake_mood
 
     monkeypatch.setattr(hb, "_choose_mood", fake_choose_mood)
+    # 二测（04 板块）：维护腿对生产库有真实副作用——backup_database 走
+    # 模块级 DB_PATH（不认 patched get_db）每跑写一份生产快照进
+    # data/backups/ 轮换（可挤掉真实备份）、prune_checkpoints 会裁生产
+    # checkpoints.db、extract_new_memories 会对生产真实会话调真实 LLM
+    #（付费+网络，慢时全量跑卡 240s+）。三条全钉死：run_status_decay
+    # 仍走 get_db 建全局连接，test_heartbeat_triggers_global_db_connection
+    # 的语义不受影响；extract 由 test_memory_extract.py 带 mock 覆盖
+    import database.core as _core
+    import memory.extract as _extract
+    async def _noop(*a, **k):
+        return None
+    monkeypatch.setattr(_core, "backup_database", _noop)
+    monkeypatch.setattr(_core, "prune_checkpoints", _noop)
+    monkeypatch.setattr(_extract, "extract_new_memories", _noop)
     await hb.check_and_proactive_message(now_dt=now_dt)
     cursor = await tmp_db.execute(
         "SELECT mood, daily_event, mood_changed_at FROM life_state WHERE id = 1"

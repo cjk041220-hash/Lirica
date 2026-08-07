@@ -133,7 +133,15 @@ def _geocode_is_trustworthy(input_city: str, geocode: dict) -> bool:
     包含即可信；级别低于 city/district 或名称对不上 → 拒绝（走
     「没有找到」降级，好过报错城市的天气）。
     """
-    if geocode.get("level") not in _GEOCODE_MIN_LEVELS:
+    level = geocode.get("level")
+    # 高德把直辖市（上海市/北京市/天津市/重庆市）标成 level='省'，但
+    # province==city 即精确到市（真省级 province≠city，仍拒）；名称一致
+    # 性校验仍是真正的闸门
+    if level not in _GEOCODE_MIN_LEVELS and not (
+        level == "省"
+        and geocode.get("province")
+        and geocode.get("province") == geocode.get("city")
+    ):
         return False
     target = _norm_name(input_city)
     # 单字/空串输入没有区分度，不冒险（LLM 转述的城市名不会短于此）

@@ -95,6 +95,21 @@ def test_geocode_trustworthy_rejects_province_level():
     assert _geocode_is_trustworthy("中国", g2) is False
 
 
+def test_geocode_trustworthy_municipality_quirk_accepted():
+    """二测回归：高德把直辖市标成 level='省'，但 province==city 即精确
+    到市（「上海市」→ province/city 都是上海市），按城市级放行。"""
+    g = _fake_geocode("121.473667,31.230525", level="省",
+                      province="上海市", city="上海市")
+    assert _geocode_is_trustworthy("上海市", g) is True
+
+
+def test_geocode_trustworthy_municipality_quirk_name_mismatch():
+    """直辖市形态但名字对不上（输入上海、返回北京）→ 仍拒。"""
+    g = _fake_geocode("116.397428,39.90923", level="省",
+                      province="北京市", city="北京市")
+    assert _geocode_is_trustworthy("上海市", g) is False
+
+
 def test_geocode_trustworthy_accepts_district_level():
     g = _fake_geocode("114.05,22.54", level="区县", city="深圳市",
                       district="南山区", formatted_address="广东省深圳市南山区")
@@ -131,19 +146,37 @@ async def test_resolve_coords_case_insensitive():
     assert lon == 114.17
 
 
-async def test_resolve_coords_unknown_city():
-    """未知城市（无高德 key）返回 None。"""
+async def test_resolve_coords_unknown_city(monkeypatch):
+    """未知城市（无高德 key）返回 None。二测：清 key 确定性化——原实跑
+    带 .env 真实 key 直打高德（timeout=8s），靠可信度校验碰巧过，
+    网络挂/返回变化即暴露。"""
+    import config.settings as settings_module
+    from config.settings import Settings
+    monkeypatch.setattr(settings_module, "get_settings", lambda: Settings(amap_api_key=""))
     lat, lon, name = await _resolve_coords("一个不存在的城市XYZ")
     assert lat is None
     assert lon is None
     assert name == "一个不存在的城市XYZ"
 
 
-async def test_resolve_coords_returns_none_not_zero():
-    """解析失败返回 None 而非 (0,0)。"""
+async def test_resolve_coords_returns_none_not_zero(monkeypatch):
+    """解析失败返回 None 而非 (0,0)。（同上去网络化，确定性用例）"""
+    import config.settings as settings_module
+    from config.settings import Settings
+    monkeypatch.setattr(settings_module, "get_settings", lambda: Settings(amap_api_key=""))
     lat, lon, _ = await _resolve_coords("不存在的城市ABC")
     # 修复后应该是 None，不是 0.0
     assert lat is None or lat != 0.0 or lon is None or lon != 0.0
+
+
+async def test_resolve_coords_municipality_accepted(monkeypatch):
+    """二测回归：带后缀直辖市（上海市）过高德 level='省' 直辖市形态 → 接受。"""
+    g = _fake_geocode("121.473667,31.230525", level="省",
+                      province="上海市", city="上海市")
+    lat, lon, name = await _resolve_with_fake_geocode("上海市", g, monkeypatch)
+    assert lat == pytest.approx(31.230525)
+    assert lon == pytest.approx(121.473667)
+    assert name == "上海市"
 
 
 async def test_resolve_coords_fuzzy_fallback_rejected(monkeypatch):
