@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
-import { getToken, setToken, UNAUTHORIZED_EVENT } from '../api/client'
+import { getToken, setToken, apiFetch, UNAUTHORIZED_EVENT } from '../api/client'
 import { isGpsEnabled, setGpsEnabled } from '../api/location'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
@@ -31,6 +31,8 @@ export default function ConfigPanel({ config, push, onClose }) {
   const [tokenInput, setTokenInput] = useState(getToken())
   const [tokenSaved, setTokenSaved] = useState(false)
   const [needToken, setNeedToken] = useState(false)
+  const [tokenError, setTokenError] = useState('')
+  const [tokenVerifying, setTokenVerifying] = useState(false)
   useEffect(() => {
     const onUnauthorized = () => setNeedToken(true)
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
@@ -44,13 +46,34 @@ export default function ConfigPanel({ config, push, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const saveToken = () => {
+  const saveToken = async () => {
     const trimmed = tokenInput.trim()
     setToken(trimmed)
     setTokenInput(trimmed)
-    setTokenSaved(true)
     setNeedToken(false)
-    savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
+    setTokenError('')
+    if (!trimmed) {
+      setTokenSaved(true)
+      savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
+      return
+    }
+    // 保存后立即拿令牌敲一次门，服务器认不认当场验证——杜绝「界面显示
+    // 已保存、实际令牌没存进去或复制错了」的静默失败（2026-08-08 上线
+    // 首日实锤：用户保存后仍被 401，界面却无任何反馈）
+    setTokenVerifying(true)
+    try {
+      const res = await apiFetch('/api/status')
+      if (res.status === 401) {
+        setTokenError('服务器不认这个令牌——多半是复制时漏了字符，重新完整粘贴一次试试')
+      } else {
+        setTokenSaved(true)
+        savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
+      }
+    } catch {
+      setTokenError('令牌已存下，但刚才没能连上服务器验证——直接聊一句试试')
+    } finally {
+      setTokenVerifying(false)
+    }
   }
 
   // 位置辅助开关
@@ -88,6 +111,9 @@ export default function ConfigPanel({ config, push, onClose }) {
           {needToken && (
             <p className="text-[11px] text-[#C2477B] mb-2">小汐收到了 401——服务器启用了认证，填一下令牌就能继续聊啦。</p>
           )}
+          {tokenError && (
+            <p className="text-[11px] text-[#C2477B] mb-2" role="alert">{tokenError}</p>
+          )}
           <div className="flex gap-2">
             <input
               type="password"
@@ -99,9 +125,10 @@ export default function ConfigPanel({ config, push, onClose }) {
             />
             <button
               onClick={saveToken}
-              className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-strawberry/12 text-raspberry text-[12px] font-medium"
+              disabled={tokenVerifying}
+              className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-strawberry/12 text-raspberry text-[12px] font-medium disabled:opacity-50"
             >
-              {tokenSaved ? '已保存' : '保存'}
+              {tokenVerifying ? '验证中…' : (tokenSaved ? '已保存' : '保存')}
             </button>
           </div>
           <p className="text-[10px] text-plum/25 mt-1.5">只保存在你的浏览器里，用于和小汐的服务器核对身份。</p>
