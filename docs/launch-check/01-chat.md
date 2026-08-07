@@ -15,7 +15,7 @@
       · 判据：chat 401 且 health 200（白名单只有 health）
       · 严重度：P0
       · 结果：✅ 五场景全过（临时副本 :8001 + 假 token 模拟部署态，真实 .env 未动）。无 token→chat 401；错 token→401；对 token→200 正常回复；health 白名单→200；/api/sessions 同样 401。⚠️ 备注：本地 :8000 为 dev 模式（.env 未配 XIAOXI_API_TOKEN → 认证关闭，settings 设计如此）；部署到公网前必须配 token（docker 入口会自动生成），与 07 板块联动。
-- [ ] **1.3 对话落库**
+- [x] **1.3 对话落库**
       · 查：一次真实对话后 chat_messages 同时有 user 与 assistant 行
       · 取证：对话后 `backend/.venv/Scripts/python - backend/data/userdata.db <<'PY'`（sqlite3 读 chat_messages 按 session_id='check-1' 最新两行，打印 role/content 前 50 字）
       · 判据：user 行内容=发送原文（含时间词归一化后落库），assistant 行非空；无「[系统信息」前缀
