@@ -75,5 +75,11 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
    ```
    （若服务器代码比快照新，启动时迁移自动升级；.api-token 不受影响。）
 
+### OSS/COS 配置要点（目的地已定：阿里云 OSS 或腾讯云 COS）
+- **bucket 建私有读写**（切勿公共读），与服务器**同地域**——内网传输免流量费且快。
+- 用 RAM/CAM **子账号** AccessKey，只授权该 bucket 的读写（不用主账号 key；泄露时损失限于这个桶）。
+- `rclone config`：阿里云选 provider `Alibaba`（填 endpoint 如 `oss-cn-shenzhen.aliyuncs.com`），腾讯云选 `TencentCOS`；配好命名如 `ossbox`。
+- 再加 crypt overlay：`rclone config` → crypt → remote 填 `ossbox:xiaoxi-backup` → 设密码 → 命名 `xiaoxicrypt`。cron 目的地就用 `xiaoxicrypt:xiaoxi`。
+
 ## 容器加固说明
 `docker-compose.yml` 已 `cap_drop: [ALL]` + `no-new-privileges`（Python web 无需任何 capability，收敛逃逸面）。资源上限 `mem_limit/cpus` 默认**注释**——请按 `docker stats` 实测 RSS 后填，过低会 OOMKill 致中断，故不替你用拍脑袋的数字。
