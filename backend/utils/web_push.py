@@ -17,7 +17,7 @@ import json
 import uuid
 from datetime import datetime
 
-from pywebpush import webpush_async, WebPushException
+from pywebpush import WebPushException, webpush_async
 
 from config.settings import get_settings
 from database.core import get_db

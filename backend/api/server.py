@@ -7,18 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from version import __version__
+import heartbeat
 from agent.graph import build_agent, make_pre_model_hook
 from agent.soul import build_system_prompt
-from tools import get_all_tools, set_memory_manager, set_diary_db_conn, set_http_client, set_cycle_prompt_refresh_callback
-from memory.manager import MemoryManager
-from memory.narrative import NarrativeBuilder
-from api.routes.chat import router as chat_router
-from api.routes.config import router as config_router, create_llm_from_runtime_config
-from api.routes.events import router as events_router
-from api.routes.push import router as push_router
-from api.routes.sessions import router as sessions_router
-from api.routes.status import router as status_router
 from api.middleware import (
     AuthAndRateLimitMiddleware,
     RejectWebSocketMiddleware,
@@ -26,10 +17,26 @@ from api.middleware import (
     SecurityHeadersMiddleware,
 )
 from api.middleware.request_id import RequestIdMiddleware
-from database.core import init_db_connection, get_db, close_db_connection, init_db
+from api.routes.chat import router as chat_router
+from api.routes.config import create_llm_from_runtime_config
+from api.routes.config import router as config_router
+from api.routes.events import router as events_router
+from api.routes.push import router as push_router
+from api.routes.sessions import router as sessions_router
+from api.routes.status import router as status_router
 from config.settings import get_settings
-from utils.logger import setup_logging, get_logger
-import heartbeat
+from database.core import close_db_connection, get_db, init_db, init_db_connection
+from memory.manager import MemoryManager
+from memory.narrative import NarrativeBuilder
+from tools import (
+    get_all_tools,
+    set_cycle_prompt_refresh_callback,
+    set_diary_db_conn,
+    set_http_client,
+    set_memory_manager,
+)
+from utils.logger import get_logger, setup_logging
+from version import __version__
 
 log = get_logger(__name__)
 
@@ -61,7 +68,7 @@ async def lifespan(app: FastAPI):
     # 0.5 启动加固（fail closed）— 见 utils/security.py：
     #   - 非回环绑定 + 空 token → 拒绝启动（除非显式 XIAOXI_ALLOW_INSECURE=1）
     #   - workers > 1 → 拒绝启动（心跳/限流/配置都是进程内状态）
-    from utils.security import detect_bind_host, detect_workers, assert_safe_startup
+    from utils.security import assert_safe_startup, detect_bind_host, detect_workers
 
     assert_safe_startup(
         bind_host=detect_bind_host(),
@@ -169,7 +176,14 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
         log.info("checkpoint: sqlite (data/checkpoints.db)")
     except Exception as e:
-        # Sqlite 不可用时回退到内存（重启丢失对话，但不会崩溃）
+        # Sqlite 不可用时回退到内存（重启丢失对话，但不会崩溃）。
+        # 回退前必须关掉已建立的连接——connect 成功而 setup 失败时
+        # db_conn 已打开，不关闭则句柄泄漏（体检 S4）
+        if db_conn is not None:
+            try:
+                await db_conn.close()
+            except Exception:
+                pass
         from langgraph.checkpoint.memory import MemorySaver
         checkpointer = MemorySaver()
         log.warning("checkpoint: memory (sqlite 不可用: %s，对话重启后丢失)", e)
@@ -192,7 +206,7 @@ async def lifespan(app: FastAPI):
         heartbeat.scheduler.start()
     log.info("心跳已启动（每 2 小时 + 每日 8:00 早安）")
 
-    log.info("小汐醒啦！ -> http://127.0.0.1:8000")
+    log.info("小汐醒啦！ -> http://%s:%d", settings.xiaoxi_bind_host, settings.xiaoxi_port)
 
     yield
 
@@ -260,7 +274,11 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST", "DELETE"],
+        # PATCH 必须入列：chat 路由的记忆编辑是 @router.patch
+        # （routes/chat.py），跨域前端（独立部署 + CORS_ORIGINS）调它
+        # 时预检缺 PATCH 会被浏览器直接挡死；同源部署不触发预检故
+        # 长期未暴露。events 路由当年为此绕用 POST，此处统一口径放行。
+        allow_methods=["GET", "POST", "DELETE", "PATCH"],
         allow_headers=["Content-Type", "Authorization"],
     )
     # 安全响应头：纯 ASGI 实现，不缓冲响应体，SSE 流式不受影响

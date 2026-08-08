@@ -1,12 +1,11 @@
 """事件管理器单元测试 — 登记/去重/归档/注入上下文/检测器。"""
 import datetime
-from datetime import timedelta, timezone
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from utils import events as ev
-
 from utils.timezone import HKT as _HKT
 
 
@@ -562,7 +561,7 @@ async def test_anniversary_detector_leap_day(events_db):
 
 async def _seed_old_memory(events_db, mem_id, content, days_ago=120):
     """直接插入一条久远记忆（绕过 add 的 now 时间戳）。"""
-    from utils.timezone import HKT, _TIME_FMT
+    from utils.timezone import _TIME_FMT, HKT
 
     old = (datetime.datetime.now(HKT) - timedelta(days=days_ago)).strftime(_TIME_FMT)
     await events_db.execute(
@@ -624,6 +623,29 @@ async def test_memory_echo_archived_still_excluded(events_db):
     )
     await events_db.commit()
     assert await ev.detect_memory_echoes() == 0  # 唯一候选已被说过
+
+
+async def test_memory_echo_skips_already_echoed_candidate(events_db):
+    """部分候选已 echo → 点查排除后选中未 echo 的那条（体检 P2-16 点查化）。
+
+    fresh 只剩 mem-b，random.choice 在单元素列表上结果确定。
+    """
+    await _seed_old_memory(events_db, "mem-a", "旧事一")
+    await _seed_old_memory(events_db, "mem-b", "旧事二")
+    old_ts = (datetime.datetime.now(_HKT) - timedelta(days=30)).strftime("%Y-%m-%d %H:%M")
+    await events_db.execute(
+        "INSERT INTO events (id, title, event_type, event_date, severity, source, "
+        "status, created_at, dedupe_key) "
+        "VALUES ('e-old', '想起旧事', 'memory_echo', '2026-01-01', 'normal', 'memory', "
+        "'archived', ?, 'memory-echo:mem-a')",
+        (old_ts,),
+    )
+    await events_db.commit()
+    assert await ev.detect_memory_echoes() == 1
+    cursor = await events_db.execute(
+        "SELECT dedupe_key FROM events WHERE status = 'active'"
+    )
+    assert (await cursor.fetchone())[0] == "memory-echo:mem-b"
 
 
 async def test_memory_echo_no_candidates(events_db):

@@ -10,6 +10,7 @@
 import datetime
 
 from langchain_core.tools import tool
+
 from utils import events as events_mgr
 from utils.errors import log_tool_error
 from utils.timezone import HKT as _HKT
@@ -94,7 +95,7 @@ async def create_event(
                     "咦，这件事冷冷之前让小汐删掉过呢。小汐不偷偷记回来——"
                     "冷冷想重新记的话，在日历上加一下就好啦。"
                 )
-            lines = [f"这件事小汐之前已经记下啦，不用重复记："]
+            lines = ["这件事小汐之前已经记下啦，不用重复记："]
             lines.append(f"  📅 [{saved['id']}] {saved['title']}（{saved['event_date']}）")
             return "\n".join(lines)
 

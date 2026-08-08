@@ -26,6 +26,7 @@ def test_count_tokens_encoding_cached():
 def test_count_tokens_failure_returns_zero():
     """计数异常降级为 0，绝不外抛（遥测不得拖累主链路）。"""
     from unittest.mock import patch
+
     from utils.tokens import count_tokens
 
     with patch("utils.tokens._get_encoding", side_effect=RuntimeError("boom")):

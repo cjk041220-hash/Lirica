@@ -41,7 +41,7 @@ export function useFocusTrap() {
 
     const getFocusables = () =>
       [...node.querySelectorAll(FOCUSABLE)].filter(
-        (el) => el.offsetParent !== null || el === document.activeElement,
+        (el) => el.offsetParent !== null || el === document.activeElement
       )
 
     // 打开：聚焦容器自身（tabIndex=-1），避免突兀地跳进某个控件；
@@ -52,9 +52,7 @@ export function useFocusTrap() {
       if (e.key !== 'Tab') return
       // 嵌套让路：包含当前焦点的更顶层 trap 存在时，本层不处理
       const active = document.activeElement
-      const top = [...trapStack]
-        .reverse()
-        .find((t) => t.node === active || t.node.contains(active))
+      const top = [...trapStack].reverse().find((t) => t.node === active || t.node.contains(active))
       if (top && top !== entry) return
 
       const f = getFocusables()

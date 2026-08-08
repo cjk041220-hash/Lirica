@@ -8,12 +8,15 @@
 
 本模块 = 提取流水线 + 水位线断点：
 - 水位线存 memory_extract_state.last_message_id（chat_messages.id
-  AUTOINCREMENT 单调，跨重启持久）；从未运行过时视为 0。**有界、
-  不回看**（体检 T1-8 修 docstring 对齐实际行为）：首次运行只消费
-  最新 50 条并把水位线直接推到批尾，更早的历史永久跳过——提取价值
-  随对话变旧衰减，不追历史是有意设计，不是缺陷；
+  AUTOINCREMENT 单调，跨重启持久）；从未运行过时视为 0。**有界**：
+  单次最多消费 50 条。超量时的游标语义分两层——首跑（水位线 0）
+  只消费最新 50 条并把水位线推到批尾，更早的历史永久跳过（提取
+  价值随对话变旧衰减，不追历史是有意设计，不是缺陷）；稳态
+  （水位线 > 0）超量则从最旧端顺序消化，每 2h 一批直至追上，
+  中间消息不再被永久跳过（体检 S2 修复批次跳跃）。积压安全阀：
+  pending 超过 500 条（停摆数周级）按首跑跳尾处理，防追账烧账单；
 - 心跳每 2h 调 extract_new_memories()：无新消息 → 纯读检查直接返回
-  （近零开销）；有新消息 → 取最近一批（限 50 条 / 4000 字，超长从
+  （近零开销）；有新消息 → 取一批（限 50 条 / 4000 字，超长从
   旧消息端截断），连同现有记忆 top-10 作冲突上下文，轻量 LLM 决策
   add / update / noop；
 - 整批 dispatch 成功后才推进水位线；LLM 调用失败或输出不可解析时
@@ -25,15 +28,17 @@
 import datetime
 import json
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from database.core import rows_to_dicts
-from memory.manager import MemoryManager, _HEALTH_MIN_CHATS
+from database.core import get_write_lock, rows_to_dicts
+from memory.manager import _HEALTH_MIN_CHATS, MemoryManager
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
+from utils.timezone import _TIME_FMT
+from utils.timezone import HKT as _HKT
+from utils.timezone import now_str as _now
 
 # ── 提取预算护栏 ──────────────────────────────────────────────
 # 单批最多 50 条消息 / 4000 字（超长从旧端丢弃——提取价值随对话变旧
@@ -43,6 +48,10 @@ _MAX_EXTRACT_MESSAGES = 50
 _MAX_EXTRACT_CHARS = 4000
 _MAX_ADD_PER_RUN = 5
 _MAX_UPDATE_PER_RUN = 3
+# 积压安全阀：稳态超量时本应从最旧端顺序消化，但 pending 超过此值
+# 意味着提取停摆了数周，逐批追账会烧掉大量 LLM 调用——按首跑语义
+# 跳尾，只消费最新一批（与「不追历史」的设计同源）
+_MAX_BACKLOG = 500
 
 # 健康检查告警节流：同一异常 24h 内最多告警一次（心跳 2h 一次，
 # 不节流会 12 条/天的刷屏告警）
@@ -115,16 +124,17 @@ async def _set_watermark(conn, last_message_id: int) -> None:
     同时归零 fail_count：批次只要被成功消费（含合法空批 []），连续
     解析失败计数就从头开始——死信只针对「同一批持续损坏」。
     """
-    await conn.execute(
-        """INSERT INTO memory_extract_state (id, last_message_id, last_run_at, fail_count)
-           VALUES (1, ?, ?, 0)
-           ON CONFLICT(id) DO UPDATE SET
-               last_message_id = excluded.last_message_id,
-               last_run_at = excluded.last_run_at,
-               fail_count = 0""",
-        (last_message_id, _now()),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        await conn.execute(
+            """INSERT INTO memory_extract_state (id, last_message_id, last_run_at, fail_count)
+               VALUES (1, ?, ?, 0)
+               ON CONFLICT(id) DO UPDATE SET
+                   last_message_id = excluded.last_message_id,
+                   last_run_at = excluded.last_run_at,
+                   fail_count = 0""",
+            (last_message_id, _now()),
+        )
+        await conn.commit()
 
 
 async def get_fail_count(conn) -> int:
@@ -138,35 +148,63 @@ async def get_fail_count(conn) -> int:
 
 async def _set_fail_count(conn, n: int) -> None:
     """更新失败计数（UPSERT 保留水位线；尚无状态行时水位线为 0）。"""
-    await conn.execute(
-        """INSERT INTO memory_extract_state (id, last_message_id, fail_count)
-           VALUES (1, 0, ?)
-           ON CONFLICT(id) DO UPDATE SET fail_count = excluded.fail_count""",
-        (n,),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        await conn.execute(
+            """INSERT INTO memory_extract_state (id, last_message_id, fail_count)
+               VALUES (1, 0, ?)
+               ON CONFLICT(id) DO UPDATE SET fail_count = excluded.fail_count""",
+            (n,),
+        )
+        await conn.commit()
 
 
 async def _fetch_pending(
     conn, watermark: int
 ) -> tuple[list[str], int, str | None, str]:
-    """取水位线之后的消息（最近一批）。
+    """取水位线之后的消息（一批，最多 _MAX_EXTRACT_MESSAGES 条）。
 
     返回 (渲染行文本, 批内最大 id, 末条会话 id, 冷冷发言拼接)。
     最后一项供冲突上下文做话题候选召回（体检 D1，见 extract_new_memories）。
     超长预算从旧消息端丢弃：提取价值随对话变旧衰减，批次尾部（最新）
     永远保留；无新消息返回 ([], watermark, None, "")。
+
+    超量游标语义（体检 S2 修复批次跳跃）：
+    - 首跑（watermark == 0）超量 → 跳尾：只消费最新一批，更早历史永久
+      跳过（不追历史是有意设计，见模块 docstring）；
+    - 稳态（watermark > 0）超量 → 从最旧端 ASC 顺序消化，水位线每批
+      推进 50，直至追上——此前 DESC 取最新 + 水位线推批尾的写法会让
+      超量消息被水位线永久跳过（每 2h 最多产 50 条的对话一旦持续
+      超产，中间段永远进不了提取）；
+    - 积压安全阀：pending > _MAX_BACKLOG（停摆数周级）→ 按首跑跳尾，
+      防逐批追账烧 LLM 账单。
     """
     cursor = await conn.execute(
-        """SELECT id, session_id, role, content FROM chat_messages
-           WHERE id > ? ORDER BY id ASC""",
-        (watermark,),
+        "SELECT COUNT(*) FROM chat_messages WHERE id > ?", (watermark,)
+    )
+    pending = (await cursor.fetchone())[0]
+    if pending == 0:
+        return [], watermark, None, ""
+
+    # 稳态消化仅当「消费过 + 超量 + 非积压」；其余情况维持跳尾
+    drain_oldest = (
+        watermark > 0
+        and pending > _MAX_EXTRACT_MESSAGES
+        and pending <= _MAX_BACKLOG
+    )
+    order = "ASC" if drain_oldest else "DESC"
+    cursor = await conn.execute(
+        f"""SELECT id, session_id, role, content FROM chat_messages
+           WHERE id > ? ORDER BY id {order} LIMIT ?""",
+        (watermark, _MAX_EXTRACT_MESSAGES),
     )
     rows = rows_to_dicts(cursor, await cursor.fetchall())
     if not rows:
         return [], watermark, None, ""
 
-    batch = rows[-_MAX_EXTRACT_MESSAGES:]
+    # DESC 取回的是最新→最旧，反转回时间序；ASC 稳态消化已是时间序
+    if not drain_oldest:
+        rows.reverse()
+    batch = rows
     max_id = batch[-1]["id"]
     last_session_id = batch[-1].get("session_id")
 
@@ -416,13 +454,14 @@ async def _throttle_allowed(conn, now: datetime.datetime) -> bool:
 async def _mark_health_warned(conn, now: datetime.datetime) -> None:
     """记录本次告警时间（ON CONFLICT 只更新 health_warned_at，保留水位线）。"""
     now_str = now.strftime(_TIME_FMT)
-    await conn.execute(
-        """INSERT INTO memory_extract_state (id, last_message_id, last_run_at, health_warned_at)
-           VALUES (1, 0, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET health_warned_at = excluded.health_warned_at""",
-        (now_str, now_str),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        await conn.execute(
+            """INSERT INTO memory_extract_state (id, last_message_id, last_run_at, health_warned_at)
+               VALUES (1, 0, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET health_warned_at = excluded.health_warned_at""",
+            (now_str, now_str),
+        )
+        await conn.commit()
 
 
 async def check_and_report_memory_health(conn=None) -> dict:

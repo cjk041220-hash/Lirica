@@ -6,7 +6,11 @@
 const TOKEN_KEY = 'xiaoxi-token'
 
 export const getToken = () => {
-  try { return (localStorage.getItem(TOKEN_KEY) || '').trim() } catch { return '' }
+  try {
+    return (localStorage.getItem(TOKEN_KEY) || '').trim()
+  } catch {
+    return ''
+  }
 }
 
 export const setToken = (token) => {

@@ -15,18 +15,18 @@ const defaultSettings = {
 export function useConfig() {
   const [settings, setSettings] = useState(defaultSettings)
   const debounceRef = useRef({})
-  const updateSeqRef = useRef(0)  // 丢弃过期响应（防止并发请求覆盖更新值）
+  const updateSeqRef = useRef(0) // 丢弃过期响应（防止并发请求覆盖更新值）
 
   // 挂载时拉取后端配置
   useEffect(() => {
     apiFetch('/api/config')
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
         if (data && typeof data === 'object') {
-          setSettings(prev => ({ ...prev, ...data }))
+          setSettings((prev) => ({ ...prev, ...data }))
         }
       })
-      .catch(e => console.warn('[useConfig] fetch config failed:', e))
+      .catch((e) => console.warn('[useConfig] fetch config failed:', e))
   }, [])
 
   // 卸载时清理防抖定时器
@@ -37,7 +37,7 @@ export function useConfig() {
 
   const updateSetting = useCallback((key, value) => {
     // 乐观更新：UI 立刻反映用户选择
-    setSettings(prev => ({ ...prev, [key]: value }))
+    setSettings((prev) => ({ ...prev, [key]: value }))
 
     // 递增序列号，配合 send() 内校验丢弃过期响应
     const seq = ++updateSeqRef.current
@@ -48,15 +48,15 @@ export function useConfig() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [key]: value }),
       })
-        .then(res => (res.ok ? res.json() : null))
-        .then(data => {
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
           // 仅当本 send() 调用是最新的一次时才同步后端返回的完整配置，
           // 防止旧请求的响应覆盖后续更新的值
           if (data && typeof data === 'object' && seq === updateSeqRef.current) {
-            setSettings(prev => ({ ...prev, ...data }))
+            setSettings((prev) => ({ ...prev, ...data }))
           }
         })
-        .catch(e => console.warn('[useConfig] update setting failed:', e))
+        .catch((e) => console.warn('[useConfig] update setting failed:', e))
     }
 
     // 温度滑杆拖动会连续触发 onChange —— 防抖 250ms 只发最终值，

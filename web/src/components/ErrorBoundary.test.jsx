@@ -22,7 +22,11 @@ describe('ErrorBoundary', () => {
   })
 
   it('正常子组件照常渲染', () => {
-    render(<ErrorBoundary><p>正常内容</p></ErrorBoundary>)
+    render(
+      <ErrorBoundary>
+        <p>正常内容</p>
+      </ErrorBoundary>
+    )
     expect(screen.getByText('正常内容')).toBeTruthy()
   })
 })

@@ -3,9 +3,6 @@ import json
 
 import pytest
 
-from memory.manager import MemoryManager
-
-
 # ── 基础 CRUD ─────────────────────────────────────────────────
 
 
@@ -110,7 +107,7 @@ async def test_add_stores_source(memory_mgr):
 
 async def test_add_dedup_keeps_original_source(memory_mgr):
     """v12：去重刷新（同内容再次 add）保留首次来源，不覆盖成新来源。"""
-    first = await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-first")
+    await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-first")
     await memory_mgr.add("喜好", "喜欢喝椰青水", source="chat:s-second")
     refreshed = await memory_mgr.all()
     assert len(refreshed) == 1
@@ -412,7 +409,8 @@ def test_bigram_overlap_semantics():
 async def test_recall_query_promotes_topic_memory(memory_mgr, tmp_db):
     """话题命中：无关新流水占屏时，query 命中让 10 天前的旧记忆浮到顶。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("去过的地方", "冷冷上周去了趟澳门吃蛋挞")
     ten_days_ago = (
@@ -460,7 +458,8 @@ async def test_recall_surfaces_old_frequently_used_memory(memory_mgr, tmp_db):
     「相关路 + 最新路」hybrid 注入名存实亡（相关路退化成最新路）。
     """
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     # 旧记忆：10 天前创建，被想起过 800 次，刚刚才用过。
     # 评分 ≈ exp(-1) + ln(801)*0.15 + 0.3 ≈ 1.67，要高于新记忆
@@ -495,7 +494,8 @@ async def test_recall_category_surfaces_old_frequent_memory(memory_mgr, tmp_db):
     想起）被同类别新流水永久挤出，与无类别路径的病同源。
     """
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("核心偏好", "冷冷喜欢喝椰子水")
     ten_days_ago = (
@@ -526,7 +526,8 @@ async def _age_memory(tmp_db, content: str, days_ago: int):
     """把指定记忆拨到 N 天前（O1：created_at 与 last_mention_ts 一起拨——
     「久远」= 多久没被提及，不是多久前创建）。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     ts = (datetime.datetime.now(HKT) - datetime.timedelta(days=days_ago)).strftime(_TIME_FMT)
     await tmp_db.execute(
@@ -722,6 +723,7 @@ async def test_update_content_refreshes_last_mention_ts(memory_mgr, tmp_db):
 def test_relevance_recency_uses_last_mention_ts():
     """O1：衰减时钟是 last_mention_ts 而非 created_at（公式级单测）。"""
     import datetime
+
     from memory.manager import _relevance_score
     from utils.timezone import HKT
 
@@ -764,7 +766,8 @@ async def test_importance_clamped_to_1_10(memory_mgr):
 async def test_importance_boosts_ranking(memory_mgr, tmp_db):
     """I1 核心回归：同等时近下，高重要性记忆浮到前面。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("喜好", "日常流水", importance=1)   # 先加（同分时 rowid 靠前）
     await memory_mgr.add("喜好", "重要的事", importance=10)
@@ -819,6 +822,7 @@ async def test_add_dedup_refreshes_valence(memory_mgr):
 def _mem(valence=None, days=0):
     """构造最小记忆 dict（公式级单测用）。"""
     import datetime
+
     from utils.timezone import HKT
     ts = (datetime.datetime.now(HKT) - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     return {"created_at": ts, "last_mention_ts": ts, "access_count": 0,
@@ -828,6 +832,7 @@ def _mem(valence=None, days=0):
 def test_mood_affinity_congruent_outranks_opposed():
     """v18：当前心情效价相近的记忆分高，相反的低（其余因子全同）。"""
     import datetime
+
     from memory.manager import _relevance_score
     from utils.timezone import HKT
 
@@ -844,6 +849,7 @@ def test_mood_affinity_congruent_outranks_opposed():
 def test_mood_affinity_neutral_not_systematically_penalized():
     """v18 防固化校验：valence 缺失/0 的中性记忆，mood 因子与其取值无关。"""
     import datetime
+
     from memory.manager import _relevance_score
     from utils.timezone import HKT
 
@@ -857,6 +863,7 @@ def test_mood_affinity_neutral_not_systematically_penalized():
 def test_mood_factor_off_without_mood_valence():
     """v18：mood_valence=None → 因子整体关闭，与 v17 行为逐字节一致。"""
     import datetime
+
     from memory.manager import _relevance_score
     from utils.timezone import HKT
 
@@ -871,7 +878,8 @@ async def test_recall_mood_valence_biases_ranking(memory_mgr, tmp_db):
     """v18 核心回归：mood-congruent 加权——同调记忆先浮现，且异调记忆
     仍在结果里（加权而非硬过滤，防情绪固化回路）。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("日常", "开心的事", valence=0.8)
     await memory_mgr.add("日常", "难过的事", valence=-0.8)
@@ -895,7 +903,8 @@ async def test_recall_mood_valence_biases_ranking(memory_mgr, tmp_db):
 async def test_recall_without_mood_valence_keeps_v17_order(memory_mgr, tmp_db):
     """v18：不传 mood_valence（extract/agentic recall 路径）→ v17 行为不变。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("日常", "先记住的")
     await memory_mgr.add("日常", "后记住的", valence=0.9)
@@ -934,6 +943,7 @@ async def test_get_mood_valence_maps_life_state(memory_mgr, tmp_db):
 async def test_add_normalizes_time_words(memory_mgr):
     """add 落库前把相对时间词改写为绝对日期（「后天」过两天就读不懂）。"""
     import datetime
+
     from utils.timezone import HKT
 
     result = await memory_mgr.add("重要的事", "冷冷后天考试")
@@ -944,6 +954,7 @@ async def test_add_normalizes_time_words(memory_mgr):
 async def test_update_content_normalizes_time_words(memory_mgr):
     """update_content 同样归一化（改期场景）。"""
     import datetime
+
     from utils.timezone import HKT
 
     mem = await memory_mgr.add("重要的事", "冷冷有考试")

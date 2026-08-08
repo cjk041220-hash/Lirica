@@ -4,9 +4,9 @@
 - 记忆通过 llm_input_messages 注入（不进 checkpoint）
 - 旧消息通过 RemoveMessage 裁剪（防止状态膨胀）
 """
-import pytest
 from unittest.mock import AsyncMock
 
+import pytest
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -15,7 +15,6 @@ from langchain_core.messages import (
 
 from agent.graph import make_pre_model_hook
 from memory.narrative import NarrativeBuilder
-
 
 # ── Fixtures ──────────────────────────────────────────────────
 

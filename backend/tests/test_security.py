@@ -3,7 +3,6 @@ import pytest
 
 from utils.security import assert_safe_startup, detect_bind_host, detect_workers
 
-
 # ── assert_safe_startup ──────────────────────────────────────
 
 def test_loopback_without_token_ok():

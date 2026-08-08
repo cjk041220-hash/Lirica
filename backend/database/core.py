@@ -15,6 +15,7 @@
 import asyncio
 import datetime
 import os
+import re
 from pathlib import Path
 
 import aiosqlite
@@ -37,6 +38,17 @@ def rows_to_dicts(cursor, rows: list) -> list[dict]:
     """
     cols = [desc[0] for desc in (cursor.description or [])]
     return [dict(zip(cols, row)) for row in rows]
+
+
+def escape_like(s: str) -> str:
+    """转义 LIKE 通配符，% / _ 只按字面匹配（全项目单一实现）。
+
+    参数来自 LLM 工具入参或用户输入，含通配符时（如下划线类别名
+    user_info、标题里的 %）不转义会让匹配语义失控——不是注入风险
+    （已参数化），而是召回/去重串味。配合 SQL 的 ESCAPE '\\' 使用。
+    原生于 memory/manager._escape_like，events 相似匹配复用而上移。
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 # ── 权限收紧 ────────────────────────────────────────────────
 
@@ -101,6 +113,34 @@ async def close_db_connection() -> None:
         except Exception as e:
             log.warning("数据库连接关闭失败：%s", e)
         _db = None
+
+
+# ── 逻辑写锁 ────────────────────────────────────────────────
+#
+# 全局单连接意味着任何协程的 commit() 都会把其他协程进行到一半的
+# 多语句序列一并提交（aiosqlite 共享同一事务上下文）。对「多条 SQL
+# 才构成一个逻辑写」的方法（如 superseded 链：SELECT→INSERT→UPDATE
+# →commit），SSE 归档与心跳写交叉时可能半截落库。多语句写路径的
+# 对外入口统一在此锁内执行；锁内被调用的内层方法（如
+# compress_history）不得再次加锁——asyncio.Lock 不可重入。
+#
+# 按事件循环缓存：生产只有一个 loop，等价模块级单例；测试下
+# pytest-asyncio 每个用例一个新 loop，而 asyncio.Lock 一旦发生
+# 真正的阻塞等待就会永久绑定该 loop——跨用例复用会在下一次竞争时
+# 抛 "bound to a different event loop"（2026-08-08 events.py 扩大
+# 锁覆盖面后实锤）。loop 变了就重建一把，语义不变。
+_write_lock: asyncio.Lock | None = None
+_write_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def get_write_lock() -> asyncio.Lock:
+    """获取全局逻辑写锁（按当前事件循环缓存的单例）。"""
+    global _write_lock, _write_lock_loop
+    loop = asyncio.get_running_loop()
+    if _write_lock is None or _write_lock_loop is not loop:
+        _write_lock = asyncio.Lock()
+        _write_lock_loop = loop
+    return _write_lock
 
 
 # ── 建表 + 建索引 ────────────────────────────────────────────
@@ -170,13 +210,13 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     # （如 memories.status），若在旧版表上先建索引会因列不存在而
     # 直接报错，导致旧数据库永远无法启动新版本（v0.4.3 修复）。
     from database.migrations import (
-        ensure_schema,
         CARE_LEDGER_SCHEMA_SQL,
         CHAT_ARCHIVE_SCHEMA_SQL,
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
         MEMORY_EXTRACT_STATE_SQL,
+        ensure_schema,
     )
     # life_state 表（v7：含 first_met_on）：老库由迁移补列，新库由共享
     # DDL 常量建立，与 migrations / conftest 三处永不漂移
@@ -335,6 +375,19 @@ async def prune_checkpoints(
 
 _BACKUP_DIR = Path(__file__).parent.parent / "data" / "backups"
 _MAX_BACKUPS = 5
+# 备份文件名严格模式（体检 P2-17）：glob "userdata_backup_*.db" 会把
+# 非时间戳命名的同名文件卷进轮换/清扫，改用正则 fullmatch
+_BACKUP_NAME_RE = re.compile(r"userdata_backup_\d{8}_\d{6}\.db")
+_BACKUP_SIDECAR_RE = re.compile(r"(userdata_backup_\d{8}_\d{6}\.db)-(?:wal|shm)")
+
+
+def _unlink_sidecars(db_path: Path) -> None:
+    """删除备份文件的 -wal/-shm 兄弟文件（存在才删，缺失静默）。"""
+    for sibling in (
+        db_path.parent / (db_path.name + "-wal"),
+        db_path.parent / (db_path.name + "-shm"),
+    ):
+        sibling.unlink(missing_ok=True)
 
 
 async def backup_database(
@@ -398,39 +451,39 @@ async def backup_database(
         # 开启脱敏的语义直接冲突（完整对话档案被同步去网盘/他人）。
         # 失败即删掉本次备份（含可能残留的 sidecar），返回 None。
         backup_path.unlink(missing_ok=True)
-        for sibling in (
-            backup_path.parent / (backup_path.name + "-wal"),
-            backup_path.parent / (backup_path.name + "-shm"),
-        ):
-            sibling.unlink(missing_ok=True)
+        _unlink_sidecars(backup_path)
         log.error("备份脱敏失败，已删除未脱敏备份：%s", e)
         return None
 
+    # 成功路径同样清理本次备份的 sidecar（体检 S6）：Online Backup 拷出的
+    # 文件继承 WAL 模式位，脱敏/读取开连接会伴生 -wal/-shm，非干净关闭
+    # 即残留——此前只有失败分支清理，成功路径的孤儿只能靠下方轮换/
+    # 清扫碰运气（生产备份目录实测 14 个）
+    _unlink_sidecars(backup_path)
+
     # 只保留最近 _MAX_BACKUPS 份。淘汰时同删 -wal/-shm 兄弟文件
     # （体检 D-1）：Online Backup 拷出的文件继承 WAL 模式位，脱敏/
-    # 读取开连接会伴生 sidecar，非干净关闭即残留——轮换 glob 只匹配
-    # *.db 碰不到它们，孤儿会无限累积（生产备份目录实测 14 个）。
+    # 读取开连接会伴生 sidecar，非干净关闭即残留——轮换只匹配严格
+    # 时间戳命名的 *.db，碰不到它们，孤儿会无限累积。
     backups = sorted(
-        backup_dir.glob("userdata_backup_*.db"),
+        (p for p in backup_dir.iterdir() if _BACKUP_NAME_RE.fullmatch(p.name)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     for old_backup in backups[_MAX_BACKUPS:]:
         old_backup.unlink()
-        for sibling in (
-            old_backup.parent / (old_backup.name + "-wal"),
-            old_backup.parent / (old_backup.name + "-shm"),
-        ):
-            sibling.unlink(missing_ok=True)
+        _unlink_sidecars(old_backup)
 
     # P0-05 回归：孤儿 sidecar 清扫。上面的轮换只删「被淘汰 .db」的
     # 兄弟文件，早已失去基础 .db 的 -wal/-shm（生产备份目录实测 14 个）
     # 不会再次进入轮换列表，永久累积。每次备份后全量扫一遍：基础 .db
-    # 已不存在则删除（对象限定为 userdata_backup_*.db-{wal,shm} 且无主，
+    # 已不存在则删除（对象限定为严格时间戳命名备份的 -wal/-shm 且无主，
     # 不会误伤仍被引用的 sidecar）。
-    for sidecar in backup_dir.glob("userdata_backup_*.db-*"):
-        base = backup_dir / sidecar.name.rsplit("-", 1)[0]
-        if not base.exists():
+    for sidecar in backup_dir.iterdir():
+        m = _BACKUP_SIDECAR_RE.fullmatch(sidecar.name)
+        if not m:
+            continue
+        if not (backup_dir / m.group(1)).exists():
             sidecar.unlink(missing_ok=True)
 
     log.info("数据库备份已保存：%s", backup_path)

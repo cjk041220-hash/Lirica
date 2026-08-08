@@ -7,7 +7,6 @@ LLM 只见文本，卡片数据经 ToolMessage.artifact 下行给前端渲染。
 import pytest
 from langchain_core.messages import ToolMessage
 
-
 _MINI_DECK = [
     {
         "name": "测试牌A",
@@ -168,9 +167,9 @@ async def test_agent_survives_tool_exception():
     该 middleware 取代（graph.py:173-181 注释），行为等价，与每个工具
     自身的 try/except 形成双重兜底。
     """
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langchain_core.tools import tool
-    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
     from agent.graph import build_agent
 

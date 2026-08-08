@@ -8,12 +8,14 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import database.core as db_core
-from utils.timezone import HKT as _HKT
-
 from tools import get_all_tools
 from tools.cycle import (
-    amend_period, get_period_status, log_period, set_prompt_refresh_callback,
+    amend_period,
+    get_period_status,
+    log_period,
+    set_prompt_refresh_callback,
 )
+from utils.timezone import HKT as _HKT
 
 
 def _date(offset: int) -> str:

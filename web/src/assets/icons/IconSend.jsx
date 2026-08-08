@@ -8,7 +8,13 @@ export default function IconSend({ size = 18, className = '' }) {
         strokeWidth="1"
         strokeLinejoin="round"
       />
-      <path d="M11.5 13.5L19 5.5" stroke="white" strokeWidth="0.8" strokeLinecap="round" opacity="0.5" />
+      <path
+        d="M11.5 13.5L19 5.5"
+        stroke="white"
+        strokeWidth="0.8"
+        strokeLinecap="round"
+        opacity="0.5"
+      />
     </svg>
   )
 }

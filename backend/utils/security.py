@@ -55,15 +55,21 @@ def detect_bind_host(argv: list[str] | None = None) -> str:
 
     优先级：命令行 ``--host``（``--host V`` / ``--host=V`` 两种写法）
     > ``UVICORN_HOST`` 环境变量（uvicorn 实际生效的 env）
-    > ``XIAOXI_BIND_HOST``（项目自有覆盖）> 默认回环。
-    检测必须对齐 uvicorn 真实会绑定的地址，否则就是"检测到回环、
-    实际绑 0.0.0.0"的 fail-open；uvicorn 未指定 host 时默认就是 127.0.0.1。
+    > ``XIAOXI_BIND_HOST`` 环境变量 > ``settings.xiaoxi_bind_host``
+    （兜底 .env 文件配置——pydantic 读 .env 不写 os.environ，缺了这层
+    会出现「安检以为回环、实际绑 0.0.0.0」的 fail-open，体检 S9）。
+    检测必须对齐 uvicorn 真实会绑定的地址；uvicorn 未指定 host 时
+    默认就是 127.0.0.1。
     """
     argv = argv if argv is not None else sys.argv
     host = _argv_value(argv, "--host")
     if host:
         return host
-    return os.environ.get("UVICORN_HOST", os.environ.get("XIAOXI_BIND_HOST", "127.0.0.1"))
+    host = os.environ.get("UVICORN_HOST") or os.environ.get("XIAOXI_BIND_HOST")
+    if host:
+        return host
+    from config.settings import get_settings  # 函数级 import 防环
+    return get_settings().xiaoxi_bind_host
 
 
 def detect_workers(argv: list[str] | None = None) -> int:

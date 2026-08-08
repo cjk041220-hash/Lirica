@@ -126,7 +126,8 @@ async def test_init_db_fresh_database_still_works(tmp_path):
 async def test_migrate_v6_creates_events_table(tmp_path):
     """v6 迁移：建立 events 表与 dedupe 部分唯一索引。"""
     import sqlite3
-    from database.migrations import ensure_schema, SCHEMA_VERSION
+
+    from database.migrations import SCHEMA_VERSION, ensure_schema
 
     db_path = tmp_path / "v5.db"
     conn = await aiosqlite.connect(str(db_path))

@@ -2,8 +2,12 @@
 import pytest
 
 from tools.weather import (
-    _geocode_is_trustworthy, _norm_name, _resolve_coords,
-    _WMO, _RAIN_CODES, _STORM_CODES,
+    _RAIN_CODES,
+    _STORM_CODES,
+    _WMO,
+    _geocode_is_trustworthy,
+    _norm_name,
+    _resolve_coords,
 )
 
 
@@ -27,8 +31,8 @@ async def _resolve_with_fake_geocode(city, geocode, monkeypatch):
     _resolve_coords 内 `from config.settings import get_settings` 是函数内
     局部 import（每次调用现取），须 patch config.settings 模块本身。
     """
-    import tools.weather as weather_module
     import config.settings as settings_module
+    import tools.weather as weather_module
     from config.settings import Settings
 
     fake_settings = Settings(amap_api_key="fake-key-for-test")
@@ -199,8 +203,8 @@ async def test_resolve_coords_normal_geocode_accepted(monkeypatch):
 
 async def test_resolve_coords_geocode_exception_safe(monkeypatch):
     """高德调用抛异常 → 降级 None，不击穿（既有行为保持）。"""
-    import tools.weather as weather_module
     import config.settings as settings_module
+    import tools.weather as weather_module
 
     fake_settings = type("S", (), {"amap_api_key": "fake"})()
     monkeypatch.setattr(settings_module, "get_settings", lambda: fake_settings)

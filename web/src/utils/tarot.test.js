@@ -5,8 +5,28 @@ const GOOD = {
   spread_type: 'three',
   spread_name: '三牌占卜',
   cards: [
-    { name: '恋人', symbol: 'VI', suit: '大阿尔卡纳', element: '风', keywords: ['真爱'], is_reversed: false, position: '过去', fortune: 'x', meaning: ['x'] },
-    { name: '权杖Ace', symbol: 'A', suit: '权杖', element: '火', keywords: [], is_reversed: true, position: '现在', fortune: 'y', meaning: ['y'] },
+    {
+      name: '恋人',
+      symbol: 'VI',
+      suit: '大阿尔卡纳',
+      element: '风',
+      keywords: ['真爱'],
+      is_reversed: false,
+      position: '过去',
+      fortune: 'x',
+      meaning: ['x'],
+    },
+    {
+      name: '权杖Ace',
+      symbol: 'A',
+      suit: '权杖',
+      element: '火',
+      keywords: [],
+      is_reversed: true,
+      position: '现在',
+      fortune: 'y',
+      meaning: ['y'],
+    },
   ],
 }
 
@@ -16,7 +36,9 @@ describe('isValidTarot', () => {
   })
 
   it('single / celtic 牌阵合法', () => {
-    expect(isValidTarot({ ...GOOD, spread_type: 'single', cards: GOOD.cards.slice(0, 1) })).toBe(true)
+    expect(isValidTarot({ ...GOOD, spread_type: 'single', cards: GOOD.cards.slice(0, 1) })).toBe(
+      true
+    )
     expect(isValidTarot({ ...GOOD, spread_type: 'celtic' })).toBe(true)
   })
 

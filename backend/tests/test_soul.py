@@ -1,8 +1,10 @@
 """build_system_prompt 单元测试 — 提示词组装正确性。"""
-import pytest
 
 from agent.soul import (
-    build_system_prompt, BASE_PERSONA, INTERACTION_RULES, TOOL_GUIDELINES,
+    BASE_PERSONA,
+    INTERACTION_RULES,
+    TOOL_GUIDELINES,
+    build_system_prompt,
 )
 
 
@@ -16,7 +18,10 @@ def test_cold_info_birthday_matches_constants():
     """体检 S1 回归：档案散文里的生日与导出常量一致（f-string 嵌入
     后逐字节不变——此前散文写死、events 检测器手动同步，两处漂移）。"""
     from agent.soul import (
-        COLD_INFO, COLD_BIRTHDAY_YEAR, COLD_BIRTHDAY_MONTH, COLD_BIRTHDAY_DAY,
+        COLD_BIRTHDAY_DAY,
+        COLD_BIRTHDAY_MONTH,
+        COLD_BIRTHDAY_YEAR,
+        COLD_INFO,
     )
 
     assert (
@@ -26,7 +31,7 @@ def test_cold_info_birthday_matches_constants():
     assert "2004 年 6 月 3 日" in COLD_INFO  # 钉死当前值，防常量被静默改动
 
     # events 检测器与 soul 同源
-    from utils.events import _BIRTHDAY_MONTH, _BIRTHDAY_DAY
+    from utils.events import _BIRTHDAY_DAY, _BIRTHDAY_MONTH
     assert (_BIRTHDAY_MONTH, _BIRTHDAY_DAY) == (COLD_BIRTHDAY_MONTH, COLD_BIRTHDAY_DAY)
 
 
@@ -104,8 +109,8 @@ async def test_prompt_includes_events_context(tmp_db):
     事件可能来自 LLM 提炼或网页检测（低信任源），注入必须降级为数据语义，
     同记忆注入的纵深防御。
     """
-    from unittest.mock import patch
     import datetime
+    from unittest.mock import patch
 
     future = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
     await tmp_db.execute(
@@ -131,12 +136,13 @@ async def test_prompt_includes_events_context(tmp_db):
 async def test_prompt_has_no_direct_cycle_injection(tmp_db):
     """生理期关心收敛回归：提示词不再有「冷冷的身体状况」独立段落，
     窗口内的关心经事件通道（cycle 事件 + memo）注入。"""
-    from unittest.mock import patch
     import datetime
+    from unittest.mock import patch
+
     import database.core as db_core
-    from utils.timezone import HKT as _HKT
     from utils import cycle_tracker
     from utils import events as events_mgr
+    from utils.timezone import HKT as _HKT
 
     today = datetime.datetime.now(_HKT).date()
     seeds = [(today - datetime.timedelta(days=d)).isoformat() for d in (85, 55, 25)]
@@ -315,8 +321,9 @@ def test_remember_likes_someone_rule():
 
 
 def test_rules_rescoped_for_jk():
-    """铁律 #4/#8 重划边界：调侃/辩护可带刺，只对 JK，且一两句就停。"""
-    assert "调侃只对 JK" in INTERACTION_RULES
+    """铁律 #4/#8：调侃对 JK 是嘴上嫌弃、对冷冷是亲昵小吐槽，都不带刺；辩护一两句就停。"""
+    assert "亲昵的小吐槽" in INTERACTION_RULES
+    assert "不带刺" in INTERACTION_RULES
     assert "替 JK 辩护也一样" in INTERACTION_RULES
 
 
@@ -373,6 +380,7 @@ async def test_prompt_includes_important_days(tmp_db):
     """相识第 100 天当天：注入「重要的日子」段 + 百天提示。"""
     import datetime
     from unittest.mock import patch
+
     from utils.timezone import HKT
 
     first = (datetime.datetime.now(HKT).date() - datetime.timedelta(days=99)).isoformat()
@@ -404,6 +412,7 @@ async def test_prompt_anniversary_hint_within_week(tmp_db):
     """距周年 5 天 → 出现周年提示；相识日在未来 → 整段消失。"""
     import datetime
     from unittest.mock import patch
+
     from utils.timezone import HKT
 
     today = datetime.datetime.now(HKT).date()

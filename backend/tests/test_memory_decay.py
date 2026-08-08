@@ -2,9 +2,8 @@
 import datetime
 from unittest.mock import AsyncMock, patch
 
-from utils.timezone import HKT, _TIME_FMT
-
 from memory.narrative import NarrativeBuilder
+from utils.timezone import _TIME_FMT, HKT
 
 
 def _days_ago(n: int) -> str:

@@ -24,28 +24,26 @@ export default function MemoriesPanel({ onClose }) {
   const confirmDelTimerRef = useRef(null)
   useEffect(() => () => clearTimeout(confirmDelTimerRef.current), [])
 
-  const reload = () => setReloadKey(k => k + 1)
+  const reload = () => setReloadKey((k) => k + 1)
 
   // 导出备份（体检产品决策 3：GET /api/memories/export 只有 API 层，
   // 面板加入口——冷冷的记忆主权包括「可以带走」）。含冷藏记忆与否
   // 跟随「已归档」开关状态；浏览器下载 xiaoxi_memories.json
   const exportMemories = () => {
-    const url = showArchived
-      ? '/api/memories/export?include_archived=1'
-      : '/api/memories/export'
+    const url = showArchived ? '/api/memories/export?include_archived=1' : '/api/memories/export'
     apiFetch(url)
-      .then(res => {
+      .then((res) => {
         if (!res.ok) throw new Error(`export ${res.status}`)
         return res.blob()
       })
-      .then(blob => {
+      .then((blob) => {
         const a = document.createElement('a')
         a.href = URL.createObjectURL(blob)
         a.download = `xiaoxi_memories_${new Date().toISOString().slice(0, 10)}.json`
         a.click()
         setTimeout(() => URL.revokeObjectURL(a.href), 1000)
       })
-      .catch(e => console.warn('[MemoriesPanel] export failed:', e))
+      .catch((e) => console.warn('[MemoriesPanel] export failed:', e))
   }
 
   const saveEdit = (id) => {
@@ -56,20 +54,30 @@ export default function MemoriesPanel({ onClose }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     })
-      .then(res => { if (res.ok) { setEditingId(null); reload() } })
-      .catch(e => console.warn('[MemoriesPanel] edit failed:', e))
+      .then((res) => {
+        if (res.ok) {
+          setEditingId(null)
+          reload()
+        }
+      })
+      .catch((e) => console.warn('[MemoriesPanel] edit failed:', e))
   }
 
   const handleDelete = (id) => {
     if (confirmDelId === id) {
+      clearTimeout(confirmDelTimerRef.current)
       setConfirmDelId(null)
       apiFetch(`/api/memories/${encodeURIComponent(id)}`, { method: 'DELETE' })
-        .then(res => { if (res.ok) reload() })
-        .catch(e => console.warn('[MemoriesPanel] delete failed:', e))
+        .then((res) => {
+          if (res.ok) reload()
+        })
+        .catch((e) => console.warn('[MemoriesPanel] delete failed:', e))
     } else {
+      clearTimeout(confirmDelTimerRef.current)
       setConfirmDelId(id)
       confirmDelTimerRef.current = setTimeout(
-        () => setConfirmDelId(cur => (cur === id ? null : cur)), 2000,
+        () => setConfirmDelId((cur) => (cur === id ? null : cur)),
+        2000
       )
     }
   }
@@ -81,26 +89,37 @@ export default function MemoriesPanel({ onClose }) {
     let cancelled = false
     setLoading(true)
 
-    const load = tab === 'memories'
-      ? apiFetch(showArchived ? '/api/memories?include_archived=1' : '/api/memories')
-          .then(res => (res.ok ? res.json() : { memories: [] }))
-          .then(data => { if (!cancelled) setMemories(Array.isArray(data.memories) ? data.memories : []) })
-      : apiFetch('/api/diaries')
-          .then(res => (res.ok ? res.json() : { diaries: [] }))
-          .then(data => { if (!cancelled) setDiaries(Array.isArray(data.diaries) ? data.diaries : []) })
+    const load =
+      tab === 'memories'
+        ? apiFetch(showArchived ? '/api/memories?include_archived=1' : '/api/memories')
+            .then((res) => (res.ok ? res.json() : { memories: [] }))
+            .then((data) => {
+              if (!cancelled) setMemories(Array.isArray(data.memories) ? data.memories : [])
+            })
+        : apiFetch('/api/diaries')
+            .then((res) => (res.ok ? res.json() : { diaries: [] }))
+            .then((data) => {
+              if (!cancelled) setDiaries(Array.isArray(data.diaries) ? data.diaries : [])
+            })
 
     load
-      .catch(e => console.warn('[MemoriesPanel] fetch failed:', e))
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .catch((e) => console.warn('[MemoriesPanel] fetch failed:', e))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [tab, showArchived, reloadKey])
 
   const items = tab === 'memories' ? memories : diaries
 
   // Esc 关闭（dialog 语义的键盘出口；焦点圈定留待后续完善）
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -110,30 +129,40 @@ export default function MemoriesPanel({ onClose }) {
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
       {/* safe-bottom：面板底部让出 iPhone Home 指示条（env()=0 的环境无影响） */}
-      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
-        ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="小汐的记忆">
-
+      <div
+        className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="小汐的记忆"
+      >
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
             <IconWhale size={16} className="text-strawberry/70" />
-            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">小汐的记忆</h2>
+            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">
+              小汐的记忆
+            </h2>
           </div>
-          <button onClick={onClose} aria-label="关闭记忆" className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2">
+          <button
+            onClick={onClose}
+            aria-label="关闭记忆"
+            className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2"
+          >
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
 
         {/* 记忆 / 日记 切换 */}
         <div className="flex items-center gap-1 px-5 pb-2.5">
-          {TABS.map(t => (
+          {TABS.map((t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ${
                 tab === t.key
                   ? 'bg-strawberry/15 text-raspberry'
-                  : 'text-plum/35 hover:text-plum/55'
+                  : 'text-plum/60 hover:text-plum/80'
               }`}
             >
               {t.label}
@@ -144,17 +173,15 @@ export default function MemoriesPanel({ onClose }) {
               <button
                 onClick={exportMemories}
                 title="把所有记忆导出成一个 JSON 文件，随时带走或备份"
-                className="btn-press text-[11px] px-3 py-1 rounded-full transition-colors text-plum/25 hover:text-plum/45"
+                className="btn-press text-[11px] px-3 py-1 rounded-full transition-colors text-plum/55 hover:text-plum/75"
               >
                 ↧ 导出
               </button>
               <button
-                onClick={() => setShowArchived(v => !v)}
+                onClick={() => setShowArchived((v) => !v)}
                 aria-pressed={showArchived}
                 className={`btn-press text-[11px] px-3 py-1 rounded-full transition-colors ml-auto ${
-                  showArchived
-                    ? 'bg-plum/10 text-plum/60'
-                    : 'text-plum/25 hover:text-plum/45'
+                  showArchived ? 'bg-plum/10 text-plum/60' : 'text-plum/55 hover:text-plum/75'
                 }`}
               >
                 已归档 {showArchived ? '✓' : ''}
@@ -167,13 +194,17 @@ export default function MemoriesPanel({ onClose }) {
           {loading ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
               <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
-              <span className="text-[11px] text-plum/30">正在翻阅{tab === 'memories' ? '记忆' : '日记'}……</span>
+              <span className="text-[11px] text-plum/60">
+                正在翻阅{tab === 'memories' ? '记忆' : '日记'}……
+              </span>
             </div>
           ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
               <IconWhale size={28} className="text-plum/10" />
-              <span className="text-[12px] text-plum/30">
-                {tab === 'memories' ? '还没有记忆呢，和小汐多聊聊吧。' : '小汐还没写过日记，晚上她会自己记一篇的。'}
+              <span className="text-[12px] text-plum/60">
+                {tab === 'memories'
+                  ? '还没有记忆呢，和小汐多聊聊吧。'
+                  : '小汐还没写过日记，晚上她会自己记一篇的。'}
               </span>
             </div>
           ) : tab === 'memories' ? (
@@ -183,17 +214,23 @@ export default function MemoriesPanel({ onClose }) {
                   <div className="border-l-2 border-strawberry/25 pl-3.5 py-0.5">
                     <div className="flex items-start justify-between gap-2">
                       {(item.created_at || item.date) && (
-                        <p className="text-[10px] text-plum/25 mb-1">{item.created_at || item.date}</p>
+                        <p className="text-[10px] text-plum/60 mb-1">
+                          {item.created_at || item.date}
+                        </p>
                       )}
                       {/* 编辑/删除：记忆主权（R4）。冷藏行只读——要改动先回活跃态由小汐来 */}
                       {item.id && item.status !== 'archived' && (
                         <div className="flex gap-1 shrink-0 -mt-0.5">
                           <button
                             onClick={() => {
-                              if (editingId === item.id) { setEditingId(null) }
-                              else { setEditingId(item.id); setEditText(item.content || '') }
+                              if (editingId === item.id) {
+                                setEditingId(null)
+                              } else {
+                                setEditingId(item.id)
+                                setEditText(item.content || '')
+                              }
                             }}
-                            className="btn-press text-[10px] text-plum/35 hover:text-raspberry px-1.5 py-0.5 rounded"
+                            className="btn-press text-[10px] text-plum/60 hover:text-raspberry px-1.5 py-0.5 rounded"
                           >
                             {editingId === item.id ? '收起' : '改改'}
                           </button>
@@ -202,7 +239,7 @@ export default function MemoriesPanel({ onClose }) {
                             className={`btn-press text-[10px] px-1.5 py-0.5 rounded ${
                               confirmDelId === item.id
                                 ? 'text-raspberry bg-strawberry/10'
-                                : 'text-plum/35 hover:text-raspberry'
+                                : 'text-plum/60 hover:text-raspberry'
                             }`}
                           >
                             {confirmDelId === item.id ? '真删？' : '忘掉'}
@@ -214,7 +251,7 @@ export default function MemoriesPanel({ onClose }) {
                       <div className="space-y-1.5">
                         <textarea
                           value={editText}
-                          onChange={e => setEditText(e.target.value)}
+                          onChange={(e) => setEditText(e.target.value)}
                           rows={2}
                           aria-label="编辑记忆内容"
                           className="w-full text-[16px] text-plum/75 leading-[1.8] bg-plum/3 border border-strawberry/25 rounded-lg px-2.5 py-1.5 resize-none focus:outline-none focus:border-strawberry/60"
@@ -260,8 +297,10 @@ export default function MemoriesPanel({ onClose }) {
               {diaries.map((item, i) => (
                 <div key={item.date || i} className="springy">
                   <div className="border-l-2 border-blush/50 pl-3.5 py-0.5">
-                    <p className="text-[10px] text-plum/25 mb-1">{item.title || item.date}</p>
-                    <p className="text-[13px] text-plum/65 leading-[1.8] whitespace-pre-wrap">{item.content}</p>
+                    <p className="text-[10px] text-plum/60 mb-1">{item.title || item.date}</p>
+                    <p className="text-[13px] text-plum/65 leading-[1.8] whitespace-pre-wrap">
+                      {item.content}
+                    </p>
                   </div>
                 </div>
               ))}

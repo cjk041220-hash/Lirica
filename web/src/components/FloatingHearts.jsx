@@ -7,12 +7,12 @@ import { memo } from 'react'
 // prefers-reduced-motion：index.css 里 .ambient-motes { display: none } 整体撤下。
 // 圆点用 radial-gradient 柔边（核心实、边缘虚），不用 filter:blur，省合成层。
 const MOTES = [
-  { left: '10%', size: 12, rgb: '242,120,159', op: 0.42, dur: 16, delay: 2.0  },
-  { left: '26%', size: 8,  rgb: '255,201,163', op: 0.46, dur: 19, delay: 13.0 },
-  { left: '43%', size: 10, rgb: '243,195,214', op: 0.44, dur: 14, delay: 7.0  },
-  { left: '60%', size: 7,  rgb: '242,120,159', op: 0.40, dur: 17, delay: 15.5 },
-  { left: '75%', size: 11, rgb: '233,180,76',  op: 0.44, dur: 18, delay: 4.5  },
-  { left: '89%', size: 9,  rgb: '194,71,123',  op: 0.36, dur: 13, delay: 9.5  },
+  { left: '10%', size: 12, rgb: '242,120,159', op: 0.42, dur: 16, delay: 2.0 },
+  { left: '26%', size: 8, rgb: '255,201,163', op: 0.46, dur: 19, delay: 13.0 },
+  { left: '43%', size: 10, rgb: '243,195,214', op: 0.44, dur: 14, delay: 7.0 },
+  { left: '60%', size: 7, rgb: '242,120,159', op: 0.4, dur: 17, delay: 15.5 },
+  { left: '75%', size: 11, rgb: '233,180,76', op: 0.44, dur: 18, delay: 4.5 },
+  { left: '89%', size: 9, rgb: '194,71,123', op: 0.36, dur: 13, delay: 9.5 },
 ]
 
 function FloatingHearts() {

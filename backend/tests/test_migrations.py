@@ -1,7 +1,6 @@
 """数据库迁移系统测试。"""
-import pytest
 
-from database.migrations import ensure_schema, SCHEMA_VERSION, _get_current_version
+from database.migrations import SCHEMA_VERSION, _get_current_version, ensure_schema
 
 
 async def test_ensure_schema_creates_version_table(tmp_db):
@@ -108,6 +107,7 @@ async def test_migrate_v7_bad_env_ignored(tmp_path, monkeypatch):
 async def test_migrate_v8_creates_tables_idempotent(tmp_path):
     """v8 建 chat_sessions / chat_messages 与两个索引，跑两次不报错（幂等）。"""
     import aiosqlite
+
     from database.migrations import _migrate_v8
 
     conn = await aiosqlite.connect(str(tmp_path / "v8.db"))
@@ -131,6 +131,7 @@ async def test_init_db_fresh_install_seeds(tmp_path, monkeypatch):
     """全新安装 + env：初始行插入后相识日兜底种子生效（覆盖迁移跑在
     初始行之前的顺序坑）。"""
     import aiosqlite
+
     from database.core import init_db
 
     monkeypatch.setenv("XIAOXI_FIRST_MEET", "2025-10-01")

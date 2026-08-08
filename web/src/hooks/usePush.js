@@ -5,10 +5,9 @@ export function usePush() {
   const [subscribed, setSubscribed] = useState(false)
   const [unread, setUnread] = useState([])
   // 环境能力检测：SW + PushManager（HTTP localhost 允许推送；不支持时 UI 显示灰态）
-  const [supported] = useState(() =>
-    typeof navigator !== 'undefined' &&
-    'serviceWorker' in navigator &&
-    'PushManager' in window
+  const [supported] = useState(
+    () =>
+      typeof navigator !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window
   )
   // iOS 16.4+ 的 Web Push 只对「已添加到主屏幕」的 standalone PWA 生效：
   // 普通 Safari 标签页里 PushManager 存在（supported 为 true）但
@@ -17,11 +16,13 @@ export function usePush() {
   const [iosInstallNeeded] = useState(() => {
     if (typeof navigator === 'undefined') return false
     const ua = navigator.userAgent
-    const isIos = /iP(hone|od|ad)/.test(ua) ||
+    const isIos =
+      /iP(hone|od|ad)/.test(ua) ||
       // iPadOS 13+ 伪装成 Mac UA，靠触控点数量识破
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
     if (!isIos) return false
-    const standalone = ('standalone' in navigator && navigator.standalone) ||
+    const standalone =
+      ('standalone' in navigator && navigator.standalone) ||
       window.matchMedia('(display-mode: standalone)').matches
     return !standalone
   })
@@ -36,7 +37,7 @@ export function usePush() {
       const data = await res.json()
       // 函数式更新 + id 浅比较 bail-out：未读没变就不换新引用，
       // 否则 60s 轮询每次都逼整棵 App 重渲染一次（体检 🟠-4）
-      setUnread(prev => {
+      setUnread((prev) => {
         const next = Array.isArray(data.messages) ? data.messages : []
         if (next.length === prev.length && next.every((m, i) => m.id === prev[i].id)) return prev
         return next
@@ -80,7 +81,9 @@ export function usePush() {
         body: JSON.stringify(subscription),
       })
       if (!res.ok) {
-        await subscription.unsubscribe().catch(e => console.warn('[usePush] cleanup subscribe failed:', e))
+        await subscription
+          .unsubscribe()
+          .catch((e) => console.warn('[usePush] cleanup subscribe failed:', e))
         return false
       }
 
@@ -103,11 +106,14 @@ export function usePush() {
         // 后端 DELETE /api/push/subscribe 接受 query 或 body 两种 endpoint。
         // 部分反代/CDN 会剥离 DELETE 请求的 body → 取消订阅静默失败，
         // 故优先走 query，body 一并发送作兼容兜底
-        await apiFetch(`/api/push/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription),
-        })
+        await apiFetch(
+          `/api/push/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`,
+          {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(subscription),
+          }
+        )
         await subscription.unsubscribe()
       }
       setSubscribed(false)
@@ -122,7 +128,7 @@ export function usePush() {
   // 挤占 LIMIT 10 的未读名额，挤掉更新的主动消息
   const markRead = useCallback(async (ids) => {
     if (!Array.isArray(ids) || ids.length === 0) return true
-    setUnread(prev => prev.filter(m => !ids.includes(m.id)))
+    setUnread((prev) => prev.filter((m) => !ids.includes(m.id)))
     try {
       const res = await apiFetch('/api/push/read', {
         method: 'POST',
@@ -141,9 +147,9 @@ export function usePush() {
     checkUnread()
     if (supported) {
       navigator.serviceWorker.ready
-        .then(reg => reg.pushManager.getSubscription())
-        .then(sub => setSubscribed(!!sub))
-        .catch(e => console.warn('[usePush] getSubscription failed:', e))
+        .then((reg) => reg.pushManager.getSubscription())
+        .then((sub) => setSubscribed(!!sub))
+        .catch((e) => console.warn('[usePush] getSubscription failed:', e))
     }
   }, [checkUnread, supported])
 
@@ -189,7 +195,14 @@ export function usePush() {
   }, [checkUnread])
 
   return {
-    supported, iosInstallNeeded, permissionDenied,
-    subscribed, unread, subscribe, unsubscribe, markRead, checkUnread,
+    supported,
+    iosInstallNeeded,
+    permissionDenied,
+    subscribed,
+    unread,
+    subscribe,
+    unsubscribe,
+    markRead,
+    checkUnread,
   }
 }

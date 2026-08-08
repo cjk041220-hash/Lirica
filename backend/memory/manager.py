@@ -21,12 +21,14 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），所有时间戳统一使用此时区
-from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
-from database.core import rows_to_dicts
+from database.core import get_write_lock, rows_to_dicts
 
 # Russell 情绪空间坐标（heartbeat_moods 单持有，本模块只读引用）。
 # 无循环导入：heartbeat_moods 只 import stdlib + utils.logger。
 from heartbeat_moods import MOOD_VECTORS
+from utils.timezone import _TIME_FMT
+from utils.timezone import HKT as _HKT
+from utils.timezone import now_str as _now
 
 # hit_count 按日去重的守卫格式（v14）：HKT 日历日，"%Y-%m-%d"。
 # **不能复用 _TIME_FMT**——那是分钟精度 "%Y-%m-%d %H:%M"，分钟级守卫
@@ -45,8 +47,11 @@ def _escape_like(s: str) -> str:
     category 来自 LLM 工具参数，含下划线的类别名（如 user_info）
     不转义会让 `_` 当单字符通配，匹配语义失控（不是注入风险——
     已参数化——而是召回串味）。
+    实现已上移 database.core.escape_like（events 相似匹配复用），
+    本壳保留模块内既有调用与测试 import 兼容。
     """
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    from database.core import escape_like
+    return escape_like(s)
 
 
 def _parse_time(t: str | None) -> datetime.datetime:
@@ -264,15 +269,18 @@ class MemoryManager:
             return
         today = _today_str()
         placeholders = ",".join("?" for _ in ids)
-        await self._db.execute(
-            f"""UPDATE memories
-                SET hit_count = hit_count + 1, last_hit_date = ?,
-                    last_mention_ts = ?   -- O1：被浮现也是一次提及，续命衰减钟
-                WHERE id IN ({placeholders})
-                  AND COALESCE(last_hit_date, '') != ?""",
-            (today, _now(), *ids, today),
-        )
-        await self._db.commit()
+        # 单语句写也挂逻辑写锁：本连接的 commit 会提交一切进行中的
+        # 序列，持锁保证不与多语句写（superseded 链等）交错
+        async with get_write_lock():
+            await self._db.execute(
+                f"""UPDATE memories
+                    SET hit_count = hit_count + 1, last_hit_date = ?,
+                        last_mention_ts = ?   -- O1：被浮现也是一次提及，续命衰减钟
+                    WHERE id IN ({placeholders})
+                      AND COALESCE(last_hit_date, '') != ?""",
+                (today, _now(), *ids, today),
+            )
+            await self._db.commit()
 
     # ── 写入 ────────────────────────────────────────────────
 
@@ -333,33 +341,35 @@ class MemoryManager:
         now = _now()
         mem_id = uuid.uuid4().hex[:16]
 
-        await self._db.execute(
-            """INSERT INTO memories
-               (id, content, category, created_at, last_used_at, access_count,
-                status, updated_at, source, last_mention_ts, importance,
-                valence, arousal)
-               VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(category, content) WHERE status IN ('active', 'core')
-               DO UPDATE SET
-                   last_used_at = excluded.last_used_at,
-                   updated_at = excluded.updated_at,
-                   last_mention_ts = excluded.last_mention_ts,
-                   valence = excluded.valence,
-                   arousal = excluded.arousal""",
-            (mem_id, content, category, now, now, now, source, now, importance,
-             valence, arousal),
-        )
-        await self._db.commit()
+        # 逻辑写锁：INSERT+commit+读回是一个完整序列，不能与其他写交错
+        async with get_write_lock():
+            await self._db.execute(
+                """INSERT INTO memories
+                   (id, content, category, created_at, last_used_at, access_count,
+                    status, updated_at, source, last_mention_ts, importance,
+                    valence, arousal)
+                   VALUES (?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(category, content) WHERE status IN ('active', 'core')
+                   DO UPDATE SET
+                       last_used_at = excluded.last_used_at,
+                       updated_at = excluded.updated_at,
+                       last_mention_ts = excluded.last_mention_ts,
+                       valence = excluded.valence,
+                       arousal = excluded.arousal""",
+                (mem_id, content, category, now, now, now, source, now, importance,
+                 valence, arousal),
+            )
+            await self._db.commit()
 
-        # 读回实际生效的行（可能是新插入的，也可能是被刷新的既有行），
-        # 返回真实的 id 与 access_count
-        cursor = await self._db.execute(
-            """SELECT * FROM memories
-               WHERE category = ? AND content = ? AND status IN ('active', 'core')""",
-            (category, content),
-        )
-        row = await cursor.fetchone()
-        return rows_to_dicts(cursor, [row])[0]
+            # 读回实际生效的行（可能是新插入的，也可能是被刷新的既有行），
+            # 返回真实的 id 与 access_count
+            cursor = await self._db.execute(
+                """SELECT * FROM memories
+                   WHERE category = ? AND content = ? AND status IN ('active', 'core')""",
+                (category, content),
+            )
+            row = await cursor.fetchone()
+            return rows_to_dicts(cursor, [row])[0]
 
     async def update_content(self, memory_id: str, new_content: str) -> bool:
         """覆盖一条记忆的内容，保留首次时间、记录修改时间，旧文本落历史链。
@@ -375,6 +385,16 @@ class MemoryManager:
         追溯。读面谓词统一 IN('active','core')，superseded 行在日常
         读面自然消失；v10 去重索引同谓词，故重提同内容不被历史行
         阻挡（「忘了又想起」语义不受影响）。
+        """
+        # 逻辑写锁在公共入口获取；upsert_mood_memory 等持锁调用方走内层
+        async with get_write_lock():
+            return await self._update_content_inner(memory_id, new_content)
+
+    async def _update_content_inner(self, memory_id: str, new_content: str) -> bool:
+        """update_content 的锁内实现（调用方必须已持有 get_write_lock）。
+
+        asyncio.Lock 不可重入：upsert_mood_memory 持锁后只能调本方法，
+        调公共入口会死锁。
         """
         # 存储侧时间词归一化（同 add：相对时间词改写为绝对日期）
         from utils.time_words import normalize_time_words
@@ -416,7 +436,7 @@ class MemoryManager:
                WHERE id = ? AND status IN ('active', 'core')""",
             (new_content, now, old_content, now, now, memory_id),
         )
-        await self.compress_history(memory_id)  # O3：链上限压缩（不独立 commit）
+        await self.compress_history(memory_id)  # O3：链上限压缩（锁内被调，不独立 commit/加锁）
         await self._db.commit()
         return cursor.rowcount > 0
 
@@ -447,8 +467,9 @@ class MemoryManager:
         合并按 rowid ASC（插入序）：superseded 行的 created_at 全是本
         记忆最初创建时间（时序诚实），同值无法排序，必须用插入序。
 
-        本方法不 commit（调用方统一提交）：update_content 与
-        consolidate._apply_merge 都在各自事务内调用。
+        本方法不 commit、不加锁（调用方统一提交）：update_content 与
+        consolidate._apply_merge 都在各自持锁事务内调用——asyncio.Lock
+        不可重入，此处再加锁即死锁。
         """
         cursor = await self._db.execute(
             """SELECT id, content, rowid FROM memories
@@ -480,11 +501,12 @@ class MemoryManager:
 
     async def delete(self, memory_id: str) -> bool:
         """删除指定 ID 的记忆。返回是否成功。"""
-        cursor = await self._db.execute(
-            "DELETE FROM memories WHERE id = ?", (memory_id,)
-        )
-        await self._db.commit()
-        return cursor.rowcount > 0
+        async with get_write_lock():
+            cursor = await self._db.execute(
+                "DELETE FROM memories WHERE id = ?", (memory_id,)
+            )
+            await self._db.commit()
+            return cursor.rowcount > 0
 
     async def clear(self) -> int:
         """清空所有记忆（含 archived 冷藏行）。返回清除的条数。
@@ -495,11 +517,12 @@ class MemoryManager:
         backup_before_clear()（其备份同样含 archived，否则冷藏行在
         清空时被永久销毁）。
         """
-        cursor = await self._db.execute("SELECT COUNT(*) FROM memories")
-        count = (await cursor.fetchone())[0]
-        await self._db.execute("DELETE FROM memories")
-        await self._db.commit()
-        return count
+        async with get_write_lock():
+            cursor = await self._db.execute("SELECT COUNT(*) FROM memories")
+            count = (await cursor.fetchone())[0]
+            await self._db.execute("DELETE FROM memories")
+            await self._db.commit()
+            return count
 
     # ── 备份 / 导出 ─────────────────────────────────────────
 
@@ -666,20 +689,21 @@ class MemoryManager:
             # 「今天已被浮现过」的行整行排除，连坐 access_count 不加。
             # access_count 是「被主动想起」的真实信号（排序热度 + core
             # 晋升条件），必须无条件计数；hit 两列走 CASE 条件自增。
-            await self._db.execute(
-                f"""UPDATE memories
-                    SET last_used_at = ?,
-                        access_count = access_count + 1,
-                        hit_count = hit_count + CASE
-                            WHEN COALESCE(last_hit_date, '') != ? THEN 1 ELSE 0 END,
-                        last_hit_date = CASE
-                            WHEN COALESCE(last_hit_date, '') != ? THEN ?
-                            ELSE last_hit_date END,
-                        last_mention_ts = ?   -- O1：主动想起也是提及
-                    WHERE id IN ({placeholders})""",
-                (_now(), today, today, today, _now(), *ids),
-            )
-            await self._db.commit()
+            async with get_write_lock():
+                await self._db.execute(
+                    f"""UPDATE memories
+                        SET last_used_at = ?,
+                            access_count = access_count + 1,
+                            hit_count = hit_count + CASE
+                                WHEN COALESCE(last_hit_date, '') != ? THEN 1 ELSE 0 END,
+                            last_hit_date = CASE
+                                WHEN COALESCE(last_hit_date, '') != ? THEN ?
+                                ELSE last_hit_date END,
+                            last_mention_ts = ?   -- O1：主动想起也是提及
+                        WHERE id IN ({placeholders})""",
+                    (_now(), today, today, today, _now(), *ids),
+                )
+                await self._db.commit()
 
         return matched
 
@@ -884,36 +908,39 @@ class MemoryManager:
         content = f"{now} 起，小汐的心情是「{mood}」"
         vec = MOOD_VECTORS.get(mood, (0.0, 0.0))
 
-        cursor = await self._db.execute(
-            "SELECT content FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
-        )
-        row = await cursor.fetchone()
-
-        if row is None:
-            await self._db.execute(
-                """INSERT INTO memories
-                   (id, content, category, created_at, last_used_at, access_count,
-                    status, updated_at, source, last_mention_ts, importance,
-                    valence, arousal)
-                   VALUES (?, ?, ?, ?, ?, 0, 'core', ?, ?, ?, 5, ?, ?)""",
-                (MOOD_MEMORY_ID, content, MOOD_MEMORY_CATEGORY, now, now,
-                 now, MOOD_MEMORY_SOURCE, now, vec[0], vec[1]),
+        # 逻辑写锁整段持有：SELECT→INSERT/UPDATE→commit 是完整序列；
+        # 内层调 _update_content_inner（公共入口会重入死锁）
+        async with get_write_lock():
+            cursor = await self._db.execute(
+                "SELECT content FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
             )
-            await self._db.commit()
-        else:
-            if row[0] == content:
-                return None  # 同分钟同心情：no-op
-            await self.update_content(MOOD_MEMORY_ID, content)
-            await self._db.execute(
-                "UPDATE memories SET valence = ?, arousal = ? WHERE id = ?",
-                (vec[0], vec[1], MOOD_MEMORY_ID),
-            )
-            await self._db.commit()
+            row = await cursor.fetchone()
 
-        cursor = await self._db.execute(
-            "SELECT * FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
-        )
-        return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
+            if row is None:
+                await self._db.execute(
+                    """INSERT INTO memories
+                       (id, content, category, created_at, last_used_at, access_count,
+                        status, updated_at, source, last_mention_ts, importance,
+                        valence, arousal)
+                       VALUES (?, ?, ?, ?, ?, 0, 'core', ?, ?, ?, 5, ?, ?)""",
+                    (MOOD_MEMORY_ID, content, MOOD_MEMORY_CATEGORY, now, now,
+                     now, MOOD_MEMORY_SOURCE, now, vec[0], vec[1]),
+                )
+                await self._db.commit()
+            else:
+                if row[0] == content:
+                    return None  # 同分钟同心情：no-op
+                await self._update_content_inner(MOOD_MEMORY_ID, content)
+                await self._db.execute(
+                    "UPDATE memories SET valence = ?, arousal = ? WHERE id = ?",
+                    (vec[0], vec[1], MOOD_MEMORY_ID),
+                )
+                await self._db.commit()
+
+            cursor = await self._db.execute(
+                "SELECT * FROM memories WHERE id = ?", (MOOD_MEMORY_ID,)
+            )
+            return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
     async def apply_status_decay(self) -> dict:
         """分层衰减：active→core（高频晋升）/ active→archived（低频遗忘）。
@@ -950,27 +977,31 @@ class MemoryManager:
             now - datetime.timedelta(days=_ARCHIVE_MIN_AGE_DAYS)
         ).strftime(_TIME_FMT)
 
-        cursor = await self._db.execute(
-            """UPDATE memories SET status = 'core'
-               WHERE status = 'active'
-                 AND (access_count >= ? OR hit_count >= ?)
-                 AND created_at <= ?""",
-            (_CORE_MIN_ACCESSES, _CORE_MIN_HITS, core_cutoff),
-        )
-        promoted = cursor.rowcount
-
         exempt = ",".join("?" for _ in _ARCHIVE_EXEMPT_CATEGORIES)
-        cursor = await self._db.execute(
-            f"""UPDATE memories SET status = 'archived'
-                WHERE status = 'active'
-                  AND (access_count + hit_count) <= ?
-                  AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
-                  AND category NOT IN ({exempt})""",
-            (_ARCHIVE_MAX_ACCESSES, archive_cutoff, *_ARCHIVE_EXEMPT_CATEGORIES),
-        )
-        archived = cursor.rowcount
+        # 「晋升+归档」作为一个维护批次整段持锁：两条 UPDATE 虽各自
+        # 原子，但中途被其他写的 commit 截断会让晋升单独落盘——
+        # 见 database.core 逻辑写锁说明
+        async with get_write_lock():
+            cursor = await self._db.execute(
+                """UPDATE memories SET status = 'core'
+                   WHERE status = 'active'
+                     AND (access_count >= ? OR hit_count >= ?)
+                     AND created_at <= ?""",
+                (_CORE_MIN_ACCESSES, _CORE_MIN_HITS, core_cutoff),
+            )
+            promoted = cursor.rowcount
 
-        await self._db.commit()
+            cursor = await self._db.execute(
+                f"""UPDATE memories SET status = 'archived'
+                    WHERE status = 'active'
+                      AND (access_count + hit_count) <= ?
+                      AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
+                      AND category NOT IN ({exempt})""",
+                (_ARCHIVE_MAX_ACCESSES, archive_cutoff, *_ARCHIVE_EXEMPT_CATEGORIES),
+            )
+            archived = cursor.rowcount
+
+            await self._db.commit()
         if promoted or archived:
             log.info("记忆分层衰减：晋升 %d 条 core / 归档 %d 条", promoted, archived)
         return {"promoted": promoted, "archived": archived}

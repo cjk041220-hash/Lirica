@@ -3,21 +3,19 @@
 使用 httpx.ASGITransport 直接对接 FastAPI app，无需启动真实服务器。
 使用 FakeLLM 替代 DeepSeek，确保测试不依赖外部 API。
 """
+import asyncio
 import json
-
-import pytest
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from api.middleware import AuthAndRateLimitMiddleware, RejectWebSocketMiddleware
 from api.routes.chat import router as chat_router
 from api.routes.config import router as config_router
 from api.routes.sessions import router as sessions_router
-
 
 # ── Fake LLM ──────────────────────────────────────────────────
 
@@ -69,7 +67,6 @@ async def integration_app(tmp_db):
     memory_mgr = MemoryManager(tmp_db)
     narrative_builder = NarrativeBuilder(memory_mgr)
 
-    fake_llm = FakeLLM()
 
     # 创建 app
     app = FastAPI()
@@ -121,14 +118,17 @@ async def integration_app(tmp_db):
         return tmp_db
 
     import agent.soul as soul_module
+    import api.routes.chat as chat_route_module
     import heartbeat as hb
     import memory.chat_archive as chat_archive_module
     original_soul_get_db = soul_module.get_db
     original_hb_get_db = hb.get_db
     original_archive_get_db = chat_archive_module.get_db
+    original_chat_get_db = chat_route_module.get_db
     soul_module.get_db = mock_get_db
     hb.get_db = mock_get_db
     chat_archive_module.get_db = mock_get_db
+    chat_route_module.get_db = mock_get_db
 
     # Spec B：care 流水线（care_ledger / chat_messages 时间戳 / 活跃事件）
     # 同样必须接到 tmp_db，否则对话路径会读/写穿生产库
@@ -145,6 +145,7 @@ async def integration_app(tmp_db):
     soul_module.get_db = original_soul_get_db
     hb.get_db = original_hb_get_db
     chat_archive_module.get_db = original_archive_get_db
+    chat_route_module.get_db = original_chat_get_db
     care_module.get_db = original_care_get_db
     events_module.get_db = original_events_get_db
 
@@ -227,6 +228,72 @@ async def test_chat_stream(client):
     assert len(content) > 0
 
 
+async def test_chat_stream_sse_keepalive_ping(client, integration_app, monkeypatch):
+    """静默期应周期性下发 `: ping` 注释行保活（评审 P1-B2）。
+
+    长 LLM 调用（重试链最坏 ~240s 无事件）期间连接完全静默，中间链路
+    会提前掐线。把 ping 间隔缩到 0.05s、上游制造 0.3s 静默，断言流里
+    出现 ping 且真实内容最终照常送达。
+    """
+    import api.routes.chat as chat_mod
+    monkeypatch.setattr(chat_mod, "_SSE_PING_INTERVAL", 0.05)
+
+    async def silent_then_speak(*args, **kwargs):
+        await asyncio.sleep(0.3)  # 模拟 LLM 首跳静默，> 2 个 ping 周期
+        yield {
+            "event": "on_chat_model_stream",
+            "data": {"chunk": type("Chunk", (), {"content": "来啦"})()},
+        }
+
+    integration_app.state.agent.astream_events = silent_then_speak
+    resp = await client.post("/api/chat/stream", json={
+        "message": "在吗", "session_id": "test-ping",
+    })
+    assert resp.status_code == 200
+    body = resp.text
+    assert ": ping" in body
+    assert "来啦" in body
+    assert body.rstrip().endswith("data: [DONE]")
+
+
+async def test_chat_stream_idle_timeout_still_breaks(client, integration_app, monkeypatch):
+    """ping 不重置空闲总闸：累计静默超 _SSE_IDLE_TIMEOUT 仍按断连止损。"""
+    import time
+
+    import api.routes.chat as chat_mod
+    monkeypatch.setattr(chat_mod, "_SSE_PING_INTERVAL", 0.05)
+    monkeypatch.setattr(chat_mod, "_SSE_IDLE_TIMEOUT", 0.15)
+
+    async def never_speaks(*args, **kwargs):
+        await asyncio.sleep(30)
+        yield {"event": "on_chat_model_stream",
+               "data": {"chunk": type("Chunk", (), {"content": "不该到达"})()}}
+
+    integration_app.state.agent.astream_events = never_speaks
+    start = time.monotonic()
+    resp = await client.post("/api/chat/stream", json={
+        "message": "在吗", "session_id": "test-idle-break",
+    })
+    elapsed = time.monotonic() - start
+    assert resp.status_code == 200
+    assert "不该到达" not in resp.text
+    assert resp.text.rstrip().endswith("data: [DONE]")
+    assert elapsed < 5  # 秒级止损，而非等满 30s
+
+
+async def test_health_deep_diagnostics(client):
+    """健康检查已认证分支含心跳与提取水位线诊断字段（评审 P1-B3）。"""
+    resp = await client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    # 测试环境 api_token="" → 视为开发模式已认证，走完整诊断分支
+    assert "heartbeat_running" in data
+    assert "extract_watermark" in data
+    assert "extract_lag" in data
+    assert data["extract_watermark"] == 0   # 空库未跑过提取
+    assert data["extract_lag"] == 0
+
+
 async def test_memories_list(client):
     """GET /api/memories 返回空列表。"""
     resp = await client.get("/api/memories")
@@ -279,6 +346,7 @@ async def test_chat_history_returns_messages(client, integration_app):
     GPS 系统信息后缀应被剥离，纯工具调用的空 AIMessage 应被跳过。
     """
     from types import SimpleNamespace
+
     from langchain_core.messages import AIMessage, HumanMessage
 
     gps_suffix = (
@@ -328,8 +396,8 @@ async def test_auth_401_carries_cors_headers(monkeypatch):
     401 引导流程（UNAUTHORIZED_EVENT → 设置页填令牌）整体失效。
     用真实 create_app 的中间件栈验证（不走 lifespan，不碰 DB）。
     """
-    from config.settings import get_settings
     from api.server import create_app
+    from config.settings import get_settings
 
     s = get_settings()
     monkeypatch.setattr(s, "xiaoxi_api_token", "test-token")
@@ -346,8 +414,8 @@ async def test_auth_401_carries_cors_headers(monkeypatch):
 
 async def test_docs_closed_when_token_set(monkeypatch):
     """设了 token（= 生产意图）→ /docs 自动关闭，避免 API schema 公网裸奔。"""
-    from config.settings import get_settings
     from api.server import create_app
+    from config.settings import get_settings
 
     s = get_settings()
     monkeypatch.setattr(s, "xiaoxi_api_token", "test-token")
@@ -382,6 +450,7 @@ def test_location_suffix_serves_both_tools():
 async def test_chat_injects_time_block_with_period_word(client, integration_app):
     """请求路径注入当前时间块：日期 + 星期 + 时分 + 时段词，与 GPS 同居一块。"""
     import datetime as dt
+
     from utils.timezone import HKT
 
     captured = _install_capturing_stream(integration_app)
@@ -407,6 +476,7 @@ async def test_chat_injects_time_block_with_period_word(client, integration_app)
 async def test_chat_history_strips_time_and_gps_block(client, integration_app):
     """时间行 + GPS 行同居的整块，剥离后历史回显干净（补断言）。"""
     from types import SimpleNamespace
+
     from langchain_core.messages import AIMessage, HumanMessage
 
     combined = (
@@ -434,6 +504,7 @@ async def test_chat_late_night_injects_care_hint_and_records_ledger(
 ):
     """深夜请求：时间块 + 关心提示同居一块；注入即记账（台账落库）。"""
     import datetime as dt
+
     from utils.timezone import HKT
 
     captured = _install_capturing_stream(integration_app)
@@ -464,6 +535,7 @@ async def test_chat_late_night_second_request_cooled_down(
 ):
     """冷却台账生效：72h 内第二个深夜不再注入 late_night 提示。"""
     import datetime as dt
+
     from utils.timezone import HKT
 
     captured = _install_capturing_stream(integration_app)
@@ -488,6 +560,7 @@ async def test_chat_late_night_second_request_cooled_down(
 async def test_chat_daytime_only_time_block(client, integration_app, tmp_db):
     """白天请求：只注入时间块，无关心提示，不落台账。"""
     import datetime as dt
+
     from utils.timezone import HKT
 
     captured = _install_capturing_stream(integration_app)
@@ -512,6 +585,7 @@ async def test_chat_daytime_only_time_block(client, integration_app, tmp_db):
 async def test_chat_care_pipeline_failure_degrades(client, integration_app, monkeypatch):
     """care 读库全炸 → 时间块照注入、提示省略，对话不阻断。"""
     import datetime as dt
+
     from agent import care
     from utils.timezone import HKT
 
@@ -539,6 +613,7 @@ async def test_chat_care_pipeline_failure_degrades(client, integration_app, monk
 async def test_chat_rest_path_also_injects_time_block(client, integration_app):
     """REST /api/chat 与 SSE 共用单一入口：同样带时间块。"""
     import datetime as dt
+
     from utils.timezone import HKT
 
     fake_now = dt.datetime(2026, 8, 5, 15, 0, tzinfo=HKT)

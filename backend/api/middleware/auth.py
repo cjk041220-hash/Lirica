@@ -12,8 +12,8 @@ import time
 
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
-from utils.security import bearer_token_matches as _token_matches
 
+from utils.security import bearer_token_matches as _token_matches
 
 # 受保护的 API 路径前缀（需要 Bearer Token 认证）
 # 新增路由必须在这里登记，否则裸奔无认证（公网部署时是安全漏洞）

@@ -38,16 +38,24 @@ export default function SessionsPanel({ chat, onClose }) {
   useEffect(() => {
     let cancelled = false
     apiFetch('/api/sessions?limit=100')
-      .then(res => (res.ok ? res.json() : { sessions: [] }))
-      .then(data => { if (!cancelled) setSessions(Array.isArray(data.sessions) ? data.sessions : []) })
-      .catch(e => console.warn('[SessionsPanel] fetch failed:', e))
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+      .then((res) => (res.ok ? res.json() : { sessions: [] }))
+      .then((data) => {
+        if (!cancelled) setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+      })
+      .catch((e) => console.warn('[SessionsPanel] fetch failed:', e))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Esc 关闭（同 MemoriesPanel 的 dialog 语义）
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -61,19 +69,24 @@ export default function SessionsPanel({ chat, onClose }) {
   const handleDelete = (e, id) => {
     e.stopPropagation()
     if (confirmId === id) {
+      clearTimeout(confirmTimerRef.current)
       setConfirmId(null)
       apiFetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
-        .then(res => {
+        .then((res) => {
           if (!res.ok) return
-          setSessions(prev => prev.filter(s => s.id !== id))
+          setSessions((prev) => prev.filter((s) => s.id !== id))
           // 删掉的是当前会话 → 开一段新聊天。否则 sessionId 仍指向
           // 已删会话，下一条消息会让它换个标题「自愈复活」在列表里
           if (id === chat.sessionId) chat.newSession()
         })
-        .catch(err => console.warn('[SessionsPanel] delete failed:', err))
+        .catch((err) => console.warn('[SessionsPanel] delete failed:', err))
     } else {
+      clearTimeout(confirmTimerRef.current)
       setConfirmId(id)
-      confirmTimerRef.current = setTimeout(() => setConfirmId(cur => (cur === id ? null : cur)), 2000)
+      confirmTimerRef.current = setTimeout(
+        () => setConfirmId((cur) => (cur === id ? null : cur)),
+        2000
+      )
     }
   }
 
@@ -82,16 +95,26 @@ export default function SessionsPanel({ chat, onClose }) {
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
       {/* safe-bottom：面板底部让出 iPhone Home 指示条（env()=0 的环境无影响） */}
-      <div className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
-        ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="以往的对话">
-
+      <div
+        className="panel-surface panel-enter relative w-full h-[62%] rounded-t-[24px] flex flex-col safe-bottom"
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="以往的对话"
+      >
         <div className="flex items-center justify-between px-5 pt-5 pb-1">
           <div className="flex items-center gap-2">
             <IconHistory size={16} className="text-strawberry/70" />
-            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">以往的对话</h2>
+            <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">
+              以往的对话
+            </h2>
           </div>
-          <button onClick={onClose} aria-label="关闭对话列表" className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2">
+          <button
+            onClick={onClose}
+            aria-label="关闭对话列表"
+            className="btn-press relative w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center after:content-[''] after:absolute after:-inset-2"
+          >
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
@@ -99,7 +122,10 @@ export default function SessionsPanel({ chat, onClose }) {
         {/* 新聊天 */}
         <div className="px-5 pb-2.5">
           <button
-            onClick={() => { chat.newSession(); onClose() }}
+            onClick={() => {
+              chat.newSession()
+              onClose()
+            }}
             className="btn-press text-[11px] px-3 py-1 rounded-full bg-strawberry/15 text-raspberry"
           >
             ＋ 开一段新聊天
@@ -110,12 +136,12 @@ export default function SessionsPanel({ chat, onClose }) {
           {loading ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
               <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
-              <span className="text-[11px] text-plum/30">正在翻找以前的对话……</span>
+              <span className="text-[11px] text-plum/60">正在翻找以前的对话……</span>
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
               <IconWhale size={28} className="text-plum/10" />
-              <span className="text-[12px] text-plum/30">还没有对话呢，去和小汐聊聊吧。</span>
+              <span className="text-[12px] text-plum/60">还没有对话呢，去和小汐聊聊吧。</span>
             </div>
           ) : (
             <div className="space-y-2 pt-1">
@@ -148,7 +174,9 @@ export default function SessionsPanel({ chat, onClose }) {
                           现在
                         </span>
                       )}
-                      <span className="shrink-0 text-[10px] text-plum/30">{fmtTime(s.updated_at)}</span>
+                      <span className="shrink-0 text-[10px] text-plum/60">
+                        {fmtTime(s.updated_at)}
+                      </span>
                       <button
                         aria-label={confirmId === s.id ? '再点一次确认删除' : '删除这段对话'}
                         onClick={(e) => handleDelete(e, s.id)}

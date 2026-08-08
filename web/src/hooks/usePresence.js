@@ -26,8 +26,8 @@ export function usePresence() {
   const [isVisible, setIsVisible] = useState(
     typeof document !== 'undefined' ? !document.hidden : true
   )
-  const idleTimerRef = useRef(null)    // 前台无操作计时器
-  const hiddenTimerRef = useRef(null)  // 页面不可见计时器
+  const idleTimerRef = useRef(null) // 前台无操作计时器
+  const hiddenTimerRef = useRef(null) // 页面不可见计时器
 
   useEffect(() => {
     // 只刷新前台计时器，不唤醒：pointermove 用（入睡后移动鼠标不醒，
@@ -62,12 +62,15 @@ export function usePresence() {
     // 高频事件（pointermove 可达 60+ 次/秒）节流后只刷新计时器，
     // 不唤醒——鼠标划一下不算「回来」，正是此前的横跳主因。
     const events = ['pointerdown', 'keydown', 'touchstart', 'wheel']
-    events.forEach(e => window.addEventListener(e, wake, { passive: true }))
+    events.forEach((e) => window.addEventListener(e, wake, { passive: true }))
 
     let moveTimer = null
     const throttledRefresh = () => {
       if (moveTimer) return
-      moveTimer = setTimeout(() => { moveTimer = null; refreshTimer() }, 500)
+      moveTimer = setTimeout(() => {
+        moveTimer = null
+        refreshTimer()
+      }, 500)
     }
     window.addEventListener('pointermove', throttledRefresh, { passive: true })
     document.addEventListener('visibilitychange', onVisibility)
@@ -75,7 +78,7 @@ export function usePresence() {
     idleTimerRef.current = setTimeout(() => setIsIdle(true), IDLE_MS)
 
     return () => {
-      events.forEach(e => window.removeEventListener(e, wake))
+      events.forEach((e) => window.removeEventListener(e, wake))
       window.removeEventListener('pointermove', throttledRefresh)
       document.removeEventListener('visibilitychange', onVisibility)
       clearTimeout(idleTimerRef.current)

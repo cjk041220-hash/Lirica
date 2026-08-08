@@ -25,15 +25,17 @@ update 覆盖的职责，提示词明令禁止）。
 """
 import datetime
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
+from database.core import get_write_lock
 from memory.extract import _create_llm, _parse_actions
 from memory.manager import MemoryManager
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT
+from utils.timezone import _TIME_FMT
+from utils.timezone import HKT as _HKT
 
 # ── 预算护栏 ──────────────────────────────────────────────────
 _MIN_CATEGORY_SIZE = 8        # 类别至少这么多条才值得整合
@@ -77,13 +79,14 @@ async def _throttle_allowed(conn, now: datetime.datetime) -> bool:
 async def _mark_consolidated(conn, now: datetime.datetime) -> None:
     """记录本次整合时间（ON CONFLICT 只更新 consolidate_ran_at，保留水位线）。"""
     now_str = now.strftime(_TIME_FMT)
-    await conn.execute(
-        """INSERT INTO memory_extract_state (id, last_message_id, consolidate_ran_at)
-           VALUES (1, 0, ?)
-           ON CONFLICT(id) DO UPDATE SET consolidate_ran_at = excluded.consolidate_ran_at""",
-        (now_str,),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        await conn.execute(
+            """INSERT INTO memory_extract_state (id, last_message_id, consolidate_ran_at)
+               VALUES (1, 0, ?)
+               ON CONFLICT(id) DO UPDATE SET consolidate_ran_at = excluded.consolidate_ran_at""",
+            (now_str,),
+        )
+        await conn.commit()
 
 
 async def _apply_merge(mgr: MemoryManager, conn, merge: dict) -> bool:
@@ -104,33 +107,42 @@ async def _apply_merge(mgr: MemoryManager, conn, merge: dict) -> bool:
         return False
 
     placeholders = ",".join("?" for _ in ids)
-    cursor = await conn.execute(
-        f"""SELECT id, category, created_at, rowid FROM memories
-            WHERE id IN ({placeholders}) AND status IN ('active', 'core')""",
-        ids,
-    )
-    rows = await cursor.fetchall()
-    if len(rows) < 2:
-        return False
-    categories = {r[1] for r in rows}
-    if len(categories) != 1:
-        return False  # 跨类别合并不允许（类别是语义边界）
-
-    # survivor = created_at 最早；同分钟打平时按 rowid（真实入库先后）
-    # 决胜——时间戳是分钟精度，同批记忆必然打平，不打平到插入序的话
-    # survivor 会随 uuid 十六进制字典序抽签（IN 查询走 id 索引返回）
-    survivor = min(rows, key=lambda r: (r[2] or "", r[3]))
-    others = [r for r in rows if r[0] != survivor[0]]
-
-    if not await mgr.update_content(survivor[0], content):
-        return False
-    for other in others:
-        await conn.execute(
-            "UPDATE memories SET status = 'superseded', superseded_by = ? WHERE id = ?",
-            (survivor[0], other[0]),
+    # 整段持锁：SELECT 校验+survivor 计算+update+兄弟行落链+压缩+commit
+    # 是一个逻辑写（体检 S3 修复 TOCTOU：此前 SELECT 在锁外，校验与写入
+    # 之间兄弟行可能已被并发整合/删除改写）。锁内只能调
+    # _update_content_inner（公共入口重入即死锁）
+    async with get_write_lock():
+        cursor = await conn.execute(
+            f"""SELECT id, category, created_at, rowid FROM memories
+                WHERE id IN ({placeholders}) AND status IN ('active', 'core')""",
+            ids,
         )
-    await mgr.compress_history(survivor[0])  # O3：合并兄弟行也纳入链上限
-    await conn.commit()
+        rows = await cursor.fetchall()
+        if len(rows) < 2:
+            return False
+        categories = {r[1] for r in rows}
+        if len(categories) != 1:
+            return False  # 跨类别合并不允许（类别是语义边界）
+
+        # survivor = created_at 最早；同分钟打平时按 rowid（真实入库先后）
+        # 决胜——时间戳是分钟精度，同批记忆必然打平，不打平到插入序的话
+        # survivor 会随 uuid 十六进制字典序抽签（IN 查询走 id 索引返回）
+        survivor = min(rows, key=lambda r: (r[2] or "", r[3]))
+        others = [r for r in rows if r[0] != survivor[0]]
+
+        if not await mgr._update_content_inner(survivor[0], content):
+            # 谓词未命中（行被并发改写状态）→ 整组跳过。此前静默返回
+            # False，整笔合并无声失败（体检 S3）；此时兄弟行 UPDATE
+            # 未执行，无半提交状态
+            log.warning("记忆整合：survivor %s 更新失败，跳过本组", survivor[0])
+            return False
+        for other in others:
+            await conn.execute(
+                "UPDATE memories SET status = 'superseded', superseded_by = ? WHERE id = ?",
+                (survivor[0], other[0]),
+            )
+        await mgr.compress_history(survivor[0])  # O3：合并兄弟行也纳入链上限
+        await conn.commit()
     return True
 
 

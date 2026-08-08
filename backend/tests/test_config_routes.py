@@ -10,7 +10,6 @@ async def test_get_runtime_config_defaults():
     否则 GET /api/config 在用户首次配置前会报告与实际不符的状态。
     """
     from api.routes.config import get_runtime_config
-    from providers.deepseek import create_deepseek_llm
 
     cfg = get_runtime_config()
     assert cfg["model"] == "deepseek-v4-flash"
@@ -166,7 +165,9 @@ async def test_heartbeat_refresh_delegates_to_unified_rebuild(monkeypatch):
 async def test_update_config_rolls_back_on_rebuild_failure(monkeypatch):
     """重建失败 → 500 + _runtime_config 回滚旧值（不产生永久性状态漂移）。"""
     from types import SimpleNamespace
+
     from fastapi import HTTPException
+
     from api.routes import config as cfg
 
     original = cfg._runtime_config.copy()
@@ -192,7 +193,9 @@ async def test_update_config_rolls_back_on_rebuild_failure(monkeypatch):
 async def test_update_config_validation_failure_does_not_touch_config(monkeypatch):
     """校验失败（400）不得修改 _runtime_config，也不得触发重建。"""
     from types import SimpleNamespace
+
     from fastapi import HTTPException
+
     from api.routes import config as cfg
 
     original = cfg._runtime_config.copy()

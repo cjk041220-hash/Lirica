@@ -1,13 +1,14 @@
-// v7（体检 06 产品决策与优化）：立绘/图标/清单纳入 install 预缓存——
-// 首次打开页面时 SW 尚未接管，立绘靠 HTTP 缓存，弱网首访可能闪图；
-// 预缓存后首访立绘从 SW 缓存直接出。bump 版本让旧缓存在 activate 时
-// 整体退役（上一版 v6 是展示体自托管取代 Google Fonts 外链）
-const CACHE_NAME = 'xiaoxi-room-v7'
+// v8（评审 F6）：'/' 纳入 install 预缓存——v7 的导航回退 caches.match('/')
+// 只在「成功导航过之后」才有 HTML 可回退，弱网/离线首访完成 SW 安装后
+// navigate 会落空白屏。预缓存 '/' 后首装即有保障。bump 版本退役旧缓存。
+const CACHE_NAME = 'xiaoxi-room-v8'
 
-// install 预缓存清单：立绘（弱网首访闪图的主要来源）+ PWA 图标 + 清单。
+// install 预缓存清单：'/'（离线首访兜底 HTML）+ 立绘（弱网首访闪图的
+// 主要来源）+ PWA 图标 + 清单。
 // addAll 任一失败会拖垮 install（离线首装）→ catch 兜底：预缓存尽力而为，
 // 不因资源失败导致 SW 装不上（fetch 层 cache-first/SWR 策略照常兜底）
 const PRECACHE_URLS = [
+  '/',
   '/sprites/exploring.webp',
   '/sprites/halfawake.webp',
   '/sprites/happy.webp',
@@ -107,7 +108,14 @@ self.addEventListener('fetch', (event) => {
   )
   event.respondWith(
     cacheP.then(cache => cache.match(req)).then(cached =>
-      cached || netP.catch(() => caches.match('/'))
+      // 离线回退按资源类型区分：图片/样式拿到 HTML 兜底毫无意义
+      //（喂给 <img> 只会触发 broken-image），非文档请求离线时返回
+      // 干净的 504，由页面自身的降级逻辑（alt/背景色）接管
+      cached || netP.catch(() =>
+        req.destination === 'document'
+          ? caches.match('/')
+          : Response.error()
+      )
     )
   )
 })

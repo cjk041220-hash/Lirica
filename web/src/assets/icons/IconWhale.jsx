@@ -7,10 +7,25 @@ export default function IconWhale({ size = 20, className = '' }) {
         strokeWidth="1.5"
         strokeLinecap="round"
       />
-      <path d="M7 17.5c-1.5.5-3 .3-4-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M7 17.5c-1.5.5-3 .3-4-1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
       <circle cx="9" cy="12" r="1" fill="currentColor" />
-      <path d="M16 7c.5-1.5 1.5-2.5 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M17.5 8c1-1 2.2-1.5 3.5-1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path
+        d="M16 7c.5-1.5 1.5-2.5 3-3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M17.5 8c1-1 2.2-1.5 3.5-1.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }

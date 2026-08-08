@@ -41,7 +41,9 @@ export default function ConfigPanel({ config, push, onClose }) {
 
   // Esc 关闭（dialog 语义的键盘出口；焦点圈定留待后续完善）
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -54,6 +56,7 @@ export default function ConfigPanel({ config, push, onClose }) {
     setTokenError('')
     if (!trimmed) {
       setTokenSaved(true)
+      clearTimeout(savedTimerRef.current)
       savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
       return
     }
@@ -67,6 +70,7 @@ export default function ConfigPanel({ config, push, onClose }) {
         setTokenError('服务器不认这个令牌——多半是复制时漏了字符，重新完整粘贴一次试试')
       } else {
         setTokenSaved(true)
+        clearTimeout(savedTimerRef.current)
         savedTimerRef.current = setTimeout(() => setTokenSaved(false), 2000)
       }
     } catch {
@@ -84,7 +88,7 @@ export default function ConfigPanel({ config, push, onClose }) {
     setGpsEnabled(next)
   }
 
-  const models = (settings.available_models?.length ? settings.available_models : fallbackModels)
+  const models = settings.available_models?.length ? settings.available_models : fallbackModels
   // 模型卡片短标签：'DeepSeek V4 Flash' → 'V4 Flash'
   const shortLabel = (m) => ((m && (m.name || m.id)) || '').replace(/^DeepSeek\s*/i, '')
   const isCustomIntensity = settings.thinking_intensity === 'custom'
@@ -94,13 +98,21 @@ export default function ConfigPanel({ config, push, onClose }) {
     <div className="absolute inset-0 z-[100] flex items-end">
       <div className="absolute inset-0 bg-plum/15 overlay-enter" onClick={onClose} />
 
-      <div className="panel-surface panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
-        ref={dialogRef} tabIndex={-1}
-        role="dialog" aria-modal="true" aria-label="设置">
-
+      <div
+        className="panel-surface panel-enter relative w-full rounded-t-[24px] p-6 pb-9 max-h-[88%] overflow-y-auto chat-scroll"
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+      >
         <div className="flex items-center justify-between mb-7">
           <h2 className="font-display text-[15px] text-plum leading-tight tracking-wide">设置</h2>
-          <button onClick={onClose} className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center" aria-label="关闭设置">
+          <button
+            onClick={onClose}
+            className="btn-press w-7 h-7 rounded-full bg-plum/5 flex items-center justify-center"
+            aria-label="关闭设置"
+          >
             <IconClose size={13} className="text-plum/50" />
           </button>
         </div>
@@ -109,16 +121,20 @@ export default function ConfigPanel({ config, push, onClose }) {
         <div className="mb-6">
           <label className="text-[11px] text-plum/40 mb-2.5 block tracking-wide">访问令牌</label>
           {needToken && (
-            <p className="text-[11px] text-[#C2477B] mb-2">小汐收到了 401——服务器启用了认证，填一下令牌就能继续聊啦。</p>
+            <p className="text-[11px] text-[#C2477B] mb-2">
+              小汐收到了 401——服务器启用了认证，填一下令牌就能继续聊啦。
+            </p>
           )}
           {tokenError && (
-            <p className="text-[11px] text-[#C2477B] mb-2" role="alert">{tokenError}</p>
+            <p className="text-[11px] text-[#C2477B] mb-2" role="alert">
+              {tokenError}
+            </p>
           )}
           <div className="flex gap-2">
             <input
               type="password"
               value={tokenInput}
-              onChange={e => setTokenInput(e.target.value)}
+              onChange={(e) => setTokenInput(e.target.value)}
               placeholder="本机使用可留空；部署后填 XIAOXI_API_TOKEN"
               className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-plum/3 text-[16px] text-plum/80 placeholder:text-plum/25 outline-none focus:bg-plum/5"
               aria-label="访问令牌"
@@ -128,17 +144,19 @@ export default function ConfigPanel({ config, push, onClose }) {
               disabled={tokenVerifying}
               className="btn-press shrink-0 px-3.5 py-2 rounded-xl bg-strawberry/12 text-raspberry text-[12px] font-medium disabled:opacity-50"
             >
-              {tokenVerifying ? '验证中…' : (tokenSaved ? '已保存' : '保存')}
+              {tokenVerifying ? '验证中…' : tokenSaved ? '已保存' : '保存'}
             </button>
           </div>
-          <p className="text-[10px] text-plum/25 mt-1.5">只保存在你的浏览器里，用于和小汐的服务器核对身份。</p>
+          <p className="text-[10px] text-plum/60 mt-1.5">
+            只保存在你的浏览器里，用于和小汐的服务器核对身份。
+          </p>
         </div>
 
         {/* 模型切换 */}
         <div className="mb-6">
           <label className="text-[11px] text-plum/40 mb-2.5 block tracking-wide">模型</label>
           <div className="flex gap-2.5">
-            {models.map(m => (
+            {models.map((m) => (
               <button
                 key={m.id}
                 onClick={() => updateSetting('model', m.id)}
@@ -148,10 +166,14 @@ export default function ConfigPanel({ config, push, onClose }) {
                     : 'bg-plum/3 border-[1.5px] border-transparent'
                 }`}
               >
-                <span className={`text-[13px] block ${settings.model === m.id ? 'text-strawberry font-medium' : 'text-plum/60'}`}>
+                <span
+                  className={`text-[13px] block ${settings.model === m.id ? 'text-strawberry font-medium' : 'text-plum/60'}`}
+                >
                   {shortLabel(m)}
                 </span>
-                <span className="text-[10px] text-plum/30 mt-0.5 block line-clamp-2">{m.description || m.id}</span>
+                <span className="text-[10px] text-plum/60 mt-0.5 block line-clamp-2">
+                  {m.description || m.id}
+                </span>
               </button>
             ))}
           </div>
@@ -161,10 +183,12 @@ export default function ConfigPanel({ config, push, onClose }) {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2.5">
             <label className="text-[11px] text-plum/40 tracking-wide">回复风格</label>
-            {isCustomIntensity && <span className="text-[10px] text-plum/30">自定义（随温度）</span>}
+            {isCustomIntensity && (
+              <span className="text-[10px] text-plum/60">自定义（随温度）</span>
+            )}
           </div>
           <div className="flex gap-1.5 bg-plum/3 rounded-xl p-1">
-            {styleLevels.map(level => (
+            {styleLevels.map((level) => (
               <button
                 key={level.value}
                 onClick={() => updateSetting('thinking_intensity', level.value)}
@@ -178,20 +202,26 @@ export default function ConfigPanel({ config, push, onClose }) {
               </button>
             ))}
           </div>
-          <p className="text-[10px] text-plum/25 mt-1.5">调节的是回复的随机性与想象力，不是推理时长。</p>
+          <p className="text-[10px] text-plum/60 mt-1.5">
+            调节的是回复的随机性与想象力，不是推理时长。
+          </p>
         </div>
 
         {/* 温度 */}
         <div>
           <div className="flex items-center justify-between mb-2.5">
             <label className="text-[11px] text-plum/40 tracking-wide">温度</label>
-            <span className="text-[11px] text-strawberry font-medium">{temperature.toFixed(1)}</span>
+            <span className="text-[11px] text-strawberry font-medium">
+              {temperature.toFixed(1)}
+            </span>
           </div>
           <input
             type="range"
-            min="0" max="2" step="0.1"
+            min="0"
+            max="2"
+            step="0.1"
             value={temperature}
-            onChange={e => updateSetting('temperature', parseFloat(e.target.value))}
+            onChange={(e) => updateSetting('temperature', parseFloat(e.target.value))}
             className="w-full h-1 rounded-full appearance-none bg-plum/8 accent-strawberry cursor-pointer"
             aria-label="温度"
           />
@@ -206,7 +236,9 @@ export default function ConfigPanel({ config, push, onClose }) {
           <div className="flex items-center justify-between">
             <div className="pr-3">
               <label className="text-[11px] text-plum/40 tracking-wide block">消息通知</label>
-              <span className="text-[10px] text-plum/30 leading-relaxed block mt-0.5">小汐主动找你时，给你递个消息</span>
+              <span className="text-[10px] text-plum/60 leading-relaxed block mt-0.5">
+                小汐主动找你时，给你递个消息
+              </span>
             </div>
             <button
               role="switch"
@@ -227,11 +259,15 @@ export default function ConfigPanel({ config, push, onClose }) {
           </div>
           {/* 三档引导：iOS 未装主屏幕（平台限制订阅必失败）> 权限被拒 > 环境不支持 */}
           {push.iosInstallNeeded ? (
-            <p className="text-[10px] text-plum/25 mt-1.5 leading-relaxed">iPhone 上先用 Safari 的「分享 → 添加到主屏幕」把小汐装好，就能收到她主动找你的通知啦</p>
+            <p className="text-[10px] text-plum/60 mt-1.5 leading-relaxed">
+              iPhone 上先用 Safari 的「分享 → 添加到主屏幕」把小汐装好，就能收到她主动找你的通知啦
+            </p>
           ) : push.permissionDenied ? (
-            <p className="text-[10px] text-plum/25 mt-1.5 leading-relaxed">没拿到通知权限——在浏览器或系统设置里允许通知后，再打开这个开关</p>
+            <p className="text-[10px] text-plum/60 mt-1.5 leading-relaxed">
+              没拿到通知权限——在浏览器或系统设置里允许通知后，再打开这个开关
+            </p>
           ) : !push.supported ? (
-            <p className="text-[10px] text-plum/25 mt-1.5">当前浏览器或环境不支持推送通知</p>
+            <p className="text-[10px] text-plum/60 mt-1.5">当前浏览器或环境不支持推送通知</p>
           ) : null}
         </div>
 
@@ -240,7 +276,9 @@ export default function ConfigPanel({ config, push, onClose }) {
           <div className="flex items-center justify-between">
             <div className="pr-3">
               <label className="text-[11px] text-plum/40 tracking-wide block">位置辅助</label>
-              <span className="text-[10px] text-plum/30 leading-relaxed block mt-0.5">让小汐知道你在哪，查"附近"和早安天气更准</span>
+              <span className="text-[10px] text-plum/60 leading-relaxed block mt-0.5">
+                让小汐知道你在哪，查"附近"和早安天气更准
+              </span>
             </div>
             <button
               role="switch"
@@ -258,7 +296,9 @@ export default function ConfigPanel({ config, push, onClose }) {
               />
             </button>
           </div>
-          <p className="text-[10px] text-plum/25 mt-1.5">坐标只发给小汐的服务器，缓存 30 分钟，不会告诉别人。</p>
+          <p className="text-[10px] text-plum/60 mt-1.5">
+            坐标只发给小汐的服务器，缓存 30 分钟，不会告诉别人。
+          </p>
         </div>
       </div>
     </div>

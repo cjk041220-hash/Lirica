@@ -16,7 +16,7 @@ import datetime
 import pytest
 
 from memory import extract
-from memory.manager import MemoryManager, _MAX_CONTENT_LEN
+from memory.manager import _MAX_CONTENT_LEN, MemoryManager
 from utils.timezone import HKT as _HKT
 
 _TIME_FMT = "%Y-%m-%d %H:%M"
@@ -441,6 +441,46 @@ async def test_extract_char_budget_trims_old_messages(tmp_db, fake_llm):
     assert await extract.get_watermark(tmp_db) == 60
 
 
+# ── 稳态游标（体检 S2：超量消息不再被水位线永久跳过）────────────
+
+
+async def test_extract_steady_state_drains_oldest_first(tmp_db, fake_llm):
+    """稳态超量（水位线 > 0）：从最旧端顺序消化，中间消息零跳过。"""
+    await _seed_messages(tmp_db, [f"消息 {i}" for i in range(60)])
+    fake_llm(text="[]")
+    # 首跑：跳尾语义不变——消费最新 50 条，水位线推到批尾
+    result = await extract.extract_new_memories(tmp_db)
+    assert result["processed"] == 50
+    assert await extract.get_watermark(tmp_db) == 60
+
+    # 稳态再来 60 条（id 61-120）：应消化最旧的 50 条（61-110），
+    # 水位线只推进到 110——修复前的 DESC 跳尾会推到 120，永久跳过 61-110
+    await _seed_messages(tmp_db, [f"新消息 {i}" for i in range(60)])
+    result = await extract.extract_new_memories(tmp_db)
+    assert result["processed"] == 50
+    assert await extract.get_watermark(tmp_db) == 110
+
+    # 再跑：剩余 10 条全部消化，最终追上零跳过
+    result = await extract.extract_new_memories(tmp_db)
+    assert result["processed"] == 10
+    assert await extract.get_watermark(tmp_db) == 120
+
+
+async def test_extract_backlog_safety_valve_jumps_tail(tmp_db, fake_llm):
+    """积压安全阀：稳态 pending > _MAX_BACKLOG 时按首跑跳尾，防追账烧账单。"""
+    await _seed_messages(tmp_db, [f"消息 {i}" for i in range(60)])
+    fake_llm(text="[]")
+    await extract.extract_new_memories(tmp_db)  # 首跑，水位线 60
+    assert await extract.get_watermark(tmp_db) == 60
+
+    # 稳态积压 501 条（> _MAX_BACKLOG=500）→ 跳尾：只消费最新 50 条，
+    # 水位线直接推到 561，中间的旧账不再逐批追
+    await _seed_messages(tmp_db, [f"积压 {i}" for i in range(501)])
+    result = await extract.extract_new_memories(tmp_db)
+    assert result["processed"] == 50
+    assert await extract.get_watermark(tmp_db) == 561
+
+
 # ── 内容长度上限（D4）─────────────────────────────────────────
 
 
@@ -626,7 +666,6 @@ async def test_health_report_warns_stalled_write_path(tmp_db, monkeypatch):
 
 async def test_health_report_warns_stale_with_chats(tmp_db, monkeypatch):
     """告警三态-停滞：超期未写但窗口有对话 → 文本含「停滞」。"""
-    mgr = MemoryManager(tmp_db)
     old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
     await tmp_db.execute(
         "INSERT INTO memories (id, content, category, created_at, status) "

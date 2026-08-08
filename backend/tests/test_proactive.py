@@ -1,12 +1,9 @@
 """主动消息 + Web Push 系统测试。"""
 import datetime
-from datetime import timezone, timedelta
-from unittest.mock import AsyncMock, patch, MagicMock
-
-import pytest
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from utils.timezone import HKT as _HKT
-
 
 # ── 触发条件测试 ──────────────────────────────────────────────
 

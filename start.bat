@@ -1,6 +1,7 @@
 @echo off
 title xiaoxi
 
+REM NOTE: dual of start.sh - keep logic changes in sync between the two
 REM Switch to backend directory
 cd /d "%~dp0backend" 2>nul
 if errorlevel 1 (
@@ -20,7 +21,7 @@ if not exist ".venv\Scripts\python.exe" (
     echo    [...] Creating virtual environment...
     python -m venv .venv
     if errorlevel 1 (
-        echo    [ERR] Failed to create .venv - Python 3.10+ required
+        echo    [ERR] Failed to create .venv - Python 3.12+ required
         pause
         exit /b 1
     )

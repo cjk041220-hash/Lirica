@@ -6,7 +6,6 @@ import aiosqlite
 
 from database.core import prune_checkpoints
 
-
 # 与 langgraph/checkpoint/base/id.py 的 uuid6() 同一时间域
 _GREGORIAN_OFFSET = 0x01B21DD213814000
 

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, memo, Suspense } from 'react'
 import MapNavButtons from './MapNavButtons'
 import TarotCards from './TarotCards'
 
@@ -8,20 +8,37 @@ import TarotCards from './TarotCards'
 const mdComponents = {
   p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="list-disc pl-4 mb-1.5 space-y-0.5 last:mb-0">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal pl-4 mb-1.5 space-y-0.5 last:mb-0">{children}</ol>,
+  ol: ({ children }) => (
+    <ol className="list-decimal pl-4 mb-1.5 space-y-0.5 last:mb-0">{children}</ol>
+  ),
   li: ({ children }) => <li className="leading-[1.65]">{children}</li>,
   strong: ({ children }) => <strong className="font-medium text-plum">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
   h1: ({ children }) => <p className="font-medium mb-1.5">{children}</p>,
   h2: ({ children }) => <p className="font-medium mb-1.5">{children}</p>,
   h3: ({ children }) => <p className="font-medium mb-1">{children}</p>,
-  blockquote: ({ children }) => <blockquote className="border-l-2 border-strawberry/30 pl-2 opacity-75 mb-1.5 last:mb-0">{children}</blockquote>,
-  code: ({ children }) => <code className="bg-plum/5 rounded px-1 py-0.5 text-[13px]">{children}</code>,
-  pre: ({ children }) => <pre className="bg-plum/5 rounded-lg p-2.5 mb-1.5 overflow-x-auto text-[13px] last:mb-0">{children}</pre>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-strawberry/30 pl-2 opacity-75 mb-1.5 last:mb-0">
+      {children}
+    </blockquote>
+  ),
+  code: ({ children }) => (
+    <code className="bg-plum/5 rounded px-1 py-0.5 text-[13px]">{children}</code>
+  ),
+  pre: ({ children }) => (
+    <pre className="bg-plum/5 rounded-lg p-2.5 mb-1.5 overflow-x-auto text-[13px] last:mb-0">
+      {children}
+    </pre>
+  ),
   hr: () => <hr className="border-plum/10 my-2" />,
   a: ({ href, title, children }) => (
-    <a href={href} title={title} target="_blank" rel="noopener noreferrer"
-       className="underline decoration-strawberry/40 hover:decoration-strawberry/80 text-strawberry">
+    <a
+      href={href}
+      title={title}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="underline decoration-strawberry/40 hover:decoration-strawberry/80 text-strawberry"
+    >
       {children}
     </a>
   ),
@@ -30,14 +47,22 @@ const mdComponents = {
       <table className="border-collapse text-[13px]">{children}</table>
     </div>
   ),
-  th: ({ children }) => <th className="border border-plum/10 px-2 py-1 bg-plum/3 text-left font-medium">{children}</th>,
+  th: ({ children }) => (
+    <th className="border border-plum/10 px-2 py-1 bg-plum/3 text-left font-medium">{children}</th>
+  ),
   td: ({ children }) => <td className="border border-plum/10 px-2 py-1">{children}</td>,
 }
 
 // 懒加载：react-markdown 生态按需拉取（见 Markdown.jsx）
 const Markdown = lazy(() => import('./Markdown'))
 
-export default function MessageBubble({ message }) {
+// memo（评审 F1）：流式期间 useChat 每 40ms flush 触发 messages.map
+// 全量重渲染——非流式条目的 message 引用在 flush 时保持稳定
+//（prev.map 只替换流式那条），浅比较 memo 让历史气泡的
+// react-markdown 解析全部 bail-out，只剩流式那条真渲染。
+// 唯一 prop 是 message 对象，mdComponents 是模块级常量，无内联
+// 函数 props，memo 语义安全。
+function MessageBubble({ message }) {
   const { role, content, type } = message
 
   if (type === 'tool_hint') {
@@ -45,13 +70,13 @@ export default function MessageBubble({ message }) {
       <div className="animate-fade-in-up py-1.5 flex items-start gap-2 pl-1">
         <div className="w-1 h-1 rounded-full bg-strawberry/40 mt-1.5 shrink-0" />
         <div className="min-w-0">
-          <p className="text-[11px] text-plum/30 italic">{content}</p>
+          <p className="text-[11px] text-plum/60 italic">{content}</p>
           {message.output && (
             <details className="mt-0.5">
-              <summary className="text-[10px] text-plum/25 cursor-pointer select-none hover:text-plum/40">
+              <summary className="text-[10px] text-plum/55 cursor-pointer select-none hover:text-plum/75">
                 看看找到了什么
               </summary>
-              <p className="text-[10px] text-plum/35 leading-relaxed whitespace-pre-wrap mt-1 bg-plum/3 rounded-lg px-2 py-1.5 max-h-32 overflow-y-auto">
+              <p className="text-[10px] text-plum/60 leading-relaxed whitespace-pre-wrap mt-1 bg-plum/3 rounded-lg px-2 py-1.5 max-h-32 overflow-y-auto">
                 {message.output}
               </p>
             </details>
@@ -80,8 +105,12 @@ export default function MessageBubble({ message }) {
   return (
     <div className="flex animate-fade-in-up">
       <div className="flex gap-2.5 max-w-[85%]">
-        <div className={`w-[2.5px] rounded-full shrink-0 my-1 ${isProactive ? 'bg-strawberry/20' : 'bg-strawberry/45'}`} />
-        <div className={`text-[15px] leading-[1.75] py-0.5 ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}>
+        <div
+          className={`w-[2.5px] rounded-full shrink-0 my-1 ${isProactive ? 'bg-strawberry/20' : 'bg-strawberry/45'}`}
+        />
+        <div
+          className={`text-[15px] leading-[1.75] py-0.5 ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}
+        >
           {isProactive ? (
             <p className="whitespace-pre-wrap">{content}</p>
           ) : (
@@ -97,3 +126,5 @@ export default function MessageBubble({ message }) {
     </div>
   )
 }
+
+export default memo(MessageBubble)

@@ -16,6 +16,7 @@ v2.1 修复：
   （最相关在前），旧版截尾部导致展示的恰是最不相关的 10 条。
 """
 from langchain_core.tools import tool
+
 from memory.manager import MemoryManager
 from utils.errors import log_tool_error
 
@@ -117,7 +118,7 @@ async def update_memory(memory_id: str, new_content: str) -> str:
         if _memory_manager is None:
             return "小汐的记忆盒子还没有打开……"
         if await _memory_manager.update_content(memory_id, new_content):
-            return f"✨ 小汐已经把旧记忆更新成新的啦！"
+            return "✨ 小汐已经把旧记忆更新成新的啦！"
         return "小汐翻了翻，没有找到这段记忆呢……ID 是不是写错了？"
     except Exception as e:
         log_tool_error("update_memory", e)

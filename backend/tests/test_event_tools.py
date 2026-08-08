@@ -195,8 +195,8 @@ async def test_create_event_rejects_past_date(events_tool_db):
 
 async def test_create_event_respects_tombstone(events_tool_db):
     """联动剧本 A 的 LLM 半边：冷冷删过的事件，小汐不再偷偷记回来。"""
-    from utils import events as ev
     from tools.events import create_event
+    from utils import events as ev
 
     saved, _ = await ev.create_event("期中考试", "exam", _d(3))
     await ev.soft_delete_event(saved["id"])
@@ -210,8 +210,8 @@ async def test_create_event_respects_tombstone(events_tool_db):
 
 
 async def test_update_event_happy(events_tool_db):
-    from utils import events as ev
     from tools.events import update_event
+    from utils import events as ev
 
     saved, _ = await ev.create_event("爬山", "trip", _d(10))
     result = await update_event.ainvoke({
@@ -237,8 +237,8 @@ async def test_update_event_not_found_and_readonly(events_tool_db):
 
 
 async def test_delete_event_happy(events_tool_db):
-    from utils import events as ev
     from tools.events import delete_event, list_events
+    from utils import events as ev
 
     saved, _ = await ev.create_event("不去了的约", "appointment", _d(22))
     result = await delete_event.ainvoke({"event_id": saved["id"]})
@@ -269,6 +269,7 @@ async def test_delete_event_not_found_and_readonly(events_tool_db):
 async def test_create_event_normalizes_time_words(events_tool_db):
     """title/memo 里的相对时间词落库前改写为绝对日期（「后天考试」防过期）。"""
     import datetime
+
     from tools.events import create_event
     from utils.timezone import HKT
 
@@ -290,6 +291,7 @@ async def test_create_event_normalizes_time_words(events_tool_db):
 async def test_update_event_normalizes_time_words(events_tool_db):
     """改事件时 memo 同样归一化。"""
     import datetime
+
     from tools.events import create_event, update_event
     from utils.timezone import HKT
 

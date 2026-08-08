@@ -101,7 +101,7 @@ async def test_export_contains_all_columns(client, tmp_db):
     """导出是 SELECT * 全列——source/prev_content/hit_count 等审计字段
     不得从导出漏掉（有人把 SELECT * 改成列清单时这条会红）。"""
     mgr = MemoryManager(tmp_db)
-    saved = await mgr.add("日常", "有来源的记忆", source="chat:s-test")
+    await mgr.add("日常", "有来源的记忆", source="chat:s-test")
 
     r = await client.get("/api/memories/export")
 

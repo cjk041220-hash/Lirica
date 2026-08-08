@@ -13,6 +13,7 @@
 """
 import httpx
 from langchain_core.tools import tool
+
 from config.settings import get_settings
 from memory import location_store
 from utils.errors import log_tool_error
@@ -27,6 +28,16 @@ def set_http_client(client: httpx.AsyncClient):
     """注入共享 HTTP 客户端（在 lifespan 中调用）。"""
     global _shared_client
     _shared_client = client
+
+
+def get_http_client() -> httpx.AsyncClient | None:
+    """读取共享 HTTP 客户端；未注入（测试/脚本直跑）返回 None。
+
+    供 weather / heartbeat / events 等非地图模块复用——共享 client 的
+    持有处是本模块（lifespan 注入点），getter 让其他模块不必各自
+    维护一份「即用即弃」的临时 client（架空连接池）。
+    """
+    return _shared_client
 
 
 class _AmapKeyMissing(Exception):
@@ -271,7 +282,7 @@ async def get_transit_route(origin: str, destination: str, city: str = "香港")
         t = transits[0]
         dur = _to_int(t.get("duration"))
         walk = _to_int(t.get("walking_distance"))
-        result = f"🚇 小汐帮你规划好啦！\n"
+        result = "🚇 小汐帮你规划好啦！\n"
         result += f"💰 约 {t.get('cost','?')} 元  ⏱️ 约 {dur // 60} 分钟"
         if walk:
             result += f"  🚶 {walk}m"

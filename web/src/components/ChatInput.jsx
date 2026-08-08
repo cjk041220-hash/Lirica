@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import Heart from './Heart'
 import IconStop from '../assets/icons/IconStop'
 
-const MAX_LEN = 2000  // 与后端 _MAX_MESSAGE_LENGTH 一致，物理阻断超长输入（否则 422 + 通用错误文案）
+const MAX_LEN = 2000 // 与后端 _MAX_MESSAGE_LENGTH 一致，物理阻断超长输入（否则 422 + 通用错误文案）
 
 export default function ChatInput({ onSend, isStreaming, onStop }) {
   const [text, setText] = useState('')
@@ -31,17 +31,17 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           {text.length}/{MAX_LEN}
         </div>
       )}
-      <div className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
-        focused
-          ? 'bg-white/70 shadow-[0_2px_12px_rgba(242,120,159,0.14)]'
-          : 'bg-white/40'
-      } border border-white/50`}>
+      <div
+        className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
+          focused ? 'bg-white/70 shadow-[0_2px_12px_rgba(242,120,159,0.14)]' : 'bg-white/40'
+        } border border-white/50`}
+      >
         <input
           ref={inputRef}
           type="text"
           value={text}
           maxLength={MAX_LEN}
-          onChange={e => setText(e.target.value)}
+          onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}

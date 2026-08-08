@@ -31,7 +31,7 @@ describe('Markdown 渲染', () => {
   })
 
   it('普通换行文本照常渲染', () => {
-    render(<Markdown>{"第一行\n第二行"}</Markdown>)
+    render(<Markdown>{'第一行\n第二行'}</Markdown>)
     expect(screen.getByText(/第一行/)).toBeTruthy()
   })
 })

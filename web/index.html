@@ -6,7 +6,10 @@
     <!-- iOS 主屏幕图标用专用 180×180（Apple 文档尺寸；192 会被降采样发虚）。
          不透明满铺方图——iOS 自裁超椭圆圆角，透明边在深色壁纸上出白边 -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content：Chromium 系弹键盘时收缩布局
+         视口，配合 ChatPanel 的 visualViewport 监听（iOS Safari 主路径）
+         双保险防软键盘遮挡输入框 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#F2789F" />
     <!-- 展示体「站酷快乐体」已自托管（fontsource 分片包，main.jsx 引入）：
          不再外链 Google Fonts——隐私陪伴应用不该每次加载送出访客 IP，

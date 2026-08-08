@@ -1,11 +1,31 @@
 """天气查询工具 — Open-Meteo 免费 API。"""
+from contextlib import asynccontextmanager
+
 import httpx
 from langchain_core.tools import tool
+
 from utils.errors import log_tool_error, sanitize_sensitive_text
 from utils.logger import get_logger
 from utils.retry import with_retry
 
 log = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _http_client(timeout: float = 10):
+    """天气相关 HTTP 调用统一入口：共享 client 优先，回退临时 client。
+
+    server.py lifespan 会把进程级共享 client 注入 map_tools（连接池
+    复用）；未注入时（测试/脚本直跑）回退「即用即弃」临时 client，
+    行为与旧实现一致。heartbeat 与 events 的天气检测也走这里。
+    """
+    from tools.map_tools import get_http_client  # 函数内 import 防循环
+    shared = get_http_client()
+    if shared is not None:
+        yield shared
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            yield client
 
 # 城市坐标映射（覆盖更多港澳台及大陆城市）
 _CITY_COORDS = {
@@ -168,10 +188,11 @@ async def _resolve_coords(city: str) -> tuple[float | None, float | None, str]:
     # 回退：通过高德地理编码 API 获取坐标
     try:
         from config.settings import get_settings
-        from utils.logger import get_logger
         s = get_settings()
         if s.amap_api_key:
-            async with httpx.AsyncClient(timeout=8) as client:
+            # 走共享 client（体检 S5：此前裸建 AsyncClient，绕过连接池
+            # 复用纪律；共享 client 注入时 timeout 参数被忽略、用共享的）
+            async with _http_client(timeout=8) as client:
                 resp = await client.get(
                     "https://restapi.amap.com/v3/geocode/geo",
                     params={"key": s.amap_api_key, "address": city},
@@ -229,7 +250,7 @@ async def get_weather(
                 f"冷冷可以试试输入更具体的城市名，比如「香港」「北京」「上海」~"
             )
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with _http_client(timeout=10) as client:
             data = await _fetch_open_meteo(client, lat, lon)
 
         current = data.get("current", {})
@@ -274,8 +295,8 @@ async def get_weather(
 
     except httpx.TimeoutException:
         return (
-            f"呜，天气服务响应太慢了，小汐等了好久都没等到……\n"
-            f"冷冷稍等一下再问小汐好不好？"
+            "呜，天气服务响应太慢了，小汐等了好久都没等到……\n"
+            "冷冷稍等一下再问小汐好不好？"
         )
     except httpx.HTTPStatusError as e:
         log_tool_error("get_weather", e)
@@ -286,8 +307,8 @@ async def get_weather(
     except (KeyError, ValueError, TypeError) as e:
         log_tool_error("get_weather", e)
         return (
-            f"小汐拿到了天气数据但是看不懂……映海里的信号好像有点乱，"
-            f"冷冷过一会儿再问问小汐吧~"
+            "小汐拿到了天气数据但是看不懂……映海里的信号好像有点乱，"
+            "冷冷过一会儿再问问小汐吧~"
         )
     except Exception as e:
         log_tool_error("get_weather", e)

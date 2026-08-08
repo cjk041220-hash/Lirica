@@ -1,23 +1,16 @@
 """生理期追踪器测试。"""
-import datetime
-from datetime import timezone, timedelta
-from unittest.mock import patch
 
-import pytest
 
 import database.core as db_core
 from utils.cycle_tracker import (
     add_record,
     delete_record,
-    move_record,
-    update_note,
-    get_records,
     get_cycle_stats,
+    get_records,
+    move_record,
     seed_initial_records,
+    update_note,
 )
-
-from utils.timezone import HKT as _HKT
-
 
 # ── 记录管理 ──────────────────────────────────────────────────
 

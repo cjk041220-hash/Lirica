@@ -5,9 +5,13 @@ export function isValidTarot(t) {
   const { spread_type, cards } = t
   if (spread_type !== 'single' && spread_type !== 'three' && spread_type !== 'celtic') return false
   if (!Array.isArray(cards) || cards.length === 0) return false
-  return cards.every(c =>
-    c && typeof c === 'object'
-    && typeof c.name === 'string' && c.name.length > 0
-    && typeof c.position === 'string' && c.position.length > 0
+  return cards.every(
+    (c) =>
+      c &&
+      typeof c === 'object' &&
+      typeof c.name === 'string' &&
+      c.name.length > 0 &&
+      typeof c.position === 'string' &&
+      c.position.length > 0
   )
 }

@@ -1,8 +1,8 @@
 """DeepSeek Provider — OpenAI 兼容接口。"""
-from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
-from config.settings import get_settings
+from langchain_openai import ChatOpenAI
 
+from config.settings import get_settings
 
 # ── 可用模型列表 ──────────────────────────────────────────────
 

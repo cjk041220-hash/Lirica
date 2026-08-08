@@ -19,10 +19,13 @@ def main():
 
     try:
         import uvicorn
+
+        from config.settings import get_settings
+        s = get_settings()
         uvicorn.run(
             "api.server:app",
-            host="127.0.0.1",
-            port=8000,
+            host=s.xiaoxi_bind_host,
+            port=s.xiaoxi_port,
         )
     except Exception:
         _p("=" * 50)
@@ -33,9 +36,12 @@ def main():
         _p("常见原因：")
         _p("  1. config\\.env 文件中的 API Key 未配置或无效")
         _p("  2. 依赖包缺失 — 请运行: .venv\\Scripts\\pip.exe install -r requirements-dev.txt")
-        _p("  3. 端口 8000 被占用 — 请关闭占用程序后重试")
+        _p("  3. 端口被占用 — 请关闭占用程序后重试，或在 config\\.env 调整 XIAOXI_PORT")
         _p("")
-        input("按 Enter 退出……")
+        try:
+            input("按 Enter 退出……")
+        except EOFError:
+            pass  # stdin 已关闭（管道/无终端场景）时 input 会再抛 EOFError，直接退出即可
         sys.exit(1)
 
 

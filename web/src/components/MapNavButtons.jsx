@@ -15,14 +15,18 @@ export default function MapNavButtons({ nav }) {
       <button
         type="button"
         className="btn-press relative text-[10px] px-2 py-1 rounded-full bg-plum/5 text-plum/40 border border-plum/15 hover:text-plum/60 hover:border-plum/30 select-none"
-        onClick={() => { window.location.href = targets.markerUrl }}
+        onClick={() => {
+          window.location.href = targets.markerUrl
+        }}
       >
         看地图
       </button>
       <button
         type="button"
         className="btn-press relative text-[10px] px-2 py-1 rounded-full bg-strawberry/15 text-raspberry border border-strawberry/30 hover:bg-strawberry/25 select-none"
-        onClick={() => { window.location.href = targets.goUrl }}
+        onClick={() => {
+          window.location.href = targets.goUrl
+        }}
       >
         去这里
       </button>

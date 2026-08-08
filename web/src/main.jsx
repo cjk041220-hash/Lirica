@@ -10,20 +10,26 @@ import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
+// 标签页隐藏 → 暂停全部 CSS 动画（评审 F8，配合 index.css 的
+// html.anim-paused 规则）：后台标签页不再白烧 GPU/电量，
+// 回前台从暂停帧继续。usePresence 的 idle 判定是另一套（立绘状态），
+// 这里只管动画播放态，职责不重叠。
+document.addEventListener('visibilitychange', () => {
+  document.documentElement.classList.toggle('anim-paused', document.hidden)
+})
+
 // Service Worker 只在生产构建注册：sw.js 的缓存策略会干扰开发模式
 // HMR（改动的模块命中旧缓存，改了不生效），且注册错误不该被静默吞掉。
 // dev 环境顺带反注册历史残留的 SW，避免上一次 build 的缓存继续作怪。
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .catch(err => console.warn('[sw] 注册失败:', err))
+      navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('[sw] 注册失败:', err))
     })
   } else {
     navigator.serviceWorker
       .getRegistrations()
-      .then(regs => regs.forEach(r => r.unregister()))
+      .then((regs) => regs.forEach((r) => r.unregister()))
       .catch(() => {})
   }
 }
@@ -33,5 +39,5 @@ createRoot(document.getElementById('root')).render(
     <ErrorBoundary>
       <App />
     </ErrorBoundary>
-  </StrictMode>,
+  </StrictMode>
 )

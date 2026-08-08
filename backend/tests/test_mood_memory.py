@@ -6,8 +6,8 @@ UPDATE 走 superseded 链 → 情绪可回放（history / 导出账本）。
 import pytest
 
 from memory.manager import (
-    MOOD_MEMORY_ID,
     MOOD_MEMORY_CATEGORY,
+    MOOD_MEMORY_ID,
     MOOD_MEMORY_SOURCE,
 )
 

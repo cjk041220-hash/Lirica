@@ -1,11 +1,7 @@
 """日记工具单元测试 — 写入、去重、读取。"""
 import datetime
-from datetime import timezone, timedelta
-
-import pytest
 
 from tools.diary import set_db_conn
-
 from utils.timezone import HKT as _HKT
 
 
@@ -14,9 +10,8 @@ async def test_write_diary_inserts(tmp_db):
     import tools.diary as diary_module
     set_db_conn(tmp_db)
 
-    from tools.diary import write_diary, read_diary
+    from tools.diary import write_diary
 
-    today_title = datetime.datetime.now(_HKT).strftime("%m月%d日")
     result = await write_diary.ainvoke({"content": "今天和冷冷聊了很久"})
     assert "日记" in result
 
@@ -117,6 +112,7 @@ async def test_write_diary_concurrent_same_day_no_integrity_error(tmp_db):
     旧版「先查后插」在并发下有一边会插入冲突，日记被静默丢失。
     """
     import asyncio
+
     import tools.diary as diary_module
 
     set_db_conn(tmp_db)

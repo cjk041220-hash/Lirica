@@ -1,13 +1,12 @@
 """心跳调度器单元测试 — 时段匹配逻辑。"""
-import pytest
 
 from heartbeat import (
-    get_current_period,
-    TIME_PERIODS,
-    LATE_NIGHT,
-    MORNING,
     DAYTIME,
     EVENING,
+    LATE_NIGHT,
+    MORNING,
+    TIME_PERIODS,
+    get_current_period,
 )
 
 
@@ -69,6 +68,7 @@ async def test_check_and_proactive_message_updates_db(tmp_db):
     patch 覆盖，维护腿由 test_backup_rotation/test_backup_permissions 覆盖。
     """
     from unittest.mock import AsyncMock, patch
+
     import heartbeat as hb
 
     async def mock_get_db():
@@ -117,7 +117,9 @@ def test_registered_jobs_are_awaitable():
     丢弃返回的协程对象，任务永不执行。
     """
     import inspect
+
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     import heartbeat as hb
 
     test_scheduler = AsyncIOScheduler()
@@ -145,11 +147,10 @@ def test_registered_jobs_are_awaitable():
 
 async def test_event_watchdog_runs_detectors_and_refreshes():
     """12 点（6 小时检测点）：归档 + 两个检测器都跑，有变动则刷新提示词。"""
-    from unittest.mock import AsyncMock, patch
     import datetime as _dt
-    from datetime import timezone, timedelta
-    import heartbeat as hb
+    from unittest.mock import AsyncMock, patch
 
+    import heartbeat as hb
     from utils.timezone import HKT as _HKT
     fake_now = _dt.datetime(2026, 7, 25, 12, 0, tzinfo=_HKT)  # 12 % 6 == 0
 
@@ -171,11 +172,10 @@ async def test_event_watchdog_runs_detectors_and_refreshes():
 
 async def test_event_watchdog_skips_weather_off_schedule():
     """非 6 小时点不跑天气检测；无变动时不刷新提示词。"""
-    from unittest.mock import AsyncMock, patch
     import datetime as _dt
-    from datetime import timezone, timedelta
-    import heartbeat as hb
+    from unittest.mock import AsyncMock, patch
 
+    import heartbeat as hb
     from utils.timezone import HKT as _HKT
     fake_now = _dt.datetime(2026, 7, 25, 13, 0, tzinfo=_HKT)  # 13 % 6 != 0
 
@@ -194,8 +194,9 @@ async def test_event_watchdog_skips_weather_off_schedule():
 
 async def test_event_watchdog_cycle_drift_alone_triggers_refresh():
     """纯周期漂移（其他检测器全 0，只有 cycle 返回归档数）也刷新提示词。"""
-    from unittest.mock import AsyncMock, patch
     import datetime as _dt
+    from unittest.mock import AsyncMock, patch
+
     import heartbeat as hb
     from utils.timezone import HKT as _HKT
 
@@ -222,6 +223,7 @@ async def test_event_watchdog_cycle_drift_alone_triggers_refresh():
 async def test_daily_diary_writes_entry(tmp_db):
     """自动日记任务：LLM 生成内容写入 diaries 表（当天一篇）。"""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     import heartbeat as hb
 
     fake_llm = MagicMock()
@@ -252,9 +254,8 @@ async def test_daily_diary_writes_entry(tmp_db):
 
 async def test_daily_diary_does_not_overwrite_manual_entry(tmp_db):
     """回归：白天冷冷已让小汐手记过日记时，自动日记追加而不是覆盖。"""
-    from unittest.mock import AsyncMock, MagicMock, patch
     import datetime
-    from datetime import timezone, timedelta
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from utils.timezone import HKT as _HKT
     today = datetime.datetime.now(_HKT).date().isoformat()
@@ -303,8 +304,8 @@ async def test_daily_diary_llm_failure_uses_fallback(tmp_db):
 
 async def test_daily_diary_preserves_manual_title(tmp_db):
     """晚间补记不得覆盖白天手记的自定义标题（此前被「MM月DD日」冲掉）。"""
-    from unittest.mock import AsyncMock, MagicMock, patch
     import datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from utils.timezone import HKT as _HKT
     today = datetime.datetime.now(_HKT).date().isoformat()
@@ -386,6 +387,7 @@ async def test_background_llm_calls_use_runtime_model(tmp_db):
     temperature/max_tokens 保持各任务的轻量值（主动消息 200）。
     """
     from unittest.mock import AsyncMock, MagicMock, patch
+
     import heartbeat as hb
     from api.routes import config as cfg
 
@@ -427,7 +429,9 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
     _try_proactive_message → INSERT proactive_messages）全部走真实代码。
     """
     import asyncio
+
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     import heartbeat as hb
     import utils.web_push as wp
 
@@ -506,8 +510,8 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
 
 async def _should_send_at(tmp_db, monkeypatch, now_dt, seed_offset=None):
     """固定 now_dt + 概率门常开，按 offset 种入上条主动消息（None=无历史）。"""
-    import datetime as dt
     from types import SimpleNamespace
+
     import heartbeat as hb
 
     if seed_offset is not None:
@@ -529,6 +533,7 @@ async def _should_send_at(tmp_db, monkeypatch, now_dt, seed_offset=None):
 async def test_should_send_respects_min_interval(tmp_db, monkeypatch):
     """距上条 3h59m < 4h：白天 + 概率门常开也不发。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 2, 15, 0, tzinfo=hb._HKT)
@@ -540,6 +545,7 @@ async def test_should_send_respects_min_interval(tmp_db, monkeypatch):
 async def test_should_send_after_min_interval(tmp_db, monkeypatch):
     """距上条 4h01m ≥ 4h：白天 + 概率门常开 → 发。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 2, 15, 0, tzinfo=hb._HKT)
@@ -551,6 +557,7 @@ async def test_should_send_after_min_interval(tmp_db, monkeypatch):
 async def test_should_send_quiet_hours(tmp_db, monkeypatch):
     """早 7 点前安静时段：无历史消息也不发（深夜不打扰）。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 2, 6, 30, tzinfo=hb._HKT)
@@ -577,6 +584,7 @@ def test_period_label_boundaries():
 def test_weekend_label():
     """周六/日 → 标签；工作日 → None（固定日期构造，不依赖运行当天）。"""
     import datetime as dt
+
     from heartbeat import weekend_label
     from utils.timezone import HKT
 
@@ -591,10 +599,11 @@ def test_weekend_label():
 async def test_proactive_prompt_mentions_weekend(tmp_db):
     """周六的主动消息 prompt 带周末素材；工作日不带。LLM 全 mock。"""
     import datetime as dt
-    import database.core as db_core
-    import heartbeat
     from types import SimpleNamespace
     from unittest.mock import patch
+
+    import database.core as db_core
+    import heartbeat
     from utils.timezone import HKT
 
     original = db_core._db
@@ -628,10 +637,11 @@ async def test_proactive_message_receives_cycle_event_memo(tmp_db):
     get_active_events 的事件列表注入——memo 里的关心纪律一并带到。
     """
     import datetime as dt
-    import database.core as db_core
-    import heartbeat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import database.core as db_core
+    import heartbeat
     from utils.timezone import HKT
 
     original = db_core._db
@@ -667,10 +677,11 @@ async def test_proactive_message_receives_cycle_event_memo(tmp_db):
 async def test_morning_prompt_mentions_weekend(tmp_db):
     """周六早安 prompt 带「不用上课」素材。LLM/天气/推送全 mock。"""
     import datetime as dt
-    import database.core as db_core
-    import heartbeat
     from types import SimpleNamespace
     from unittest.mock import patch
+
+    import database.core as db_core
+    import heartbeat
     from utils.timezone import HKT
 
     original = db_core._db
@@ -707,7 +718,7 @@ async def test_morning_prompt_mentions_weekend(tmp_db):
 
 def test_gauss_weights_neighbors_preferred():
     """高斯权重：目标点近邻词权重高，远词（跨对径）权重趋零。"""
-    from heartbeat_moods import _gauss_weights, MOOD_VECTORS
+    from heartbeat_moods import MOOD_VECTORS, _gauss_weights
 
     happy = MOOD_VECTORS["开心"]
     weights = _gauss_weights(happy, ["开心", "活泼", "期待", "困倦", "担心"])
@@ -747,8 +758,9 @@ async def test_choose_mood_walk_stays_adjacent(tmp_db):
     失控），本断言开始稳定报警。
     """
     import datetime as dt
-    import heartbeat
     from unittest.mock import patch
+
+    import heartbeat
     from utils.timezone import HKT
 
     leaks = 0
@@ -768,6 +780,7 @@ async def test_choose_mood_walk_stays_adjacent(tmp_db):
 def test_is_morning_reset():
     """早晨锚定判定：6-8 点且当日未重置 → True；其余 False。"""
     import datetime as dt
+
     from heartbeat import _is_morning_reset
 
     now = dt.datetime(2026, 8, 3, 8, 0).strftime("%Y-%m-%d %H:%M")
@@ -781,6 +794,7 @@ def test_is_morning_reset():
 def test_should_hold_mood():
     """最小停留：6h 内换词 → 拦；6h 外 / 早晨锚定 / 同词 / 无历史 → 放行。"""
     import datetime as dt
+
     import heartbeat as hb
     from heartbeat import _should_hold_mood
 
@@ -800,8 +814,9 @@ def test_should_hold_mood():
 async def test_choose_mood_fallback_on_event_failure(tmp_db):
     """事件查询炸了 → 优雅退回均匀随机，返回池内词，不抛。"""
     import datetime as dt
-    import heartbeat
     from unittest.mock import patch
+
+    import heartbeat
     from utils.timezone import HKT
 
     with patch("utils.events.get_active_events", side_effect=RuntimeError("boom")):
@@ -815,10 +830,11 @@ async def test_choose_mood_fallback_on_event_failure(tmp_db):
 async def test_choose_mood_talked_signal_from_chat_messages(tmp_db):
     """O2：talked 信号读 chat_messages（真实对话），不是记忆。"""
     import datetime as dt
-    import heartbeat
-    from memory.manager import MemoryManager
     from types import SimpleNamespace
     from unittest.mock import patch
+
+    import heartbeat
+    from memory.manager import MemoryManager
     from utils.timezone import HKT
 
     now = dt.datetime.now(HKT)
@@ -844,10 +860,11 @@ async def test_choose_mood_talked_signal_from_chat_messages(tmp_db):
 async def test_choose_mood_no_recent_chat_ok(tmp_db):
     """O2：无对话 / 对话超 24h → 不炸，仍正常采样。"""
     import datetime as dt
-    import heartbeat
-    from memory.manager import MemoryManager
     from types import SimpleNamespace
     from unittest.mock import patch
+
+    import heartbeat
+    from memory.manager import MemoryManager
     from utils.timezone import HKT
 
     old = (dt.datetime.now(HKT) - dt.timedelta(hours=25)).strftime("%Y-%m-%d %H:%M")
@@ -870,9 +887,10 @@ async def test_choose_mood_no_recent_chat_ok(tmp_db):
 async def test_choose_mood_chat_query_failure_graceful(tmp_db):
     """O2：has_recent_chat 炸了 → 保持当前词（失败语义同 v2）。"""
     import datetime as dt
-    import heartbeat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import heartbeat
     from utils.timezone import HKT
 
     broken_mgr = SimpleNamespace(has_recent_chat=AsyncMock(side_effect=RuntimeError("db lost")))
@@ -889,10 +907,11 @@ async def test_choose_mood_calls_has_recent_chat(tmp_db):
     """O2 接线：talked 信号来自 has_recent_chat（chat_messages 时间），
     不再读 recent(10) 记忆。"""
     import datetime as dt
-    import heartbeat
-    from memory.manager import MemoryManager
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import heartbeat
+    from memory.manager import MemoryManager
     from utils.timezone import HKT
 
     mgr = MemoryManager(tmp_db)
@@ -963,6 +982,7 @@ async def _run_heartbeat_at(tmp_db, monkeypatch, now_dt, fake_mood):
 async def test_morning_reset_allows_mood_change_and_refreshes_event(tmp_db, monkeypatch):
     """早晨 7 点且昨天切过 → allow_reset=True；换词、刷新 daily_event、更新 mood_changed_at。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 3, 7, 0, tzinfo=hb._HKT)
@@ -984,6 +1004,7 @@ async def test_morning_reset_allows_mood_change_and_refreshes_event(tmp_db, monk
 async def test_morning_already_reset_skips_allow_reset(tmp_db, monkeypatch):
     """早晨 7 点但今天已重置过 → 不传 allow_reset（早晨锚定一天一次）。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 3, 7, 0, tzinfo=hb._HKT)
@@ -998,6 +1019,7 @@ async def test_morning_already_reset_skips_allow_reset(tmp_db, monkeypatch):
 async def test_min_hold_blocks_intraday_mood_change(tmp_db, monkeypatch):
     """日内 2h 前换过词 → 换词被 6h 最小停留拦回；日级事件与时间戳保持。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 3, 10, 0, tzinfo=hb._HKT)
@@ -1017,6 +1039,7 @@ async def test_min_hold_blocks_intraday_mood_change(tmp_db, monkeypatch):
 async def test_min_hold_passes_after_six_hours(tmp_db, monkeypatch):
     """日内 8h 前换过词 → 允许换词；mood_changed_at 刷新；daily_event 仍保持。"""
     import datetime as dt
+
     import heartbeat as hb
 
     now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
@@ -1038,9 +1061,10 @@ async def test_min_hold_passes_after_six_hours(tmp_db, monkeypatch):
 
 async def test_watchdog_isolation_echo_stage(tmp_db):
     """记忆回声段抛异常 → 归档/档案检测照常执行，watchdog 不向外抛。"""
+    from unittest.mock import AsyncMock, patch
+
     import database.core as db_core
     import heartbeat
-    from unittest.mock import AsyncMock, patch
 
     original = db_core._db
     db_core._db = tmp_db
@@ -1064,6 +1088,7 @@ async def test_watchdog_isolation_echo_stage(tmp_db):
 async def test_heartbeat_mood_change_writes_mood_memory(tmp_db, monkeypatch):
     """换词放行（距上次 ≥6h）：心情变化落情绪核心记忆（core 行、固定 id）。"""
     import datetime as dt
+
     import heartbeat as hb
     from memory.manager import MOOD_MEMORY_ID
 
@@ -1090,6 +1115,7 @@ async def test_heartbeat_mood_change_writes_mood_memory(tmp_db, monkeypatch):
 async def test_heartbeat_second_change_grows_chain(tmp_db, monkeypatch):
     """第二次换词：旧心情落 superseded 链（回放账本在心跳链路上成立）。"""
     import datetime as dt
+
     import heartbeat as hb
     from memory.manager import MOOD_MEMORY_ID, MemoryManager
 
@@ -1115,6 +1141,7 @@ async def test_heartbeat_second_change_grows_chain(tmp_db, monkeypatch):
 async def test_heartbeat_no_change_no_mood_memory(tmp_db, monkeypatch):
     """心情词未变：不落情绪记忆（首次部署生命状态行已有 mood 的场景）。"""
     import datetime as dt
+
     import heartbeat as hb
     from memory.manager import MOOD_MEMORY_ID
 
@@ -1136,6 +1163,7 @@ async def test_heartbeat_no_change_no_mood_memory(tmp_db, monkeypatch):
 async def test_heartbeat_hold_blocks_mood_memory(tmp_db, monkeypatch):
     """最小停留拦回的换词：life_state 不变，情绪记忆也不落。"""
     import datetime as dt
+
     import heartbeat as hb
     from memory.manager import MOOD_MEMORY_ID
 
@@ -1158,6 +1186,7 @@ async def test_heartbeat_hold_blocks_mood_memory(tmp_db, monkeypatch):
 async def test_daily_diary_excludes_mood_memory(tmp_db):
     """自动日记素材：情绪核心记忆是小汐自己的账本，不算「冷冷新告诉小汐的事」。"""
     from unittest.mock import AsyncMock, MagicMock, patch
+
     import heartbeat as hb
     from memory.manager import MemoryManager
     from utils.timezone import now_str
@@ -1191,6 +1220,7 @@ async def test_heartbeat_triggers_global_db_connection(tmp_db, monkeypatch):
     修复前提不成立（不触发）时本测试失败，防止未来重构悄悄绕开。
     """
     import datetime as dt
+
     import heartbeat as hb
     from database import core
 
@@ -1238,8 +1268,9 @@ async def test_proactive_prompt_includes_history_tail(tmp_db):
     """patch recent_messages 返回「吵架尾巴」→ prompt 含历史块与
     「递台阶/别装没发生过」引导词（捕获 LLM 入参，不真调模型）。"""
     import datetime as dt
-    import heartbeat
     from unittest.mock import AsyncMock, patch
+
+    import heartbeat
     from utils.timezone import HKT
 
     captured = {}
@@ -1270,8 +1301,9 @@ async def test_proactive_prompt_includes_history_tail(tmp_db):
 
 async def test_proactive_prompt_history_read_failure_degrades(tmp_db):
     """recent_messages 抛异常 → prompt 照常构建、无历史块、消息照常生成。"""
-    import heartbeat
     from unittest.mock import AsyncMock, patch
+
+    import heartbeat
 
     captured = {}
     with patch("providers.deepseek.create_deepseek_llm",
@@ -1288,8 +1320,9 @@ async def test_proactive_prompt_history_read_failure_degrades(tmp_db):
 
 async def test_proactive_prompt_empty_history_no_block(tmp_db):
     """空历史（新库/从未对话）→ prompt 不出现历史块。"""
-    import heartbeat
     from unittest.mock import AsyncMock, patch
+
+    import heartbeat
 
     captured = {}
     with patch("providers.deepseek.create_deepseek_llm",
@@ -1305,10 +1338,11 @@ async def test_proactive_prompt_empty_history_no_block(tmp_db):
 
 async def test_morning_prompt_includes_history_tail(tmp_db):
     """早安对称用例：昨晚的对话尾巴进早安 prompt（「昨晚你们聊到这里」块）。"""
-    import database.core as db_core
-    import heartbeat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import database.core as db_core
+    import heartbeat
 
     original = db_core._db
     db_core._db = tmp_db

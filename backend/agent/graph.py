@@ -12,6 +12,8 @@ v2.2 迁移（修复 P3-2）：
   语义一致（返回 llm_input_messages / RemoveMessage 更新），
   由 _PreModelHookMiddleware 桥接，现有 hook 逻辑与单测零改动。
 """
+import logging
+
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
@@ -20,8 +22,8 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langgraph.graph.state import CompiledStateGraph
 from langchain_core.tools import BaseTool
+from langgraph.graph.state import CompiledStateGraph
 
 from utils.errors import log_tool_error
 from utils.logger import get_logger
@@ -127,18 +129,21 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
         # DEBUG 级（体检杂项）：本钩子每个模型调用前跑一次，工具循环
         # 一轮可达 ~25 次，INFO 会把日志刷爆；调参时临时开 DEBUG 即可。
         # 每用户轮的 session_tools 遥测（chat.py）保留 INFO，那是每轮一次。
-        try:
-            from utils.tokens import count_tokens
-            total = sum(
-                count_tokens(m.content) for m in llm_input
-                if isinstance(getattr(m, "content", ""), str)
-            )
-            log.debug(
-                "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
-                count_tokens(memory_text), total,
-            )
-        except Exception as e:
-            log.warning("token 遥测失败：%s", e)
+        # isEnabledFor 守卫（评审 B8）：DEBUG 关闭时跳过整个 count_tokens
+        # ——tiktoken 是同步 CPU 活，INFO 级别下也每轮全量跑纯属浪费。
+        if log.isEnabledFor(logging.DEBUG):
+            try:
+                from utils.tokens import count_tokens
+                total = sum(
+                    count_tokens(m.content) for m in llm_input
+                    if isinstance(getattr(m, "content", ""), str)
+                )
+                log.debug(
+                    "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
+                    count_tokens(memory_text), total,
+                )
+            except Exception as e:
+                log.warning("token 遥测失败：%s", e)
 
         result = {"llm_input_messages": llm_input}
         if to_remove:

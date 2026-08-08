@@ -59,8 +59,8 @@ async def test_send_push_no_subscriptions(patch_db, vapid_enabled, monkeypatch):
 
 async def test_send_push_vapid_missing_skips(patch_db, monkeypatch):
     """VAPID 密钥未配置时跳过推送。"""
-    from utils import web_push
     from config.settings import get_settings
+    from utils import web_push
 
     s = get_settings()
     monkeypatch.setattr(s, "vapid_public_key", "")

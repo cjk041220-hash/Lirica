@@ -12,7 +12,7 @@ agent/ 与 narrative.py 仍禁止 import 本模块（隔离有 grep 自检）。
 recent_messages 读取异常正常上抛，由调用方降级（历史块可省，消息
 生成不可断）；其余读取 / 删除函数正常上抛，由路由层处理。
 """
-from database.core import get_db
+from database.core import get_db, get_write_lock
 from utils.logger import get_logger
 from utils.timezone import now_str
 
@@ -54,13 +54,16 @@ async def record_user_message(session_id: str, text: str) -> None:
     try:
         now = now_str()
         conn = await get_db()
-        await _upsert_session(conn, session_id, _make_title(text), now)
-        await conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content, created_at) "
-            "VALUES (?, 'user', ?, ?)",
-            (session_id, text, now),
-        )
-        await conn.commit()
+        # 逻辑写锁：upsert 会话行 + 插消息 + commit 是一个序列；
+        # 持锁也防本 commit 截断记忆域进行中的多语句写
+        async with get_write_lock():
+            await _upsert_session(conn, session_id, _make_title(text), now)
+            await conn.execute(
+                "INSERT INTO chat_messages (session_id, role, content, created_at) "
+                "VALUES (?, 'user', ?, ?)",
+                (session_id, text, now),
+            )
+            await conn.commit()
     except Exception:
         log.exception("对话档案写入失败（user, sid=%s）", session_id)
 
@@ -77,13 +80,14 @@ async def record_assistant_message(session_id: str, text: str) -> None:
     try:
         now = now_str()
         conn = await get_db()
-        await _upsert_session(conn, session_id, _make_title(text), now)
-        await conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content, created_at) "
-            "VALUES (?, 'assistant', ?, ?)",
-            (session_id, text, now),
-        )
-        await conn.commit()
+        async with get_write_lock():
+            await _upsert_session(conn, session_id, _make_title(text), now)
+            await conn.execute(
+                "INSERT INTO chat_messages (session_id, role, content, created_at) "
+                "VALUES (?, 'assistant', ?, ?)",
+                (session_id, text, now),
+            )
+            await conn.commit()
     except Exception:
         log.exception("对话档案写入失败（assistant, sid=%s）", session_id)
 
@@ -147,10 +151,11 @@ async def delete_session(session_id: str) -> bool:
     record_* 的 upsert 会让会话行自愈重建。
     """
     conn = await get_db()
-    await conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-    cursor = await conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-    await conn.commit()
-    return cursor.rowcount > 0
+    async with get_write_lock():
+        await conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+        cursor = await conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+        await conn.commit()
+        return cursor.rowcount > 0
 
 
 # ── Spec A：主动消息 / 早安的历史尾巴取面 ─────────────────────

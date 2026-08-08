@@ -6,11 +6,15 @@
 
 const CACHE_KEY = 'xiaoxi-gps'
 const ENABLED_KEY = 'xiaoxi-gps-enabled'
-const CACHE_TTL_MS = 30 * 60 * 1000   // 缓存 30 分钟
-const MAX_AGE_MS = 10 * 60 * 1000     // 允许系统复用 10 分钟内的定位
+const CACHE_TTL_MS = 30 * 60 * 1000 // 缓存 30 分钟
+const MAX_AGE_MS = 10 * 60 * 1000 // 允许系统复用 10 分钟内的定位
 
 export const isGpsEnabled = () => {
-  try { return localStorage.getItem(ENABLED_KEY) !== '0' } catch { return true }
+  try {
+    return localStorage.getItem(ENABLED_KEY) !== '0'
+  } catch {
+    return true
+  }
 }
 
 export const setGpsEnabled = (on) => {
@@ -43,7 +47,9 @@ export function getGpsCoords() {
       try {
         cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
       } catch {
-        try { localStorage.removeItem(CACHE_KEY) } catch {}
+        try {
+          localStorage.removeItem(CACHE_KEY)
+        } catch {}
       }
       if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
         return resolve({ latitude: cached.lat, longitude: cached.lon })
@@ -53,7 +59,10 @@ export function getGpsCoords() {
       // 兜底超时：若浏览器 geolocation 实现有 bug 导致两个回调都不触发，
       // 10s 后 resolve(null) 防止 sendMessage 永远卡在 GPS 获取阶段
       const safety = setTimeout(() => {
-        if (!settled) { settled = true; resolve(null) }
+        if (!settled) {
+          settled = true
+          resolve(null)
+        }
       }, 10_000)
 
       navigator.geolocation.getCurrentPosition(
@@ -63,7 +72,10 @@ export function getGpsCoords() {
           clearTimeout(safety)
           const { latitude, longitude } = pos.coords
           try {
-            localStorage.setItem(CACHE_KEY, JSON.stringify({ lat: latitude, lon: longitude, ts: Date.now() }))
+            localStorage.setItem(
+              CACHE_KEY,
+              JSON.stringify({ lat: latitude, lon: longitude, ts: Date.now() })
+            )
           } catch {}
           resolve({ latitude, longitude })
         },

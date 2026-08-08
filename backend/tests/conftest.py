@@ -1,8 +1,7 @@
 """Shared test fixtures for the XiaoXi backend test suite."""
-import asyncio
 
-import pytest
 import aiosqlite
+import pytest
 
 
 @pytest.fixture
@@ -62,6 +61,7 @@ async def tmp_db(tmp_path):
     await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致，v16 含 mood_changed_at）
     from datetime import datetime
+
     from utils.timezone import HKT as _HKT
     _now = datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
     await conn.execute(

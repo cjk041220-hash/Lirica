@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field
 
 from config.settings import get_settings
 from database.core import get_db
-from utils.web_push import save_subscription
 from utils.logger import get_logger
+from utils.web_push import save_subscription
 
 log = get_logger(__name__)
 
@@ -153,6 +153,7 @@ async def mark_read(req: MarkReadRequest):
         return {"status": "ok", "updated": 0}
 
     import datetime
+
     from utils.timezone import HKT as _HKT
     now = datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
 

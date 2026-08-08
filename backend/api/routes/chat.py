@@ -16,8 +16,10 @@ from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, field_validator
 
+from database.core import get_db
 from heartbeat_moods import period_label
 from memory import chat_archive, location_store
+from memory.extract import get_watermark
 from utils.logger import get_logger
 from utils.timezone import HKT as _HKT
 
@@ -264,6 +266,12 @@ _DISCONNECT_POLL_SECONDS = 1.0
 # （5 分钟）+ 注释留推导。代价是硬断连最坏 5 分钟后才止损——优于
 # 修复前的「永远跑完」。
 _SSE_IDLE_TIMEOUT = 300.0
+# SSE 心跳间隔：长 LLM 调用（重试链最坏 ~240s 静默）期间连接完全
+# 无字节，移动网络/反代常在 60-120s 空闲后静默掐线——前端收到
+# 截断流且无从察觉。每 20s 下发一行 SSE 注释（`: ping`，EventSource
+# 与自家前端解析器天然忽略）保活。注意：ping 不重置上方空闲总闸，
+# 累计静默超 300s 仍按断连止损，语义与原看门狗一致。
+_SSE_PING_INTERVAL = 20.0
 
 
 async def _await_with_disconnect_watch(coro, request: Request, sid: str):
@@ -413,61 +421,92 @@ async def chat_stream(req: ChatRequest, request: Request):
                         _build_config(sid),
                         version="v2",
                     ).__aiter__()
-                    while True:
-                        try:
-                            event = await asyncio.wait_for(
-                                event_iter.__anext__(),
-                                timeout=_SSE_IDLE_TIMEOUT,
-                            )
-                        except StopAsyncIteration:
-                            break
-                        except asyncio.TimeoutError:
-                            log.warning(
-                                "流式生成 %ds 无事件，按断连语义停止 (sid=%s)",
-                                int(_SSE_IDLE_TIMEOUT), sid,
-                            )
-                            break
+                    # 空闲计时起点：每收到真实事件重置；ping 不重置——
+                    # ping 是保活手段，不代表上游有进展，总闸仍看真实静默
+                    idle_start = asyncio.get_running_loop().time()
+                    # __anext__ 包成 task + shield：wait_for 超时只放弃
+                    # 等待、不取消底层迭代——否则首次 ping 就把生成器关掉，
+                    # 后续 __anext__ 直接 StopAsyncIteration，真实内容丢失
+                    pending: asyncio.Task | None = None
+                    try:
+                        while True:
+                            if pending is None:
+                                pending = asyncio.ensure_future(
+                                    event_iter.__anext__()
+                                )
+                            try:
+                                event = await asyncio.wait_for(
+                                    asyncio.shield(pending),
+                                    timeout=_SSE_PING_INTERVAL,
+                                )
+                                pending = None
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                # 先查断连：客户端走了就不必再保活
+                                if await request.is_disconnected():
+                                    log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
+                                    break
+                                idle_for = asyncio.get_running_loop().time() - idle_start
+                                if idle_for >= _SSE_IDLE_TIMEOUT:
+                                    log.warning(
+                                        "流式生成 %ds 无事件，按断连语义停止 (sid=%s)",
+                                        int(idle_for), sid,
+                                    )
+                                    break
+                                yield ": ping\n\n"
+                                continue
 
-                        # 检测客户端是否已断开连接，避免白白消耗 API Token
-                        if await request.is_disconnected():
-                            log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
-                            break
+                            idle_start = asyncio.get_running_loop().time()
 
-                        kind = event.get("event", "")
+                            # 检测客户端是否已断开连接，避免白白消耗 API Token
+                            if await request.is_disconnected():
+                                log.info("客户端已断开，停止流式生成 (sid=%s)", sid)
+                                break
 
-                        if kind == "on_chat_model_stream":
-                            chunk = event.get("data", {}).get("chunk")
-                            if chunk and hasattr(chunk, "content") and chunk.content:
-                                text = chunk.content
-                                if isinstance(text, str) and text:
-                                    chunks.append(text)  # 档案累积，与下发同源
-                                    yield f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
+                            kind = event.get("event", "")
 
-                        elif kind == "on_tool_start":
-                            name = event.get("name", "unknown")
-                            stream_tools.append(name)
-                            # 只下发工具名，不回传完整入参（含坐标/搜索词等，
-                            # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
-                            yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
+                            if kind == "on_chat_model_stream":
+                                chunk = event.get("data", {}).get("chunk")
+                                if chunk and hasattr(chunk, "content") and chunk.content:
+                                    text = chunk.content
+                                    if isinstance(text, str) and text:
+                                        chunks.append(text)  # 档案累积，与下发同源
+                                        yield f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
 
-                        elif kind == "on_tool_end":
-                            name = event.get("name", "unknown")
-                            output = event.get("data", {}).get("output", "")
-                            text, nav, tarot = _tool_end_payload(output)
-                            payload = {
-                                "type": "tool_end",
-                                "name": name,
-                                "output": str(text)[:500],
-                            }
-                            # 地图工具附带目的地信息（GCJ-02 + 名称），
-                            # 前端据此渲染「看地图/去这里」；塔罗附带卡片
-                            # 数据，前端渲染翻牌网格。无 artifact → 不
-                            # 下发对应字段，旧前端忽略未知字段天然兼容
-                            if nav is not None:
-                                payload["nav"] = nav
-                            if tarot is not None:
-                                payload["tarot"] = tarot
-                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                            elif kind == "on_tool_start":
+                                name = event.get("name", "unknown")
+                                stream_tools.append(name)
+                                # 只下发工具名，不回传完整入参（含坐标/搜索词等，
+                                # 缩小 SSE 信息暴露面；前端也只用 name 做状态提示）
+                                yield f"data: {json.dumps({'type': 'tool_start', 'name': name}, ensure_ascii=False)}\n\n"
+
+                            elif kind == "on_tool_end":
+                                name = event.get("name", "unknown")
+                                output = event.get("data", {}).get("output", "")
+                                text, nav, tarot = _tool_end_payload(output)
+                                payload = {
+                                    "type": "tool_end",
+                                    "name": name,
+                                    "output": str(text)[:500],
+                                }
+                                # 地图工具附带目的地信息（GCJ-02 + 名称），
+                                # 前端据此渲染「看地图/去这里」；塔罗附带卡片
+                                # 数据，前端渲染翻牌网格。无 artifact → 不
+                                # 下发对应字段，旧前端忽略未知字段天然兼容
+                                if nav is not None:
+                                    payload["nav"] = nav
+                                if tarot is not None:
+                                    payload["tarot"] = tarot
+                                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                    finally:
+                        # 断连/空闲止损 break 时 shield 保护的迭代 task 仍
+                        # 在跑（LLM 调用继续烧 token）——取消它；正常消费完
+                        #（pending=None）则无操作。cancel 不等待收尾：
+                        # 生成器 aclose 由事件循环回收，此处不阻塞 [DONE]
+                        if pending is not None and not pending.done():
+                            pending.cancel()
 
                     yield "data: [DONE]\n\n"
                 finally:
@@ -537,12 +576,40 @@ async def health(request: Request):
         except Exception as e:
             log.warning("记忆计数获取失败：%s", e)
 
+    # 深度诊断：心跳调度器 + 记忆提取水位线滞后量。
+    # 旧版只看 checkpointer 非 None（MemorySaver 兜底后恒真），DB 挂掉、
+    # 心跳停了、提取卡死全都报健康——compose 探针失去意义。每项独立
+    # try 降级：诊断字段缺失不应拖垮健康检查本身。
+    heartbeat_running = None
+    try:
+        import heartbeat
+        heartbeat_running = bool(heartbeat.scheduler.running)
+    except Exception as e:
+        log.warning("心跳状态获取失败：%s", e)
+
+    extract_watermark = None
+    extract_lag = None
+    try:
+        # get_db / get_watermark 走模块级 import，测试可仿
+        # chat_archive.get_db 的 patch 姿势接到 tmp_db，不碰生产库
+        conn = await get_db()
+        extract_watermark = await get_watermark(conn)
+        cursor = await conn.execute("SELECT MAX(id) FROM chat_messages")
+        row = await cursor.fetchone()
+        latest_id = (row[0] or 0) if row else 0
+        extract_lag = max(0, latest_id - extract_watermark)
+    except Exception as e:
+        log.warning("提取水位线获取失败：%s", e)
+
     return {
         "status": "ok" if checkpointer is not None else "degraded",
         "name": "小汐",
         "mood": "开心" if checkpointer is not None else "还在睡……",
         "tools": [t.name for t in tools],
         "memory_count": memory_count,
+        "heartbeat_running": heartbeat_running,
+        "extract_watermark": extract_watermark,
+        "extract_lag": extract_lag,
     }
 
 

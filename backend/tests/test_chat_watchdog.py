@@ -10,8 +10,8 @@ import time
 import pytest
 
 from api.routes.chat import (
-    _await_with_disconnect_watch,
     _SSE_IDLE_TIMEOUT,
+    _await_with_disconnect_watch,
 )
 
 

@@ -49,7 +49,8 @@ async def test_build_respects_max_items(memory_mgr):
 async def test_build_query_surfaces_topic_memory(memory_mgr, tmp_db):
     """build(query=) 话题条件召回：聊到什么，相关的旧记忆就浮现。"""
     import datetime
-    from utils.timezone import HKT, _TIME_FMT
+
+    from utils.timezone import _TIME_FMT, HKT
 
     await memory_mgr.add("去过的地方", "冷冷去年去过台北")
     old = (datetime.datetime.now(HKT) - datetime.timedelta(days=20)).strftime(_TIME_FMT)
@@ -132,6 +133,7 @@ async def test_build_hybrid_surfaces_old_hot_memory(memory_mgr, tmp_db):
     import datetime
     import uuid
     from datetime import timedelta
+
     from utils.timezone import HKT as _HKT
     now = datetime.datetime.now(_HKT)
 

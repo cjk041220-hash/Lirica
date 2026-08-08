@@ -9,16 +9,21 @@ import { isValidTarot } from '../utils/tarot'
 // 冻结界面十几秒。此情形改走 XHR onprogress 增量读取（该 API WebKit
 // 一直支持）。无可靠特性检测（旧版有 ReadableStream 但不增量吐），
 // 只能 UA 判版本。ua 可注入，留给将来单测。
-export function needsXhrStreaming(ua = typeof navigator !== 'undefined' ? navigator.userAgent : '') {
-  const isIOS = /iP(hone|od|ad)/.test(ua) ||
+export function needsXhrStreaming(
+  ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+) {
+  const isIOS =
+    /iP(hone|od|ad)/.test(ua) ||
     // iPadOS 13+ 伪装成 Mac UA，靠触控点数量识破
-    (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    (typeof navigator !== 'undefined' &&
+      navigator.platform === 'MacIntel' &&
+      navigator.maxTouchPoints > 1)
   if (!isIOS) return false
-  if (/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua)) return false  // 第三方 iOS 浏览器不在本次兜底范围
+  if (/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua)) return false // 第三方 iOS 浏览器不在本次兜底范围
   if (!/Safari/.test(ua)) return false
   const m = ua.match(/OS (\d+)_(\d+)/)
   if (!m) return false
-  return (+m[1] + +m[2] / 100) < 17.4
+  return +m[1] + +m[2] / 100 < 17.4
 }
 
 let msgId = 0
@@ -53,7 +58,7 @@ const toolHints = [
   { match: /tarot/i, text: '小汐在洗塔罗牌……' },
 ]
 const hintFor = (name) =>
-  toolHints.find(h => h.match.test(name || ''))?.text || '小汐在忙一会儿……'
+  toolHints.find((h) => h.match.test(name || ''))?.text || '小汐在忙一会儿……'
 
 // 工具结果摘要：原始输出较长，气泡里只折叠展示一小段
 const summarizeOutput = (output) => {
@@ -70,7 +75,7 @@ export function useChat() {
   // useCallback，外部拿不到回调，只能走这种返回值通道
   const [lastDoneAt, setLastDoneAt] = useState(0)
   const abortRef = useRef(null)
-  const happyTimerRef = useRef(null)  // 「刚聊完→开心」的回落定时器
+  const happyTimerRef = useRef(null) // 「刚聊完→开心」的回落定时器
   // 会话 ID：state（供 SessionsPanel 高亮当前会话）+ 镜像 ref
   //（sendMessage/stopStreaming 等零依赖回调里读 ref，避免闭包过期值）
   const [sessionId, _setSessionId] = useState(getSessionId)
@@ -88,9 +93,10 @@ export function useChat() {
   // 建立、还没有新消息）回退 checkpoint 历史兜底
   const loadHistory = useCallback(async () => {
     const sid = sessionIdRef.current
-    const toLocal = (list) => (list || [])
-      .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
-      .map(m => ({ id: nextId(), role: m.role, content: m.content }))
+    const toLocal = (list) =>
+      (list || [])
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map((m) => ({ id: nextId(), role: m.role, content: m.content }))
 
     let history = []
     try {
@@ -109,13 +115,15 @@ export function useChat() {
     }
     if (history.length === 0) return
     // 仅在当前为空时注入，避免覆盖已到达的主动消息
-    setMessages(prev => (prev.length === 0 ? history : prev))
+    setMessages((prev) => (prev.length === 0 ? history : prev))
     // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
-    setUserMsgCount(history.filter(m => m.role === 'user').length)
+    setUserMsgCount(history.filter((m) => m.role === 'user').length)
   }, [])
 
   // 挂载时拉一次历史
-  useEffect(() => { loadHistory() }, [loadHistory])
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
 
   // 卸载时清掉「开心回落」定时器（防微杜渐：App 根组件永不卸载，但 hook 应保持自洽）
   useEffect(() => () => clearTimeout(happyTimerRef.current), [])
@@ -130,20 +138,23 @@ export function useChat() {
     // 否则用户在 GPS 获取期间的停止操作会因 abortRef 为空而丢失。
     const controller = new AbortController()
     abortRef.current = controller
-    const myEpoch = epochRef.current  // 本次发送所属的会话纪元
+    const myEpoch = epochRef.current // 本次发送所属的会话纪元
 
     // 添加用户消息
     const userMsg = { id: nextId(), role: 'user', content: text }
-    setMessages(prev => [...prev, userMsg])
+    setMessages((prev) => [...prev, userMsg])
     // 深夜唤醒序列：记录用户发送的消息数
-    setUserMsgCount(c => c + 1)
+    setUserMsgCount((c) => c + 1)
     setIsStreaming(true)
     clearTimeout(happyTimerRef.current)
     setCharacterState('listening')
 
     const assistantId = nextId()
     // 添加空的助手消息占位
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', streaming: true }])
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: 'assistant', content: '', streaming: true },
+    ])
 
     // 只有流正常读完才算「聊成功」—— 401 / 网络错误 / 中断都不算，
     // 失败时立绘不演开心（气泡报错 + 立绘卖萌是情绪错位）。
@@ -155,20 +166,29 @@ export function useChat() {
     // setMessages + 全列表重渲染 + Markdown 重渲染。
     let contentBuffer = ''
     let flushTimer = null
+    // 流式打字的呼吸节奏（U2）：匀速 40ms 打印像机器倒字——按刚
+    // 展示内容的句读决定下一次 flush 的停顿：句读长停（200ms，
+    // 句号/问号/感叹号/省略号/换行），短读小停（120ms，逗号/顿号/
+    // 分号），其余保持 40ms。状态机只在这一层，不动传输与缓冲结构
+    let nextFlushDelay = 40
     const flush = () => {
       flushTimer = null
       if (!contentBuffer) return
       const chunk = contentBuffer
       contentBuffer = ''
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === assistantId ? { ...m, content: m.content + chunk } : m
-        )
+      const tail = chunk.slice(-1)
+      nextFlushDelay = '。！？!?…～~\n'.includes(tail)
+        ? 200
+        : '，、；：,;'.includes(tail)
+          ? 120
+          : 40
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + chunk } : m))
       )
     }
     const scheduleFlush = () => {
       if (flushTimer) return
-      flushTimer = setTimeout(flush, 40)
+      flushTimer = setTimeout(flush, nextFlushDelay)
     }
 
     try {
@@ -200,7 +220,7 @@ export function useChat() {
 
       let buffer = ''
       let streamDone = false
-      let streamError = false  // 收到 type=error 事件 → 本轮不算成功
+      let streamError = false // 收到 type=error 事件 → 本轮不算成功
 
       // 共享行解析：fetch（增量 reader）与 XHR（onprogress 增量）都把
       // 文本片段喂进来，SSE 行语义一处维护，两传输行为完全一致
@@ -224,13 +244,16 @@ export function useChat() {
 
             // 工具调用事件（v0.4.5：后端不再下发入参，只有工具名）
             if (parsed.type === 'tool_start') {
-              setMessages(prev => [...prev, {
-                id: nextId(),
-                role: 'system',
-                type: 'tool_hint',
-                toolName: parsed.name,
-                content: hintFor(parsed.name),
-              }])
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: nextId(),
+                  role: 'system',
+                  type: 'tool_hint',
+                  toolName: parsed.name,
+                  content: hintFor(parsed.name),
+                },
+              ])
               setCharacterState('thinking')
               continue
             }
@@ -245,9 +268,13 @@ export function useChat() {
               // 一次 setMessages 挂 output/nav/tarot——二次挂载会被
               // !prev[i].output 挡掉，必须一次到位保证「有卡片就有数据」的原子性
               if (output || nav || tarot) {
-                setMessages(prev => {
+                setMessages((prev) => {
                   for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i].type === 'tool_hint' && prev[i].toolName === parsed.name && !prev[i].output) {
+                    if (
+                      prev[i].type === 'tool_hint' &&
+                      prev[i].toolName === parsed.name &&
+                      !prev[i].output
+                    ) {
                       const updated = [...prev]
                       updated[i] = {
                         ...updated[i],
@@ -276,10 +303,10 @@ export function useChat() {
             if (parsed.type === 'error') {
               streamError = true
               streamDone = true
-              flush()  // 先把缓冲的内容提交，再拼错误文案
+              flush() // 先把缓冲的内容提交，再拼错误文案
               const msg = parsed.content || '……小汐好像遇到了什么问题。'
-              setMessages(prev =>
-                prev.map(m =>
+              setMessages((prev) =>
+                prev.map((m) =>
                   m.id === assistantId
                     ? { ...m, content: m.content ? m.content + '\n\n（' + msg + '）' : msg }
                     : m
@@ -303,8 +330,8 @@ export function useChat() {
       // 401 提示（fetch 路径经 apiFetch 已广播 UNAUTHORIZED_EVENT，
       // XHR 绕过统一请求层，需手工补发同一事件）
       const showUnauthorized = (dispatchEvent) => {
-        setMessages(prev =>
-          prev.map(m =>
+        setMessages((prev) =>
+          prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: '呜……门没开。先在右上角设置里填一下访问令牌，再来找小汐玩吧。' }
               : m
@@ -324,10 +351,15 @@ export function useChat() {
           const token = getToken()
           if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
           let seen = 0
-          let xhrStopped = false  // [DONE] 早停 / 401 / 错误中止 → 区别于用户停止
+          let xhrStopped = false // [DONE] 早停 / 401 / 错误中止 → 区别于用户停止
           let talking = false
           xhr.onprogress = () => {
-            if (xhr.status === 401) { unauthorized = true; xhrStopped = true; xhr.abort(); return }
+            if (xhr.status === 401) {
+              unauthorized = true
+              xhrStopped = true
+              xhr.abort()
+              return
+            }
             if (xhr.status >= 400) {
               // reject 必须先于 abort：abort 在个别浏览器同步触发 onabort，
               // 若顺序颠倒 Promise 会先被 resolve 吞掉错误
@@ -336,14 +368,26 @@ export function useChat() {
               xhr.abort()
               return
             }
-            if (!talking) { setCharacterState('talking'); talking = true }
-            feed(xhr.responseText.slice(seen))
-            seen = xhr.responseText.length
-            if (streamDone) { xhrStopped = true; xhr.abort() }  // [DONE] 后早停，不等关流
+            if (!talking) {
+              setCharacterState('talking')
+              talking = true
+            }
+            // responseText 每次访问都会全量重解码，单次读取入局部变量
+            // 避免 slice+length 双重解码（长流下类 O(n²)）
+            const text = xhr.responseText
+            if (text.length > seen) {
+              feed(text.slice(seen))
+              seen = text.length
+            }
+            if (streamDone) {
+              xhrStopped = true
+              xhr.abort()
+            } // [DONE] 后早停，不等关流
           }
           xhr.onload = () => {
             if (xhrStopped) return
-            feed(xhr.responseText.slice(seen))  // 收尾残段
+            const text = xhr.responseText
+            if (text.length > seen) feed(text.slice(seen)) // 收尾残段
             resolve()
           }
           xhr.onerror = () => reject(new Error('network'))
@@ -356,7 +400,10 @@ export function useChat() {
           controller.signal.addEventListener('abort', () => xhr.abort())
           xhr.send(body)
         })
-        if (unauthorized) { showUnauthorized(true); return }
+        if (unauthorized) {
+          showUnauthorized(true)
+          return
+        }
       } else {
         const res = await apiFetch('/api/chat/stream', {
           method: 'POST',
@@ -366,7 +413,10 @@ export function useChat() {
         })
 
         // 401：需要访问令牌
-        if (res.status === 401) { showUnauthorized(false); return }
+        if (res.status === 401) {
+          showUnauthorized(false)
+          return
+        }
 
         // 非 2xx（含限流 429 等）直接走错误兜底
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -392,7 +442,9 @@ export function useChat() {
             flush()
           }
           if (parsed.type === 'error') streamError = true
-        } catch { /* 非完整 JSON 行，丢弃 */ }
+        } catch {
+          /* 非完整 JSON 行，丢弃 */
+        }
       }
       // 早断检测：流读完（done）却没收到 [DONE]、也没有 error 事件——
       // 连接被中途切断（后端重启/代理掐断）。半截回复不能算聊成功，
@@ -400,9 +452,9 @@ export function useChat() {
       // 的 invariant（立绘还会对半句话演 6 秒开心）
       if (!streamDone && !streamError) {
         streamError = true
-        flush()  // 先提交已到内容，再拼中断文案
-        setMessages(prev =>
-          prev.map(m =>
+        flush() // 先提交已到内容，再拼中断文案
+        setMessages((prev) =>
+          prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: (m.content || '……') + '\n\n（连接中断了，小汐的话没说完……）' }
               : m
@@ -412,36 +464,41 @@ export function useChat() {
       // 流正常读完（收到 [DONE]）且无 error 事件才算成功
       succeeded = !streamError
     } catch (err) {
-      flush()  // 兜底：任何已到内容先提交（AbortError 也提交，不丢字）
+      flush() // 兜底：任何已到内容先提交（AbortError 也提交，不丢字）
       if (err.name !== 'AbortError') {
         // 已有部分文字时「追加」中断提示，而不是仅在内容为空时填兜底文案——
         // 否则用户看到一条被截断的回复却毫不知情
-        setMessages(prev =>
-          prev.map(m =>
+        setMessages((prev) =>
+          prev.map((m) =>
             m.id === assistantId
-              ? { ...m, content: m.content ? m.content + '\n\n（连接出了问题，小汐的话没说完……）' : '……小汐好像遇到了什么问题。' }
+              ? {
+                  ...m,
+                  content: m.content
+                    ? m.content + '\n\n（连接出了问题，小汐的话没说完……）'
+                    : '……小汐好像遇到了什么问题。',
+                }
               : m
           )
         )
       }
     } finally {
       clearTimeout(flushTimer)
-      flush()  // 兜底：残留缓冲全量提交，再收尾
+      flush() // 兜底：残留缓冲全量提交，再收尾
       // 锁按身份释放：只清自己的 controller。切换会话时 changeSession
       // 已同步置空并可能装上新会话的 controller，无条件置空会误废它
       if (abortRef.current === controller) abortRef.current = null
       // 发送期间切换了会话 → 旧流的立绘/streaming 收尾属于上一纪元，
       // 跳过（消息追加本就按 id map，对新列表是 no-op）
       if (epochRef.current === myEpoch) {
-        setMessages(prev =>
-          prev.map(m =>
+        setMessages((prev) =>
+          prev.map((m) =>
             m.id === assistantId
               ? {
                   ...m,
                   streaming: false,
                   // P0-02 尾巴：停止且尚未生成内容 → 空占位补「已停止生成」。
                   // 只有「用户停止」会命中（错误/401/早断路径都已写内容）
-                  content: (!succeeded && !m.content) ? '已停止生成' : m.content,
+                  content: !succeeded && !m.content ? '已停止生成' : m.content,
                 }
               : m
           )
@@ -479,7 +536,9 @@ export function useChat() {
     abortRef.current = null
     sessionIdRef.current = id
     _setSessionId(id)
-    try { localStorage.setItem(SESSION_KEY, id) } catch {}
+    try {
+      localStorage.setItem(SESSION_KEY, id)
+    } catch {}
     clearTimeout(happyTimerRef.current)
     setMessages([])
     setIsStreaming(false)
@@ -494,35 +553,38 @@ export function useChat() {
 
   // 回到一段旧聊天：载入档案消息，可直接续聊（session_id 就是
   // LangGraph thread_id，checkpoint 还在时小汐本人也接得上）
-  const switchSession = useCallback(async (id) => {
-    if (id === sessionIdRef.current) return
-    changeSession(id)
-    const myEpoch = epochRef.current
-    try {
-      const res = await apiFetch(`/api/sessions/${encodeURIComponent(id)}/messages`)
-      if (!res.ok) return
-      const msgs = ((await res.json()).messages || [])
-        .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map(m => ({ id: nextId(), role: m.role, content: m.content }))
-      if (msgs.length === 0) return
-      // fetch 返回前用户又切了会话 → 丢弃过期结果，不往新会话上盖
-      if (epochRef.current !== myEpoch) return
-      // 仅在当前为空时注入，避免覆盖期间到达的主动消息（同 loadHistory 守卫）
-      setMessages(prev => (prev.length === 0 ? msgs : prev))
-      // 深夜唤醒序列依赖 userMsgCount：按载入的用户消息数回填，
-      // 避免回到旧会话时立绘装睡
-      setUserMsgCount(msgs.filter(m => m.role === 'user').length)
-    } catch (e) {
-      console.warn('[useChat] switchSession failed:', e)
-    }
-  }, [changeSession])
+  const switchSession = useCallback(
+    async (id) => {
+      if (id === sessionIdRef.current) return
+      changeSession(id)
+      const myEpoch = epochRef.current
+      try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(id)}/messages`)
+        if (!res.ok) return
+        const msgs = ((await res.json()).messages || [])
+          .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+          .map((m) => ({ id: nextId(), role: m.role, content: m.content }))
+        if (msgs.length === 0) return
+        // fetch 返回前用户又切了会话 → 丢弃过期结果，不往新会话上盖
+        if (epochRef.current !== myEpoch) return
+        // 仅在当前为空时注入，避免覆盖期间到达的主动消息（同 loadHistory 守卫）
+        setMessages((prev) => (prev.length === 0 ? msgs : prev))
+        // 深夜唤醒序列依赖 userMsgCount：按载入的用户消息数回填，
+        // 避免回到旧会话时立绘装睡
+        setUserMsgCount(msgs.filter((m) => m.role === 'user').length)
+      } catch (e) {
+        console.warn('[useChat] switchSession failed:', e)
+      }
+    },
+    [changeSession]
+  )
 
   // 注入主动消息（后端心跳生成的 proactive message，来自 /api/push/unread）
   const receiveProactive = useCallback((items) => {
     if (!Array.isArray(items) || items.length === 0) return
-    setMessages(prev => [
+    setMessages((prev) => [
       ...prev,
-      ...items.map(item => ({
+      ...items.map((item) => ({
         id: nextId(),
         role: 'system',
         type: 'proactive',
@@ -539,8 +601,16 @@ export function useChat() {
   }, [])
 
   return {
-    messages, isStreaming, characterState, sendMessage, stopStreaming,
-    receiveProactive, userMsgCount, sessionId, newSession, switchSession,
+    messages,
+    isStreaming,
+    characterState,
+    sendMessage,
+    stopStreaming,
+    receiveProactive,
+    userMsgCount,
+    sessionId,
+    newSession,
+    switchSession,
     lastDoneAt,
   }
 }

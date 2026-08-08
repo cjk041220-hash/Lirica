@@ -43,7 +43,9 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-from utils.timezone import HKT as _HKT, DEFAULT_LAT, DEFAULT_LON
+from utils.timezone import DEFAULT_LAT, DEFAULT_LON
+from utils.timezone import HKT as _HKT
+
 _TIME_FMT = "%Y-%m-%d %H:%M"
 
 scheduler = AsyncIOScheduler()
@@ -93,11 +95,19 @@ def _should_hold_mood(current_mood: str | None, new_mood: str, is_morning_reset:
 # v2（2026-08-03）：_mood_weights 被数值化的 _gauss_weights /
 # _apply_signal_offsets 取代（情绪视觉空间模型，见 heartbeat_moods 模块头）。
 from heartbeat_moods import (
-    LATE_NIGHT, MORNING, DAYTIME, EVENING, TIME_PERIODS,
-    get_current_period, period_label, weekend_label,
-    MOOD_VECTORS, _gauss_weights, _apply_signal_offsets, _choose_mood,
+    DAYTIME,
+    EVENING,
+    LATE_NIGHT,
+    MOOD_VECTORS,
+    MORNING,
+    TIME_PERIODS,
+    _apply_signal_offsets,
+    _choose_mood,
+    _gauss_weights,
+    get_current_period,
+    period_label,
+    weekend_label,
 )
-
 
 # ── 心跳任务 ──────────────────────────────────────────────────
 
@@ -231,7 +241,7 @@ async def _periodic_maintenance():
 
     随心跳每 2 小时执行一次，对单用户应用频率足够。
     """
-    from database.core import prune_checkpoints, backup_database
+    from database.core import backup_database, prune_checkpoints
     from memory.manager import run_status_decay
 
     try:
@@ -329,7 +339,8 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
 
     使用独立的 LLM 调用（不走 Agent 图），直接生成一句话。
     """
-    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     from agent.soul import BASE_PERSONA
     from config.settings import get_settings
     from providers.deepseek import create_deepseek_llm
@@ -374,15 +385,17 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
             user_prompt += (
                 "\n\n最近 24 小时你已经说过这些话，不要重复同样的话：\n" + said
             )
-    except Exception:
-        pass
+    except Exception as e:
+        # 读取失败只省略事件块，不阻断消息生成（降级纪律同下方历史块）；
+        # 但必须落日志——静默 pass 会让事件上下文长期失灵而无迹可查（体检 S7）
+        log.warning("主动消息：事件上下文读取失败，省略事件块: %s", e)
 
     # ── 历史尾巴（Spec A）：把最近对话原文喂给她，由她结合人格自己
     # 判断怎么接——聊到一半的事自然跟进；闹了别扭就按「生气的时候」
     # 的性子来。不带时间窗口：三天不来尾巴仍是那次争吵，正好求和。
     # 读取失败只省略历史块，不阻断消息生成（降级纪律同上方事件段）
     try:
-        from memory.chat_archive import recent_messages, format_recent_messages
+        from memory.chat_archive import format_recent_messages, recent_messages
         history = await recent_messages()
     except Exception as e:
         log.warning("主动消息：读取对话历史失败，省略历史块: %s", e)
@@ -617,12 +630,12 @@ async def daily_morning_greeting():
     使用独立轻量 LLM 调用（不走 Agent 图），天气 API 失败时降级为
     纯问候，不阻断推送。
     """
-    import httpx as _httpx
-    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     from agent.soul import BASE_PERSONA
-    from providers.deepseek import create_deepseek_llm
     from memory import location_store
-    from tools.weather import _fetch_open_meteo, _WMO
+    from providers.deepseek import create_deepseek_llm
+    from tools.weather import _WMO, _fetch_open_meteo, _http_client
 
     log.info("早安问候任务触发")
 
@@ -648,7 +661,7 @@ async def daily_morning_greeting():
     weather_text = ""
     data = {}
     try:
-        async with _httpx.AsyncClient(timeout=10) as client:
+        async with _http_client(timeout=10) as client:
             data = await _fetch_open_meteo(client, lat, lon)
         log.info("天气数据获取成功")
     except Exception as e:
@@ -724,7 +737,7 @@ async def daily_morning_greeting():
     # 在聊天」。读取失败只省略本段（同天气/日程段的降级纪律）
     history_part = ""
     try:
-        from memory.chat_archive import recent_messages, format_recent_messages
+        from memory.chat_archive import format_recent_messages, recent_messages
         history = await recent_messages()
         if history:
             history_part = (
@@ -803,10 +816,11 @@ async def daily_evening_reminder():
             log.info("前夜提醒：明日无日程，静默")
             return
 
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
+
         from agent.soul import BASE_PERSONA
-        from providers.deepseek import create_deepseek_llm
         from api.routes.config import get_current_model
+        from providers.deepseek import create_deepseek_llm
 
         lines = []
         for ev in events:
@@ -864,7 +878,8 @@ async def daily_diary():
     覆盖保护：如果白天冷冷已经让小汐手记过一篇（write_diary 工具），
     不冲掉它，而是把自动日记作为「晚上小汐自己补的」追加在后面。
     """
-    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     from agent.soul import BASE_PERSONA
     from providers.deepseek import create_deepseek_llm
     from utils import events as events_mgr

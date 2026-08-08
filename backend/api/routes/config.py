@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException, Request
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
 
-from providers.deepseek import get_available_models, create_deepseek_llm
 from agent.graph import build_agent, make_pre_model_hook
 from agent.soul import build_system_prompt
+from providers.deepseek import create_deepseek_llm, get_available_models
 from utils.logger import get_logger
 
 log = get_logger(__name__)

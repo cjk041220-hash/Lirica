@@ -1,28 +1,31 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /* 移除 user-scalable=no 后的双击缩放防护：manipulation 仍允许捏合缩放与滑动，仅禁双击放大；
    拖拽把手自有 touch-none（更高优先级）覆盖，不受影响 */
-* { touch-action: manipulation; }
+* {
+  touch-action: manipulation;
+}
 
 /* 「奶甜草莓粉」色板（2026-07-30 全面换肤，小汐自己点的粉色少女心）：
    对比度纪律——plum/cream ≈6.9:1 可作正文；strawberry/cream ≈3.2:1 只配
    大字号/图标/边框/色块；<12px 的彩色文字一律用 raspberry（≈5.6:1）；
    白字只出现在 strawberry→raspberry 渐变或 plum 底上 */
 @theme {
-  --color-cream: #FFF6F8;        /* 底色·奶油粉白 */
-  --color-plum: #6E4A56;         /* 文字·梅子可可 */
-  --color-strawberry: #F2789F;   /* 主色·草莓粉 */
-  --color-peach: #FFC9A3;        /* 辅色·蜜桃橙（仅点缀，不铺大面） */
-  --color-peach-light: #FFE7D6;  /* 蜜桃奶 */
-  --color-blush: #F3C3D6;        /* 浅粉描边 */
+  --color-cream: #fff6f8; /* 底色·奶油粉白 */
+  --color-plum: #6e4a56; /* 文字·梅子可可 */
+  --color-strawberry: #f2789f; /* 主色·草莓粉 */
+  --color-peach: #ffc9a3; /* 辅色·蜜桃橙（仅点缀，不铺大面） */
+  --color-peach-light: #ffe7d6; /* 蜜桃奶 */
+  --color-blush: #f3c3d6; /* 浅粉描边 */
   /* 日历三色语义：蜂蜜金=小汐记的 / 草莓粉=冷冷记的 / 树莓=很重要 */
-  --color-honey: #E9B44C;        /* ✦ 小汐从聊天里记的 · 星光蜂蜜金 */
-  --color-raspberry: #C2477B;    /* 很重要的事 */
-  --font-sans: -apple-system, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
+  --color-honey: #e9b44c; /* ✦ 小汐从聊天里记的 · 星光蜂蜜金 */
+  --color-raspberry: #c2477b; /* 很重要的事 */
+  --font-sans: -apple-system, 'PingFang SC', 'Helvetica Neue', 'Noto Sans SC', sans-serif;
   /* 展示体：站酷快乐体（Google Fonts，仅 400——禁合成粗体，强调靠字号和颜色）。
      按 unicode-range 切 woff2 片、浏览器只下载用到字形的片；离线时样式表加载
      失败则静默回落系统圆体（幼圆/YouYuan/雅黑），不崩不阻塞。正文仍走 --font-sans */
-  --font-display: "ZCOOL KuaiLe", "Yuanti SC", "YouYuan", "PingFang SC", "Microsoft YaHei", ui-rounded, sans-serif;
+  --font-display:
+    'ZCOOL KuaiLe', 'Yuanti SC', 'YouYuan', 'PingFang SC', 'Microsoft YaHei', ui-rounded, sans-serif;
 
   --animate-breathe: breathe 4.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   --animate-breathe-slow: breathe 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
@@ -41,91 +44,198 @@
 }
 
 @keyframes breathe {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-8px) scale(1.005); }
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.005);
+  }
 }
 /* 立绘真 crossfade（2026-08-03）：双 img 叠放、旧图淡出新图淡入同时进行，
    消除「先隐藏→换图→再显示」伪 crossfade 的空白帧（观感是「闪一下」）。
    时长由组件按转移表动态注入（站姿↔趴下 800ms / 表情 400ms / 聊天 200ms）。 */
 @keyframes spriteIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @keyframes spriteOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(12px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 @keyframes pulseDot {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1.1); }
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 @keyframes twinkle {
-  0%, 100% { opacity: 0.15; transform: scale(0.8); }
-  50% { opacity: 0.9; transform: scale(1.2); }
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.2);
+  }
 }
 @keyframes floatSoft {
-  0%, 100% { transform: translateY(0) translateX(0); }
-  33% { transform: translateY(-4px) translateX(2px); }
-  66% { transform: translateY(2px) translateX(-1px); }
+  0%,
+  100% {
+    transform: translateY(0) translateX(0);
+  }
+  33% {
+    transform: translateY(-4px) translateX(2px);
+  }
+  66% {
+    transform: translateY(2px) translateX(-1px);
+  }
 }
 @keyframes shimmer {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.8; }
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }
 /* 睡觉的 Zzz：上浮 + 淡出循环 */
 @keyframes zzzFloat {
-  0% { opacity: 0; transform: translateY(0) scale(0.8); }
-  25% { opacity: 0.9; }
-  100% { opacity: 0; transform: translateY(-22px) scale(1.15); }
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.8);
+  }
+  25% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px) scale(1.15);
+  }
 }
 /* 戳一戳气泡：淡入 + 轻微上浮（-50% 横移烤进关键帧，forwards 保持居中） */
 @keyframes bubblePop {
-  from { opacity: 0; transform: translate(-50%, 6px) scale(0.96); }
-  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
 }
 /* 冷却中被连戳：轻微晃一下表示「收到了，但别戳了」 */
 @keyframes wiggle {
-  0%, 100% { transform: rotate(0deg); }
-  30% { transform: rotate(-1.2deg); }
-  70% { transform: rotate(1.2deg); }
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  30% {
+    transform: rotate(-1.2deg);
+  }
+  70% {
+    transform: rotate(1.2deg);
+  }
 }
 /* 塔罗全部翻牌完毕：网格整体轻轻落定（backwards fill 兜住首帧） */
 @keyframes tarotSettle {
-  0% { transform: scale(1.03); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* ── 天空：活的天象 ─────────────────────────────────── */
 /* 云真的横飘过窗（不同速度/高度营造视差） */
 @keyframes cloudDrift {
-  from { transform: translateX(-130%); }
-  to   { transform: translateX(360%); }
+  from {
+    transform: translateX(-130%);
+  }
+  to {
+    transform: translateX(360%);
+  }
 }
 /* 月冕缓慢呼吸 */
 @keyframes moonPulse {
-  0%, 100% { opacity: 0.7; transform: scale(1); }
-  50%      { opacity: 1;   transform: scale(1.06); }
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
 }
 /* 太阳光晕微颤 */
 @keyframes sunPulse {
-  0%, 100% { opacity: 0.85; transform: scale(1); }
-  50%      { opacity: 1;    transform: scale(1.05); }
+  0%,
+  100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
 }
 /* 流星：大部分时间隐形，末尾一闪划过 */
 @keyframes shoot {
-  0%   { opacity: 0; transform: translate3d(0,0,0) rotate(18deg) scaleX(0.2); }
-  88%  { opacity: 0; transform: translate3d(0,0,0) rotate(18deg) scaleX(0.2); }
-  92%  { opacity: 1; transform: translate3d(0,0,0) rotate(18deg) scaleX(1); }
-  100% { opacity: 0; transform: translate3d(150px,52px,0) rotate(18deg) scaleX(1); }
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(18deg) scaleX(0.2);
+  }
+  88% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(18deg) scaleX(0.2);
+  }
+  92% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(18deg) scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(150px, 52px, 0) rotate(18deg) scaleX(1);
+  }
 }
 /* 亮星的十字星芒 */
 @keyframes sparkle {
-  0%, 100% { opacity: 0.25; transform: scale(0.6) rotate(0deg); }
-  50%      { opacity: 1;    transform: scale(1) rotate(45deg); }
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.6) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1) rotate(45deg);
+  }
 }
 
 /* ── 少女心：漂浮微粒 + 戳一戳爱心迸发 ───────────────── */
@@ -133,25 +243,49 @@
    只动 transform/opacity（合成器友好）；负延迟由使用方给，首帧即有微粒。
    2026-07-30 由漂浮爱心改为安静的圆点——常驻爱心太抢眼，圆点更像浮尘/微光 */
 @keyframes floatUp {
-  0%   { opacity: 0; transform: translate(0, 0); }
-  8%   { opacity: 1; }
-  33%  { transform: translate(7px, -36vh); }
-  66%  { transform: translate(-6px, -72vh); }
-  92%  { opacity: 1; }
-  100% { opacity: 0; transform: translate(4px, -108vh); }
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  8% {
+    opacity: 1;
+  }
+  33% {
+    transform: translate(7px, -36vh);
+  }
+  66% {
+    transform: translate(-6px, -72vh);
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(4px, -108vh);
+  }
 }
 /* 戳一戳爱心迸发：先原地绽开，再沿各自的 --dx/--dy/--r 飞散消融 */
 @keyframes heartBurst {
-  0%   { opacity: 0; transform: translate(0, 0) scale(0.3) rotate(0deg); }
-  18%  { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
-  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.7) rotate(var(--r)); }
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.3) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) scale(0.7) rotate(var(--r));
+  }
 }
 .star-cross {
   position: absolute;
-  width: 11px; height: 11px;
+  width: 11px;
+  height: 11px;
   background:
-    linear-gradient(transparent 44%, rgba(255,255,255,0.95) 50%, transparent 56%),
-    linear-gradient(90deg, transparent 44%, rgba(255,255,255,0.95) 50%, transparent 56%);
+    linear-gradient(transparent 44%, rgba(255, 255, 255, 0.95) 50%, transparent 56%),
+    linear-gradient(90deg, transparent 44%, rgba(255, 255, 255, 0.95) 50%, transparent 56%);
   border-radius: 50%;
   filter: blur(0.2px);
 }
@@ -160,24 +294,50 @@
    而未分层样式永远胜过有分层样式（与特异性无关）——此前裸写的 * { margin: 0 }
    一直把 mx-auto 压成 0，桌面宽屏下 430px 房间列永远贴左，无法居中 */
 @layer base {
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
   /* 键盘用户的焦点环基线（体检点名的焦点不可见）：草莓粉环，
      惠及全部面板、格子、按钮与输入框 */
-  :focus-visible { outline: 2px solid var(--color-strawberry); outline-offset: 2px; }
+  :focus-visible {
+    outline: 2px solid var(--color-strawberry);
+    outline-offset: 2px;
+  }
 }
 /* 系统「减弱动态效果」→ 所有动画/过渡静止化（体检 🟡-1）：
    状态切换仍在，只是不再动——前庭障碍用户也能安心住着这个房间 */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
   /* 漂浮微粒与戳一戳爱心是纯动态装饰、不承担状态——减弱动效下整体撤下，而非定格在半空 */
-  .ambient-motes, .heart-burst { display: none; }
+  .ambient-motes,
+  .heart-burst {
+    display: none;
+  }
 }
-html, body, #root { height: 100%; overflow: hidden; }
+/* 标签页隐藏时暂停全部 CSS 动画（评审 F8）：房间常驻 60+ 无限动画
+  （星空/浮云/呼吸/爱心），后台标签页照跑纯属白烧 GPU/电量。
+  main.jsx 的 visibilitychange 监听负责切 html.anim-paused；
+  display:none 的元素不受影响，回前台时动画从暂停帧继续 */
+html.anim-paused *,
+html.anim-paused *::before,
+html.anim-paused *::after {
+  animation-play-state: paused !important;
+}
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
 
 body {
   font-family: var(--font-sans);
@@ -186,7 +346,7 @@ body {
      梅子夜色 + 窗光般的微弱草莓/蜜桃晕染，不是死白也不是纯黑 */
   background-color: #241a22;
   background-image:
-    radial-gradient(1100px 720px at 50% 36%, rgba(242, 120, 159, 0.10), transparent 62%),
+    radial-gradient(1100px 720px at 50% 36%, rgba(242, 120, 159, 0.1), transparent 62%),
     radial-gradient(820px 620px at 50% 108%, rgba(255, 201, 163, 0.09), transparent 66%),
     linear-gradient(180deg, #2e2130 0%, #20161f 100%);
   -webkit-font-smoothing: antialiased;
@@ -196,7 +356,7 @@ body {
 
 /* 房间前的一小片光，跟着里面的小家伙一起缓慢呼吸 */
 body::before {
-  content: "";
+  content: '';
   position: fixed;
   inset: 0;
   z-index: -1;
@@ -205,27 +365,46 @@ body::before {
   animation: ambientGlow 9s ease-in-out infinite;
 }
 @keyframes ambientGlow {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
-  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }
 /* 「固定底衬 + 安全区」取大者：底部面板过 iPhone Home 指示条。
    用于替换（不是叠加）Tailwind 的 pb-*——未分层样式永远胜过 @layer
    utilities（见上方分层纪律注释），叠用会把固定衬垫吃掉。
    先给固定值兜底，支持 max()+env() 的环境再升级取大 */
-.pb-safe-9 { padding-bottom: 2.25rem; }
-.pb-safe-6 { padding-bottom: 1.5rem; }
+.pb-safe-9 {
+  padding-bottom: 2.25rem;
+}
+.pb-safe-6 {
+  padding-bottom: 1.5rem;
+}
 @supports (padding-bottom: max(1rem, env(safe-area-inset-bottom))) {
-  .pb-safe-9 { padding-bottom: max(2.25rem, env(safe-area-inset-bottom)); }
-  .pb-safe-6 { padding-bottom: max(1.5rem, env(safe-area-inset-bottom)); }
+  .pb-safe-9 {
+    padding-bottom: max(2.25rem, env(safe-area-inset-bottom));
+  }
+  .pb-safe-6 {
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  }
 }
 
 /* 滚动条 */
-.chat-scroll::-webkit-scrollbar { width: 2.5px; }
-.chat-scroll::-webkit-scrollbar-track { background: transparent; }
+.chat-scroll::-webkit-scrollbar {
+  width: 2.5px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 .chat-scroll::-webkit-scrollbar-thumb {
   background: rgba(110, 74, 86, 0.14);
   border-radius: 999px;
@@ -251,13 +430,16 @@ body::before {
    注意：这里故意不用 backdrop-filter。面板已 97–99% 不透明，模糊几乎看不见，
    而开着它会让浏览器在面板弹出时把背后整页重新光栅化喂给模糊——表现为主页面
    「自上而下刷一下」的扫掠感（用户报的观感问题）。去掉模糊=去掉扫掠+更省合成 */
-.panel-surface, .panel-surface-solid {
+.panel-surface,
+.panel-surface-solid {
   background-color: rgba(255, 246, 248, 0.97);
   background-image:
     radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px),
     radial-gradient(rgba(242, 120, 159, 0.075) 1.2px, transparent 1.3px);
   background-size: 26px 26px;
-  background-position: 0 0, 13px 13px;
+  background-position:
+    0 0,
+    13px 13px;
   box-shadow: 0 -12px 48px rgba(110, 74, 86, 0.12);
 }
 /* 日历内层 sheet 的更实变体（叠在面板上，透出更少） */
@@ -267,16 +449,28 @@ body::before {
 }
 /* 顶部丝带：面板顶沿一道草莓↔蜜桃的渐隐彩线 */
 .panel-surface::before {
-  content: "";
+  content: '';
   position: absolute;
-  top: 0; left: 24px; right: 24px; height: 3px;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 3px;
   border-radius: 0 0 3px 3px;
-  background: linear-gradient(90deg, transparent, #F2789F 20%, #FFC9A3 50%, #F2789F 80%, transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #f2789f 20%,
+    #ffc9a3 50%,
+    #f2789f 80%,
+    transparent
+  );
 }
 
 /* 按钮微交互 */
 .btn-press {
-  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.15s ease;
+  transition:
+    transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.15s ease;
 }
 .btn-press:active {
   transform: scale(0.88);
@@ -285,25 +479,35 @@ body::before {
 /* 图标按钮悬浮光晕 */
 .icon-btn {
   position: relative;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  transition:
+    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.2s ease;
 }
 .icon-btn::after {
   content: '';
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(242,120,159,0.16) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(242, 120, 159, 0.16) 0%, transparent 70%);
   opacity: 0;
   transition: opacity 0.3s ease;
 }
-.icon-btn:hover::after { opacity: 1; }
-.icon-btn:active { transform: scale(0.9); }
+.icon-btn:hover::after {
+  opacity: 1;
+}
+.icon-btn:active {
+  transform: scale(0.9);
+}
 
 /* 弹跳悬浮：日历日期格、列表行轻抬一下（仅精确指针设备）。
    依赖 fade-in-up 的 backwards fill——入场动画结束后 transform 已释放 */
 @media (hover: hover) {
-  .springy { transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
-  .springy:hover { transform: translateY(-1px) scale(1.02); }
+  .springy {
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .springy:hover {
+    transform: translateY(-1px) scale(1.02);
+  }
 }
 
 /* 面板弹出动画 */
@@ -311,8 +515,14 @@ body::before {
   animation: panelSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 @keyframes panelSlideUp {
-  from { transform: translateY(100%); opacity: 0.5; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(100%);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* 遮罩淡入 */
@@ -320,6 +530,10 @@ body::before {
   animation: overlayFade 0.25s ease forwards;
 }
 @keyframes overlayFade {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

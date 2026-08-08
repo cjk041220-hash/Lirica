@@ -27,26 +27,30 @@
 import datetime
 import random
 import uuid
-from datetime import timezone, timedelta
+from datetime import timedelta
 
-import httpx
-
-from database.core import get_db, rows_to_dicts
+from database.core import escape_like, get_db, get_write_lock, rows_to_dicts
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 # 冷冷在香港（UTC+8），与全项目时区纪律一致
-from utils.timezone import HKT as _HKT, now_str as _now, _TIME_FMT, DEFAULT_LAT, DEFAULT_LON
+from utils.timezone import _TIME_FMT, DEFAULT_LAT, DEFAULT_LON
+from utils.timezone import HKT as _HKT
+from utils.timezone import now_str as _now
+
 _DATE_FMT = "%Y-%m-%d"
 
 # ── 档案派生事件常量（单一来源 agent.soul，冷冷生日 2004-06-03）──
 # 体检 S1 修复：此前手动同步 soul 散文里的生日，改一处另一处不跟随。
 # 模块级 import 安全：soul 对本模块只有函数级惰性 import，不成环。
 from agent.soul import (
-    COLD_BIRTHDAY_MONTH as _BIRTHDAY_MONTH,
     COLD_BIRTHDAY_DAY as _BIRTHDAY_DAY,
 )
+from agent.soul import (
+    COLD_BIRTHDAY_MONTH as _BIRTHDAY_MONTH,
+)
+
 _BIRTHDAY_LOOKAHEAD_DAYS = 7  # 提前几天开始惦记
 
 # ── 天气检测阈值 ──────────────────────────────────────────────
@@ -142,53 +146,58 @@ async def create_event(
     if dedupe_key is None:
         dedupe_key = f"llm:{title}:{event_date}"
 
-    await conn.execute(
-        """INSERT INTO events
-           (id, title, event_type, event_date, end_date, severity,
-            source, memo, status, created_at, dedupe_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-           ON CONFLICT(dedupe_key)
-           WHERE dedupe_key IS NOT NULL AND status IN ('active', 'deleted')
-           DO NOTHING""",
-        (event_id, title, event_type, event_date, end_date,
-         severity, source, memo, now, dedupe_key),
-    )
-    await conn.commit()
-    cursor = await conn.execute(
-        """SELECT * FROM events
-           WHERE dedupe_key = ? AND status IN ('active', 'deleted')""",
-        (dedupe_key,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        # 理论不可达：插入成功或冲突都至少留一行。防御性兜底。
-        return None, False
-    event = rows_to_dicts(cursor, [row])[0]
-
-    if event["id"] == event_id:
-        return event, True                     # 本次新建
-
-    if event["status"] == "deleted":
-        if not force:
-            return None, False                 # 墓碑：尊重删除，不重建
-        # force 复活：原 id 翻回 active，新内容覆盖旧内容。
-        # completed_at 一并清空——「重新记这件事」= 重新开始惦记
+    # 整段持锁（体检 S1 修复：events 写路径此前零 get_write_lock，单连接
+    # 共享事务上下文下 commit 可被打断）：INSERT+commit+读回+force 复活
+    # 是一个逻辑写。asyncio.Lock 不可重入——锁内禁止调用任何会再次
+    # 取锁的公共入口（detect_cycle_events 等调用方须先释放自己的锁段）
+    async with get_write_lock():
         await conn.execute(
-            """UPDATE events
-               SET title = ?, event_type = ?, event_date = ?, end_date = ?,
-                   severity = ?, source = ?, memo = ?, status = 'active',
-                   completed_at = NULL
-               WHERE id = ?""",
-            (title, event_type, event_date, end_date,
-             severity, source, memo, event["id"]),
+            """INSERT INTO events
+               (id, title, event_type, event_date, end_date, severity,
+                source, memo, status, created_at, dedupe_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+               ON CONFLICT(dedupe_key)
+               WHERE dedupe_key IS NOT NULL AND status IN ('active', 'deleted')
+               DO NOTHING""",
+            (event_id, title, event_type, event_date, end_date,
+             severity, source, memo, now, dedupe_key),
         )
         await conn.commit()
-        cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event["id"],))
+        cursor = await conn.execute(
+            """SELECT * FROM events
+               WHERE dedupe_key = ? AND status IN ('active', 'deleted')""",
+            (dedupe_key,),
+        )
         row = await cursor.fetchone()
-        log.info("事件复活（force）：[%s] %s", event["id"], title)
-        return rows_to_dicts(cursor, [row])[0], True
+        if row is None:
+            # 理论不可达：插入成功或冲突都至少留一行。防御性兜底。
+            return None, False
+        event = rows_to_dicts(cursor, [row])[0]
 
-    return event, False                        # 活跃重复
+        if event["id"] == event_id:
+            return event, True                     # 本次新建
+
+        if event["status"] == "deleted":
+            if not force:
+                return None, False                 # 墓碑：尊重删除，不重建
+            # force 复活：原 id 翻回 active，新内容覆盖旧内容。
+            # completed_at 一并清空——「重新记这件事」= 重新开始惦记
+            await conn.execute(
+                """UPDATE events
+                   SET title = ?, event_type = ?, event_date = ?, end_date = ?,
+                       severity = ?, source = ?, memo = ?, status = 'active',
+                       completed_at = NULL
+                   WHERE id = ?""",
+                (title, event_type, event_date, end_date,
+                 severity, source, memo, event["id"]),
+            )
+            await conn.commit()
+            cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event["id"],))
+            row = await cursor.fetchone()
+            log.info("事件复活（force）：[%s] %s", event["id"], title)
+            return rows_to_dicts(cursor, [row])[0], True
+
+        return event, False                        # 活跃重复
 
 
 # ── 查询与归档 ────────────────────────────────────────────────
@@ -224,12 +233,13 @@ async def archive_expired() -> int:
     """
     conn = await get_db()
     today = _today().isoformat()
-    cursor = await conn.execute(
-        """UPDATE events SET status = 'archived'
-           WHERE status = 'active' AND COALESCE(end_date, event_date) < ?""",
-        (today,),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        cursor = await conn.execute(
+            """UPDATE events SET status = 'archived'
+               WHERE status = 'active' AND COALESCE(end_date, event_date) < ?""",
+            (today,),
+        )
+        await conn.commit()
     if cursor.rowcount:
         log.info("事件归档：%d 条已翻篇", cursor.rowcount)
     return cursor.rowcount
@@ -254,20 +264,22 @@ async def soft_delete_event(event_id: str) -> dict | None:
     次日自归档，不构成骚扰，接受此行为）。
     """
     conn = await get_db()
-    cursor = await conn.execute(
-        "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
-        (event_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-    event = rows_to_dicts(cursor, [row])[0]
-    if event["event_type"] in _READONLY_EVENT_TYPES:
-        raise ValueError("readonly")
-    await conn.execute(
-        "UPDATE events SET status = 'deleted' WHERE id = ?", (event_id,),
-    )
-    await conn.commit()
+    # SELECT 判定 + UPDATE 整段进锁：防读判写交错（体检 S1）
+    async with get_write_lock():
+        cursor = await conn.execute(
+            "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        event = rows_to_dicts(cursor, [row])[0]
+        if event["event_type"] in _READONLY_EVENT_TYPES:
+            raise ValueError("readonly")
+        await conn.execute(
+            "UPDATE events SET status = 'deleted' WHERE id = ?", (event_id,),
+        )
+        await conn.commit()
     log.info("事件软删（墓碑）：[%s] %s", event_id, event["title"])
     return event
 
@@ -285,24 +297,25 @@ async def set_event_completed(event_id: str, completed: bool) -> dict | None:
     允许勾（翻看过去月份补个勾），deleted 行不存在 → None。
     """
     conn = await get_db()
-    cursor = await conn.execute(
-        "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
-        (event_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-    event = rows_to_dicts(cursor, [row])[0]
-    if event["event_type"] in _READONLY_EVENT_TYPES or event["source"] == "weather":
-        raise ValueError("readonly")
-    completed_at = _now() if completed else None
-    await conn.execute(
-        "UPDATE events SET completed_at = ? WHERE id = ?",
-        (completed_at, event_id),
-    )
-    await conn.commit()
-    cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event_id,))
-    return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
+    async with get_write_lock():
+        cursor = await conn.execute(
+            "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        event = rows_to_dicts(cursor, [row])[0]
+        if event["event_type"] in _READONLY_EVENT_TYPES or event["source"] == "weather":
+            raise ValueError("readonly")
+        completed_at = _now() if completed else None
+        await conn.execute(
+            "UPDATE events SET completed_at = ? WHERE id = ?",
+            (completed_at, event_id),
+        )
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+        return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
 
 async def update_event(
@@ -331,55 +344,58 @@ async def update_event(
     保持 archived，不干涉归档纪律）。
     """
     conn = await get_db()
-    cursor = await conn.execute(
-        "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
-        (event_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-    event = rows_to_dicts(cursor, [row])[0]
-    if event["event_type"] in _READONLY_EVENT_TYPES:
-        raise ValueError("readonly")
+    # SELECT+校验+UPDATE 整段进锁（体检 S1）；校验 ValueError 在锁内
+    # 抛出无碍——上下文管理器保证释放
+    async with get_write_lock():
+        cursor = await conn.execute(
+            "SELECT * FROM events WHERE id = ? AND status != 'deleted'",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        event = rows_to_dicts(cursor, [row])[0]
+        if event["event_type"] in _READONLY_EVENT_TYPES:
+            raise ValueError("readonly")
 
-    new = dict(event)
-    if title is not None:
-        title = title.strip()
-        if not title:
-            raise ValueError("title 不能为空")
-        new["title"] = title
-    if event_type is not None:
-        et = event_type.strip().lower()
-        if et not in _EVENT_TYPES:
-            raise ValueError("event_type 只能是 exam / trip / appointment / health / general")
-        new["event_type"] = et
-    if event_date is not None:
-        new["event_date"] = normalize_event_date(event_date)  # 非法 → ValueError
-    if end_date is not None:
-        new["end_date"] = normalize_event_date(end_date) if end_date else None
-    if new["end_date"] and new["end_date"] < new["event_date"]:
-        raise ValueError("end_date 不能早于 event_date")
-    if severity is not None:
-        new["severity"] = severity if severity in ("high", "normal", "low") else "normal"
-    if memo is not None:
-        new["memo"] = memo or None
+        new = dict(event)
+        if title is not None:
+            title = title.strip()
+            if not title:
+                raise ValueError("title 不能为空")
+            new["title"] = title
+        if event_type is not None:
+            et = event_type.strip().lower()
+            if et not in _EVENT_TYPES:
+                raise ValueError("event_type 只能是 exam / trip / appointment / health / general")
+            new["event_type"] = et
+        if event_date is not None:
+            new["event_date"] = normalize_event_date(event_date)  # 非法 → ValueError
+        if end_date is not None:
+            new["end_date"] = normalize_event_date(end_date) if end_date else None
+        if new["end_date"] and new["end_date"] < new["event_date"]:
+            raise ValueError("end_date 不能早于 event_date")
+        if severity is not None:
+            new["severity"] = severity if severity in ("high", "normal", "low") else "normal"
+        if memo is not None:
+            new["memo"] = memo or None
 
-    # 归档行改到未来 → 复活
-    new_status = event["status"]
-    if new_status == "archived" and (new["end_date"] or new["event_date"]) >= _today().isoformat():
-        new_status = "active"
+        # 归档行改到未来 → 复活
+        new_status = event["status"]
+        if new_status == "archived" and (new["end_date"] or new["event_date"]) >= _today().isoformat():
+            new_status = "active"
 
-    await conn.execute(
-        """UPDATE events
-           SET title = ?, event_type = ?, event_date = ?, end_date = ?,
-               severity = ?, memo = ?, status = ?
-           WHERE id = ?""",
-        (new["title"], new["event_type"], new["event_date"], new["end_date"],
-         new["severity"], new["memo"], new_status, event_id),
-    )
-    await conn.commit()
-    cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event_id,))
-    return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
+        await conn.execute(
+            """UPDATE events
+               SET title = ?, event_type = ?, event_date = ?, end_date = ?,
+                   severity = ?, memo = ?, status = ?
+               WHERE id = ?""",
+            (new["title"], new["event_type"], new["event_date"], new["end_date"],
+             new["severity"], new["memo"], new_status, event_id),
+        )
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+        return rows_to_dicts(cursor, [await cursor.fetchone()])[0]
 
 
 async def list_events_for_calendar(
@@ -431,12 +447,17 @@ async def find_similar_active(event_date: str, title: str) -> list[dict]:
     并存两条。
     """
     conn = await get_db()
+    # 参数侧转义 LIKE 通配符（评审 B7）：标题含 % / _ 时按字面匹配，
+    # 否则「50%_概率」这类标题会把相似匹配打成全表命中。
+    # 列侧（已存标题）的 % / _ 仍有轻微过匹配，后果仅是多弹一次
+    # 「已有相似事件」提示，不阻断创建，记录在案不修。
     cursor = await conn.execute(
         """SELECT * FROM events
            WHERE status = 'active' AND event_date = ?
-             AND (title LIKE '%' || ? || '%' OR ? LIKE '%' || title || '%')
+             AND (title LIKE '%' || ? || '%' ESCAPE '\\'
+                  OR ? LIKE '%' || title || '%')
            ORDER BY created_at ASC""",
-        (event_date, title, title),
+        (event_date, escape_like(title), title),
     )
     return rows_to_dicts(cursor, await cursor.fetchall())
 
@@ -618,14 +639,17 @@ async def detect_cycle_events() -> int:
     current_key = f"cycle:{stats['next_predicted']}" if stats else ""
 
     # 漂移清理：未来的、不再是当前预测的 cycle 事件 → 归档
+    # 独立锁段：必须在下方调用 create_event（自身取锁）之前闭合——
+    # asyncio.Lock 不可重入，嵌套取锁即死锁
     conn = await get_db()
-    cursor = await conn.execute(
-        """UPDATE events SET status = 'archived'
-           WHERE source = 'cycle' AND status = 'active'
-             AND event_date > ? AND COALESCE(dedupe_key, '') != ?""",
-        (_today().isoformat(), current_key),
-    )
-    await conn.commit()
+    async with get_write_lock():
+        cursor = await conn.execute(
+            """UPDATE events SET status = 'archived'
+               WHERE source = 'cycle' AND status = 'active'
+                 AND event_date > ? AND COALESCE(dedupe_key, '') != ?""",
+            (_today().isoformat(), current_key),
+        )
+        await conn.commit()
     archived = cursor.rowcount
 
     if stats is None:
@@ -661,7 +685,7 @@ async def detect_weather_events() -> int:
     返回新建条数。
     """
     from memory import location_store
-    from tools.weather import _fetch_open_meteo
+    from tools.weather import _fetch_open_meteo, _http_client
 
     coords = None
     try:
@@ -671,7 +695,7 @@ async def detect_weather_events() -> int:
     lat, lon = coords if coords else (DEFAULT_LAT, DEFAULT_LON)
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with _http_client(timeout=10) as client:
             data = await _fetch_open_meteo(
                 client, lat, lon, forecast_days=_WEATHER_LOOKAHEAD_DAYS
             )
@@ -734,13 +758,14 @@ async def detect_weather_events() -> int:
             # event 为 None 时（撞墓碑：冷冷删过这天的风系事件）整个
             # 分支跳过——尊重删除，不升级也不重建（v9 语义）
             conn = await get_db()
-            await conn.execute(
-                """UPDATE events
-                   SET title = ?, event_type = 'typhoon', severity = 'high', memo = ?
-                   WHERE id = ?""",
-                (title, memo, event["id"]),
-            )
-            await conn.commit()
+            async with get_write_lock():
+                await conn.execute(
+                    """UPDATE events
+                       SET title = ?, event_type = 'typhoon', severity = 'high', memo = ?
+                       WHERE id = ?""",
+                    (title, memo, event["id"]),
+                )
+                await conn.commit()
             log.info("天气检测升级事件：%s", title)
 
     return created
@@ -803,15 +828,7 @@ async def detect_memory_echoes() -> int:
     if (await cursor.fetchone())[0] >= 1:
         return 0
 
-    # 2. 已提过的记忆 id（全状态排除，一生一次）
-    cursor = await conn.execute(
-        "SELECT dedupe_key FROM events WHERE dedupe_key LIKE 'memory-echo:%'"
-    )
-    echoed_ids = [
-        r[0][len("memory-echo:"):] for r in await cursor.fetchall() if r[0]
-    ]
-
-    # 3. 采样候选。events.py 是纯函数层、拿不到 app.state，就地用共享
+    # 2. 采样候选。events.py 是纯函数层、拿不到 app.state，就地用共享
     #    连接构造 MemoryManager（单连接架构下与 app.state.memory_manager
     #    是同一条连接，无状态分叉）。old_memories 纯被动、不刷热度——
     #    若刷了，被 echo 的记忆会在相关性评分里突然「复活」霸榜
@@ -820,13 +837,27 @@ async def detect_memory_echoes() -> int:
     mgr = MemoryManager(conn)
     candidates = await mgr.old_memories(
         min_age_days=_MEMORY_ECHO_MIN_AGE_DAYS,
-        limit=5,
-        exclude_ids=echoed_ids,
+        limit=8,
     )
     if not candidates:
         return 0
 
-    mem = random.choice(candidates)
+    # 3. 已提过的记忆 id（全状态排除，一生一次）：只对候选做点查
+    #    （体检 P2-16：修复前全表 LIKE 'memory-echo:%' 无时间界捞所有
+    #    dedupe_key，随事件表增长线性变慢；点查走 v6/v9 dedupe 部分
+    #    唯一索引）。候选全部已 echo → 本轮放弃（7 天限频下无害，
+    #    下一心跳会采到新候选再试）
+    placeholders = ",".join("?" for _ in candidates)
+    cursor = await conn.execute(
+        f"SELECT dedupe_key FROM events WHERE dedupe_key IN ({placeholders})",
+        [f"memory-echo:{c['id']}" for c in candidates],
+    )
+    echoed = {r[0][len("memory-echo:"):] for r in await cursor.fetchall() if r[0]}
+    fresh = [c for c in candidates if c["id"] not in echoed]
+    if not fresh:
+        return 0
+
+    mem = random.choice(fresh)
     snippet = (mem.get("content") or "")[:40]
     _, created = await create_event(
         "忽然想起冷冷很久以前说过的事",

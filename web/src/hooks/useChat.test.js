@@ -9,7 +9,10 @@ const gps = vi.hoisted(() => ({ resolve: null }))
 const apiFetchMock = vi.hoisted(() => vi.fn(async () => ({ ok: false })))
 
 vi.mock('../api/location', () => ({
-  getGpsCoords: () => new Promise((resolve) => { gps.resolve = resolve }),
+  getGpsCoords: () =>
+    new Promise((resolve) => {
+      gps.resolve = resolve
+    }),
   isGpsEnabled: () => true,
 }))
 
@@ -24,12 +27,18 @@ function controllableStream() {
   const encoder = new TextEncoder()
   let controller
   const stream = new ReadableStream({
-    start(c) { controller = c },
+    start(c) {
+      controller = c
+    },
   })
   return {
     stream,
-    emit(line) { controller.enqueue(encoder.encode(line)) },
-    close() { controller.close() },
+    emit(line) {
+      controller.enqueue(encoder.encode(line))
+    },
+    close() {
+      controller.close()
+    },
   }
 }
 
@@ -65,7 +74,7 @@ describe('useChat GPS 停止（P0-02 回归）', () => {
     expect(result.current.characterState).not.toBe('listening')
     // 空助手占位不再流式，且补上「已停止生成」文案（P0-02 尾巴：
     // 修复前留空气泡，用户看到一条什么都没有的回复，像 bug）
-    const assistant = result.current.messages.find(m => m.role === 'assistant')
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
     expect(assistant).toBeTruthy()
     expect(assistant.streaming).toBe(false)
     expect(assistant.content).toBe('已停止生成')
@@ -78,7 +87,7 @@ describe('useChat GPS 停止（P0-02 回归）', () => {
     await act(async () => {
       gps.resolve(null)
     })
-    const userMsgs = result.current.messages.filter(m => m.role === 'user')
+    const userMsgs = result.current.messages.filter((m) => m.role === 'user')
     expect(userMsgs.length).toBe(2)
     expect(result.current.isStreaming).toBe(false)
   })
@@ -98,21 +107,35 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('hi') })
-    await act(async () => { gps.resolve(null) })  // 放行 GPS → 进入 fetch 读流
-    await act(async () => { s.emit('data: {"content":"你"}\n') })
+    act(() => {
+      sendPromise = result.current.sendMessage('hi')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    }) // 放行 GPS → 进入 fetch 读流
+    await act(async () => {
+      s.emit('data: {"content":"你"}\n')
+    })
 
     // 未推进定时器 → 内容仍在缓冲，未提交
-    expect(result.current.messages.find(m => m.role === 'assistant').content).toBe('')
+    expect(result.current.messages.find((m) => m.role === 'assistant').content).toBe('')
 
     // 推进 40ms → 批量提交
-    await act(async () => { vi.advanceTimersByTime(40) })
-    expect(result.current.messages.find(m => m.role === 'assistant').content).toBe('你')
+    await act(async () => {
+      vi.advanceTimersByTime(40)
+    })
+    expect(result.current.messages.find((m) => m.role === 'assistant').content).toBe('你')
 
     // 流结束 → finally 兜底 flush，不丢字
-    await act(async () => { s.emit('data: {"content":"好"}\n'); s.emit('data: [DONE]\n'); s.close() })
-    await act(async () => { await sendPromise })
-    expect(result.current.messages.find(m => m.role === 'assistant').content).toBe('你好')
+    await act(async () => {
+      s.emit('data: {"content":"好"}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => {
+      await sendPromise
+    })
+    expect(result.current.messages.find((m) => m.role === 'assistant').content).toBe('你好')
     vi.useRealTimers()
   })
 
@@ -124,15 +147,21 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('hi') })
-    await act(async () => { gps.resolve(null) })  // 放行 GPS → 进入 fetch 读流
+    act(() => {
+      sendPromise = result.current.sendMessage('hi')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    }) // 放行 GPS → 进入 fetch 读流
     await act(async () => {
       s.emit('data: {"content":"一半"}\n')
       s.emit('data: {"type":"error","content":"出错了"}\n')
       s.close()
     })
-    await act(async () => { await sendPromise })
-    const assistant = result.current.messages.find(m => m.role === 'assistant')
+    await act(async () => {
+      await sendPromise
+    })
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
     expect(assistant.content).toBe('一半\n\n（出错了）')
     vi.useRealTimers()
   })
@@ -144,17 +173,25 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('尖沙咀在哪里') })
-    await act(async () => { gps.resolve(null) })
+    act(() => {
+      sendPromise = result.current.sendMessage('尖沙咀在哪里')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
     await act(async () => {
       s.emit('data: {"type":"tool_start","name":"map"}\n')
-      s.emit('data: {"type":"tool_end","name":"map","output":"📍 尖沙咀站：114.172,22.297","nav":{"name":"尖沙咀站","lat":22.297,"lon":114.172,"coord":"gcj02"}}\n')
+      s.emit(
+        'data: {"type":"tool_end","name":"map","output":"📍 尖沙咀站：114.172,22.297","nav":{"name":"尖沙咀站","lat":22.297,"lon":114.172,"coord":"gcj02"}}\n'
+      )
       s.emit('data: [DONE]\n')
       s.close()
     })
-    await act(async () => { await sendPromise })
+    await act(async () => {
+      await sendPromise
+    })
 
-    const hint = result.current.messages.find(m => m.type === 'tool_hint')
+    const hint = result.current.messages.find((m) => m.type === 'tool_hint')
     expect(hint.output).toBe('📍 尖沙咀站：114.172,22.297')
     expect(hint.nav).toEqual({ name: '尖沙咀站', lat: 22.297, lon: 114.172, coord: 'gcj02' })
   })
@@ -166,17 +203,25 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('天气') })
-    await act(async () => { gps.resolve(null) })
+    act(() => {
+      sendPromise = result.current.sendMessage('天气')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
     await act(async () => {
       s.emit('data: {"type":"tool_start","name":"weather"}\n')
-      s.emit('data: {"type":"tool_end","name":"weather","output":"🌤️ 晴","nav":{"name":"x","lon":114.1}}\n')
+      s.emit(
+        'data: {"type":"tool_end","name":"weather","output":"🌤️ 晴","nav":{"name":"x","lon":114.1}}\n'
+      )
       s.emit('data: [DONE]\n')
       s.close()
     })
-    await act(async () => { await sendPromise })
+    await act(async () => {
+      await sendPromise
+    })
 
-    const hint = result.current.messages.find(m => m.type === 'tool_hint')
+    const hint = result.current.messages.find((m) => m.type === 'tool_hint')
     expect(hint.output).toBe('🌤️ 晴')
     expect(hint.nav).toBeUndefined()
   })
@@ -188,20 +233,28 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('帮我算一卦') })
-    await act(async () => { gps.resolve(null) })
+    act(() => {
+      sendPromise = result.current.sendMessage('帮我算一卦')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
     await act(async () => {
       s.emit('data: {"type":"tool_start","name":"tarot"}\n')
-      s.emit('data: {"type":"tool_end","name":"tarot","output":"🐋 小汐去映海里看了一下……","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"name":"恋人","symbol":"VI","position":"过去"},{"name":"魔术师","symbol":"I","position":"现在"},{"name":"女皇","symbol":"III","position":"未来"}]}}\n')
+      s.emit(
+        'data: {"type":"tool_end","name":"tarot","output":"🐋 小汐去映海里看了一下……","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"name":"恋人","symbol":"VI","position":"过去"},{"name":"魔术师","symbol":"I","position":"现在"},{"name":"女皇","symbol":"III","position":"未来"}]}}\n'
+      )
       s.emit('data: [DONE]\n')
       s.close()
     })
-    await act(async () => { await sendPromise })
+    await act(async () => {
+      await sendPromise
+    })
 
     const hint = result.current.messages.find((m) => m.type === 'tool_hint')
     expect(hint.tarot.cards).toHaveLength(3)
     expect(hint.tarot.spread_type).toBe('three')
-    expect(hint.output).toBeTruthy()  // 与卡片同一次原子挂载
+    expect(hint.output).toBeTruthy() // 与卡片同一次原子挂载
   })
 
   it('tool_end tarot 脏数据（缺 name）→ 不挂 tarot，output 正常挂', async () => {
@@ -211,15 +264,23 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     const s = controllableStream()
     apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
     let sendPromise
-    act(() => { sendPromise = result.current.sendMessage('再算一卦') })
-    await act(async () => { gps.resolve(null) })
+    act(() => {
+      sendPromise = result.current.sendMessage('再算一卦')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
     await act(async () => {
       s.emit('data: {"type":"tool_start","name":"tarot"}\n')
-      s.emit('data: {"type":"tool_end","name":"tarot","output":"🐋 文本","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"symbol":"VI","position":"过去"}]}}\n')
+      s.emit(
+        'data: {"type":"tool_end","name":"tarot","output":"🐋 文本","tarot":{"spread_type":"three","spread_name":"三牌占卜","cards":[{"symbol":"VI","position":"过去"}]}}\n'
+      )
       s.emit('data: [DONE]\n')
       s.close()
     })
-    await act(async () => { await sendPromise })
+    await act(async () => {
+      await sendPromise
+    })
 
     const hint = result.current.messages.find((m) => m.type === 'tool_hint')
     expect(hint.tarot).toBeUndefined()

@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     # 默认 False：非回环绑定 + 空 token 直接拒绝启动（fail closed）。
     xiaoxi_allow_insecure: bool = False
 
+    # 本地启动的绑定地址/端口（main.py 消费；Docker 走 CLI uvicorn
+    # --host/--port，不经此配置）。pydantic 自动认 env XIAOXI_BIND_HOST /
+    # XIAOXI_PORT，写在 .env 里同样生效。注意：utils/security.py 的
+    # detect_bind_host（启动安检）与本值保持同一数据源，缺了 .env 这层
+    # 会出现「安检以为回环、实际绑 0.0.0.0」的 fail-open（体检 S9）
+    xiaoxi_bind_host: str = "127.0.0.1"
+    xiaoxi_port: int = 8000
+
     # 备份时剔除高敏数据（生理期记录 cycle_records、由其派生的周期
     # 推算事件 events.source='cycle'、对话档案 chat_sessions/chat_messages）。
     # 开启后每份备份生成时会清空这些行——对话档案是全应用最大体量的

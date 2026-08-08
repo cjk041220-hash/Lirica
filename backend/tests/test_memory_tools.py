@@ -38,7 +38,7 @@ async def test_remember_same_category_appends(injected_mgr):
 
     await remember.ainvoke({"category": "冷冷喜欢的", "content": "芒果"})
     second = await remember.ainvoke({"category": "冷冷喜欢的", "content": "奶茶"})
-    third = await remember.ainvoke({"category": "冷冷喜欢的", "content": "看电影"})
+    await remember.ainvoke({"category": "冷冷喜欢的", "content": "看电影"})
 
     # 三条不同内容应全部入库
     assert await injected_mgr.count() == 3
@@ -168,7 +168,7 @@ async def test_update_memory_overwrites(injected_mgr):
     """update_memory 工具：按 ID 覆盖内容，返回成功文案。"""
     from tools.memory import remember, update_memory
 
-    saved = await remember.ainvoke({"category": "冷冷喜欢的", "content": "爱喝奶茶不加糖"})
+    await remember.ainvoke({"category": "冷冷喜欢的", "content": "爱喝奶茶不加糖"})
     # remember 返回文案里带 ID（[id] 十六位），从库中取真实 id 更稳
     mem = (await injected_mgr.all())[0]
 

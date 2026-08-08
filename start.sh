@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 小汐一键启动（macOS / Linux）— 与 start.bat 对等。
+# 注意：与 start.bat 是双份对等逻辑，改动请两边同步
 # 用法：./start.sh
 set -u
 cd "$(dirname "$0")/backend" || exit 1
@@ -16,7 +17,7 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || PYTHON_BIN="python"
 
 if [ ! -x ".venv/bin/python" ]; then
     echo "    [...] Creating virtual environment..."
-    "$PYTHON_BIN" -m venv .venv || { echo "    [ERR] Failed to create .venv - Python 3.10+ required"; exit 1; }
+    "$PYTHON_BIN" -m venv .venv || { echo "    [ERR] Failed to create .venv - Python 3.12+ required"; exit 1; }
 fi
 
 # --- 安装依赖 ---

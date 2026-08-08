@@ -18,7 +18,7 @@ chmod +x start.sh   # 首次需要
 ```
 
 手动启动路径与 Windows 相同，把 `.venv\Scripts\python` 换成
-`.venv/bin/python` 即可。Python 需要 3.10+（推荐 3.12，见 `.python-version`）。
+`.venv/bin/python` 即可。Python 需要 3.12（见 `.python-version`）。
 
 ### 手动启动
 
@@ -127,12 +127,9 @@ docker compose up -d
 │   ├── checkup-2026-07-29/         # 体检截图
 │   └── superpowers/                # specs/ 设计文档（日历 + 地图双引擎）+ plans/ 实施计划
 │
-├── scripts/                        # 辅助脚本
-│   ├── gen_assets.py               # 生成 PWA 图标 + 立绘 PNG→WebP 压缩
+├── scripts/                        # 辅助脚本（一次性资源工具已归档 attic/）
 │   ├── cleanup_test_residue.py     # 清理测试残留数据
 │   ├── verify_tools.py             # 工具联通性实测
-│   ├── trim_sprites.py             # 立绘预处理
-│   ├── fix_sleeping_sprite.py      # 睡姿立绘定位修正（一次性工具）
 │   └── e2e/
 │       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，29 交互点含日历剧本）
 │       ├── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
