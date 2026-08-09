@@ -185,7 +185,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             created_at      TEXT NOT NULL,
             delivered_at    TEXT,
             read_at         TEXT,
-            status          TEXT DEFAULT 'pending'
+            status          TEXT DEFAULT 'pending',
+            session_id      TEXT
         );
 
         CREATE TABLE IF NOT EXISTS push_subscriptions (

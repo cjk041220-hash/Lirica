@@ -109,6 +109,34 @@ async def test_unread_and_vapid_key_endpoints(client, monkeypatch):
     assert r.json()["enabled"] is False
 
 
+async def test_unread_returns_session_id_and_filters_orphans(client, tmp_db):
+    """v21：unread 返回 session_id；指向已删除会话的孤儿行被过滤。"""
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('e-1', '小汐的日记 · 08月09日', '2026-08-09 08:00', '2026-08-09 12:00', 1)"
+    )
+    await tmp_db.executescript(
+        """
+        INSERT INTO proactive_messages (id, content, created_at, status, session_id)
+        VALUES
+            ('p-era',  '我在看云。', '2026-08-09 10:00', 'delivered', 'e-1'),
+            ('p-orphan', '孤儿未读。', '2026-08-09 10:01', 'delivered', 'e-deleted'),
+            ('p-legacy', '无归属旧消息。', '2026-08-09 09:00', 'stored', NULL);
+        """
+    )
+    await tmp_db.commit()
+
+    r = await client.get("/api/push/unread")
+    assert r.status_code == 200
+    messages = r.json()["messages"]
+
+    by_id = {m["id"]: m for m in messages}
+    assert "p-era" in by_id and by_id["p-era"]["session_id"] == "e-1"
+    assert "p-orphan" not in by_id          # 孤儿（会话已删）被过滤
+    assert "p-legacy" in by_id              # 无归属行仍兼容返回
+    assert by_id["p-legacy"]["session_id"] is None
+
+
 async def test_subscribe_rejects_untrusted_endpoint(client, tmp_db):
     """非受信任推送服务的 endpoint → 400，且不入库（防 SSRF/内容外泄）。"""
     body = {"endpoint": "https://example.com/evil", "keys": {"p256dh": "x", "auth": "y"}}

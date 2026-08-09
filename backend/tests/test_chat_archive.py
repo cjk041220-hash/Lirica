@@ -286,7 +286,82 @@ def test_heartbeat_only_uses_dedicated_archive_read_api():
 
     text = (Path(__file__).parent.parent / "heartbeat.py").read_text(encoding="utf-8")
     for forbidden in ("get_messages", "list_sessions", "record_user_message",
-                      "record_assistant_message", "delete_session"):
+                      "record_assistant_message", "record_solo_message",
+                      "delete_session"):
         assert forbidden not in text, (
             f"heartbeat.py 出现了 {forbidden}——档案例外访问扩大化"
         )
+
+
+# ── era 独处消息（v21：msg_type='solo' + is_era）────────────────
+
+async def test_record_solo_message_creates_era_session(archive_db):
+    """era 会话：is_era=1 + 日记式标题 + msg_type='solo' 消息行。"""
+    await chat_archive.record_solo_message("e-20260809", "早安，冷冷。今天映海的云很好看。", is_era=1)
+
+    sessions = await chat_archive.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == "e-20260809"
+    assert sessions[0]["is_era"] is True
+    assert sessions[0]["title"] == "小汐的日记 · 07月27日"  # archive_db 假时钟
+
+    messages = await chat_archive.get_messages("e-20260809")
+    assert len(messages) == 1
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["msg_type"] == "solo"
+    assert messages[0]["created_at"] == "2026-07-27 10:01"
+
+
+async def test_record_solo_message_online_route_not_era(archive_db):
+    """在线路由的主动消息：msg_type='solo' 但会话不标 is_era。"""
+    await chat_archive.record_solo_message("s-active", "我在看云，想起你说想喝汤。")
+
+    sessions = await chat_archive.list_sessions()
+    assert sessions[0]["is_era"] is False
+    messages = await chat_archive.get_messages("s-active")
+    assert messages[0]["msg_type"] == "solo"
+
+
+async def test_solo_appends_do_not_overwrite_era_flag(archive_db):
+    """era 追加：is_era 只在会话创建时写入，后续追加不覆盖标题与标记。"""
+    await chat_archive.record_solo_message("e-x", "第一条", is_era=1)
+    await chat_archive.record_solo_message("e-x", "第二条", is_era=1)
+
+    cursor = await archive_db.execute(
+        "SELECT is_era, title FROM chat_sessions WHERE id = 'e-x'"
+    )
+    is_era, title = await cursor.fetchone()
+    assert is_era == 1
+    assert title == "小汐的日记 · 07月27日"  # 标题只设一次
+    assert len(await chat_archive.get_messages("e-x")) == 2
+
+
+async def test_record_solo_message_empty_skipped(archive_db):
+    """空文本主动消息跳过（同 record_assistant_message 纪律）。"""
+    await chat_archive.record_solo_message("e-y", "   ")
+    assert await chat_archive.get_messages("e-y") == []
+    assert await chat_archive.list_sessions() == []
+
+
+async def test_normal_chat_rows_have_default_msg_type(archive_db):
+    """普通对话消息 msg_type 恒为 'chat'（v21 默认值）。"""
+    await chat_archive.record_user_message("s-n", "在吗")
+    await chat_archive.record_assistant_message("s-n", "在的")
+    types = [m["msg_type"] for m in await chat_archive.get_messages("s-n")]
+    assert types == ["chat", "chat"]
+
+
+async def test_delete_session_cascades_proactive_rows(archive_db):
+    """删除会话级联清 proactive_messages（防孤儿未读占 unread 槽位）。"""
+    await chat_archive.record_solo_message("e-del", "独处消息", is_era=1)
+    cursor = await archive_db.execute(
+        "INSERT INTO proactive_messages (id, content, created_at, status, session_id) "
+        "VALUES ('p-1', '独处消息', '2026-07-27 10:01', 'delivered', 'e-del')"
+    )
+    await archive_db.commit()
+
+    assert await chat_archive.delete_session("e-del") is True
+    cursor = await archive_db.execute(
+        "SELECT COUNT(*) FROM proactive_messages WHERE session_id = 'e-del'"
+    )
+    assert (await cursor.fetchone())[0] == 0

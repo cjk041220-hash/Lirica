@@ -73,7 +73,18 @@ log = get_logger(__name__)
 #     Spec B：late_night 72h / event_combo 24h 各自独立冷却，「注入即
 #     记账」——LLM 最后没提这茬也算冷却开始；防唠叨由确定性状态保证，
 #     不押在模型自觉上（记忆写路径 31 条消息零触发的前科）。
-SCHEMA_VERSION = 20
+# v21: 主动消息独立会话（era 时间线）— 四表补列：
+#     proactive_messages.session_id（主动消息归属哪个会话；旧积压全部
+#       标已读清账——不这么做，升级后旧前端/旧逻辑会把无归属积压再次
+#       注入当前对话，原样复现「问候轰炸」bug）；
+#     chat_sessions.is_era（小汐的独处时间线会话标记：离线期间主动消息
+#       新开一个 era 窗口，冷冷上线自动切到它看到小汐的活动与话语）；
+#     chat_messages.msg_type（'chat' | 'solo'——独处消息在回放里渲染为
+#       日记风 + 时间戳，区别于普通回复；role 仍受 CHECK 约束只能是
+#       user/assistant，solo 消息落 role='assistant'）；
+#     life_state.last_seen_at / active_session_id（presence 上报：冷冷
+#       在线状态 + 当前活跃会话，era 路由判定的数据源）。
+SCHEMA_VERSION = 21
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -201,6 +212,8 @@ async def _migrate_v3(conn: aiosqlite.Connection) -> None:
     """v3: 新增 proactive_messages 和 push_subscriptions 表。"""
 
     # 创建主动消息表
+    # session_id 列由 v21 迁移补列（v3 建表时还没有 era 概念；此处写
+    # 入保持全新安装与升级路径终态一致——v21 的 PRAGMA 守卫会跳过）
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS proactive_messages (
             id              TEXT PRIMARY KEY,
@@ -208,7 +221,8 @@ async def _migrate_v3(conn: aiosqlite.Connection) -> None:
             created_at      TEXT NOT NULL,
             delivered_at    TEXT,
             read_at         TEXT,
-            status          TEXT DEFAULT 'pending'
+            status          TEXT DEFAULT 'pending',
+            session_id      TEXT
         )
     """)
 
@@ -377,17 +391,21 @@ _migrations[6] = _migrate_v6
 
 # ── v7 迁移：相识纪念日 ──────────────────────────────────────
 
-# life_state 完整 DDL（v7：新增 first_met_on；v16：新增 mood_changed_at）。
+# life_state 完整 DDL（v7：新增 first_met_on；v16：新增 mood_changed_at；
+# v21：新增 last_seen_at + active_session_id——presence 上报，era 路由的
+# 在线判定数据源）。
 # init_db / 迁移 / 测试夹具三处共享此常量，保证 schema 永不漂移
 # （同 EVENTS_SCHEMA_SQL 模式）。
 LIFE_STATE_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS life_state (
-        id              INTEGER PRIMARY KEY DEFAULT 1,
-        mood            TEXT,
-        daily_event     TEXT,
-        updated_at      TEXT,
-        first_met_on    TEXT,
-        mood_changed_at TEXT
+        id                INTEGER PRIMARY KEY DEFAULT 1,
+        mood              TEXT,
+        daily_event       TEXT,
+        updated_at        TEXT,
+        first_met_on      TEXT,
+        mood_changed_at   TEXT,
+        last_seen_at      TEXT,
+        active_session_id TEXT
     );
 """
 
@@ -458,12 +476,17 @@ _migrations[7] = _migrate_v7
 # 故意不定义 FK 约束：全项目 schema 无 FK、PRAGMA foreign_keys 未开启，
 # ON DELETE CASCADE 不会生效——级联删除由 chat_archive.delete_session
 # 显式执行（先删消息、后删会话）。
+# v21：chat_sessions 加 is_era（小汐的独处时间线会话，0=普通/1=era）；
+#       chat_messages 加 msg_type（'chat' 普通对话 / 'solo' 主动消息的
+#       独处话语——回放时渲染为日记风 + 时间戳）。两列都在共享常量里，
+#       老库由 v21 迁移补列，全新安装直接带列，终态一致。
 CHAT_ARCHIVE_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS chat_sessions (
         id          TEXT PRIMARY KEY,
         title       TEXT NOT NULL DEFAULT '',
         created_at  TEXT NOT NULL,
-        updated_at  TEXT NOT NULL
+        updated_at  TEXT NOT NULL,
+        is_era      INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
@@ -474,7 +497,8 @@ CHAT_ARCHIVE_SCHEMA_SQL = """
         session_id  TEXT NOT NULL,
         role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
         content     TEXT NOT NULL,
-        created_at  TEXT NOT NULL
+        created_at  TEXT NOT NULL,
+        msg_type    TEXT NOT NULL DEFAULT 'chat'
     );
 
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session
@@ -890,6 +914,99 @@ async def _migrate_v20(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[20] = _migrate_v20
+
+
+# ── v21 迁移：主动消息独立会话（era 时间线）────────────────────
+
+async def _migrate_v21(conn: aiosqlite.Connection) -> None:
+    """v21: 主动消息独立会话 — 四表补列 + 旧积压清账。
+
+    背景（2026-08-09 用户需求）：主动消息此前无任何会话归属，前端把
+    积压一股脑注入当前打开的对话（「早安/午安/晚上好」问候轰炸）。
+    方案：离线期间的主动消息新开 era 会话（chat_sessions.is_era=1）并
+    追加进它，冷冷上线自动切到该窗口看到小汐的活动与话语；主动消息
+    落库带 session_id；presence 上报在线状态供 era 路由判定。
+
+    ALTER TABLE ADD COLUMN 逐列守卫（幂等，同 v12/v16 模式）；全新安装
+    时各列已由 v3/v8 建表 DDL 与共享常量携带，本迁移自动跳过。
+    旧积压清账是必需步骤：升级前 delivered/stored 的未读行没有
+    session_id，不标已读的话新前端会按「legacy 无归属」路径把它们再次
+    注入当前会话，原样复现本批要修的 bug。一次性清账损失的是几条
+    已过期消息，换的是升级后不再问候轰炸。
+    """
+    import datetime
+
+    from utils.timezone import HKT as _HKT
+
+    now = datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M")
+
+    # 表不存在守卫（v7/v16/v20 同款）：极老库 / 直接调 ensure_schema 的
+    # 升级测试夹具可能跳过 v3（schema_version 伪造已应用），proactive_
+    # messages 尚未建立——此时用含新列的完整 DDL 建表，终态一致
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='proactive_messages'"
+    )
+    if not await cursor.fetchone():
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS proactive_messages (
+                id              TEXT PRIMARY KEY,
+                content         TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                delivered_at    TEXT,
+                read_at         TEXT,
+                status          TEXT DEFAULT 'pending',
+                session_id      TEXT
+            )"""
+        )
+    else:
+        cursor = await conn.execute("PRAGMA table_info(proactive_messages)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "session_id" not in columns:
+            await conn.execute("ALTER TABLE proactive_messages ADD COLUMN session_id TEXT")
+
+    # 旧积压清账：升级前的无归属未读全部标已读（见 docstring）
+    await conn.execute(
+        "UPDATE proactive_messages SET status = 'read', read_at = ? "
+        "WHERE status IN ('delivered', 'stored') AND read_at IS NULL",
+        (now,),
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proactive_session "
+        "ON proactive_messages(session_id)"
+    )
+
+    cursor = await conn.execute("PRAGMA table_info(chat_sessions)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "is_era" not in columns:
+        await conn.execute(
+            "ALTER TABLE chat_sessions ADD COLUMN is_era INTEGER NOT NULL DEFAULT 0"
+        )
+
+    cursor = await conn.execute("PRAGMA table_info(chat_messages)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "msg_type" not in columns:
+        await conn.execute(
+            "ALTER TABLE chat_messages ADD COLUMN msg_type TEXT NOT NULL DEFAULT 'chat'"
+        )
+
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='life_state'"
+    )
+    if not await cursor.fetchone():
+        await conn.executescript(LIFE_STATE_SCHEMA_SQL)
+    else:
+        cursor = await conn.execute("PRAGMA table_info(life_state)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "last_seen_at" not in columns:
+            await conn.execute("ALTER TABLE life_state ADD COLUMN last_seen_at TEXT")
+        if "active_session_id" not in columns:
+            await conn.execute("ALTER TABLE life_state ADD COLUMN active_session_id TEXT")
+
+    await conn.commit()
+    log.info("迁移 v21 完成：主动消息会话归属（session_id/is_era/msg_type/presence）")
+
+
+_migrations[21] = _migrate_v21
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

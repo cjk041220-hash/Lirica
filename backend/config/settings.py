@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_claim_mailto: str = "mailto:xiaoxi@yinghai.local"
 
+    # presence 离线判定阈值（分钟，2026-08-09 用户裁定「关页面即离线 +
+    # 45 分钟兜底」）：前端 pagehide 上报 leaving 立即可判定离线；手机
+    # 杀进程 / 页面静默等没有信号源的场景，按距最后一次在线上报超过
+    # 该分钟数判定离线。离线期间的第一条主动消息会新开 era 会话
+    # （小汐的独处时间线窗口）。
+    presence_timeout_minutes: int = 45
+
     # CORS 允许的前端来源（逗号分隔，开发默认 localhost:3000）
     cors_origins: str = "http://localhost:3000"
 

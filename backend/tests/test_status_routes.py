@@ -48,6 +48,57 @@ async def test_status_empty_row_returns_nulls(client, tmp_db):
     r = await client.get("/api/status")
     assert r.status_code == 200
     assert r.json()["mood"] is None
+    assert r.json()["unseen_era_id"] is None
+
+
+# ── /api/status v21 扩展：presence / unseen_era ───────────────
+
+
+async def test_status_returns_presence_fields(client, tmp_db):
+    """返回 last_seen_at / active_session_id（presence 回显）。"""
+    await tmp_db.execute(
+        "UPDATE life_state SET last_seen_at = '2026-08-09 14:00', "
+        "active_session_id = 's-act' WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    r = await client.get("/api/status")
+    data = r.json()
+    assert data["last_seen_at"] == "2026-08-09 14:00"
+    assert data["active_session_id"] == "s-act"
+    assert data["unseen_era_id"] is None
+
+
+async def test_status_unseen_era_id_when_unread_proactive(client, tmp_db):
+    """era 会话有未读主动消息 → 返回 unseen_era_id（非 null 即切换信号）。"""
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('e-1', '小汐的日记 · 08月09日', '2026-08-09 08:00', '2026-08-09 12:00', 1)"
+    )
+    await tmp_db.execute(
+        "INSERT INTO proactive_messages (id, content, created_at, status, session_id) "
+        "VALUES ('p-1', '我在看云。', '2026-08-09 10:00', 'delivered', 'e-1')"
+    )
+    await tmp_db.commit()
+
+    r = await client.get("/api/status")
+    assert r.json()["unseen_era_id"] == "e-1"
+
+
+async def test_status_unseen_era_none_when_all_read(client, tmp_db):
+    """era 未读全部已读 → unseen_era_id 为 null（不打断当前会话）。"""
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('e-2', '小汐的日记 · 08月09日', '2026-08-09 08:00', '2026-08-09 12:00', 1)"
+    )
+    await tmp_db.execute(
+        "INSERT INTO proactive_messages (id, content, created_at, status, read_at, session_id) "
+        "VALUES ('p-2', '我在看云。', '2026-08-09 10:00', 'read', '2026-08-09 11:00', 'e-2')"
+    )
+    await tmp_db.commit()
+
+    r = await client.get("/api/status")
+    assert r.json()["unseen_era_id"] is None
 
 
 # ── /api/diaries ──────────────────────────────────────────────

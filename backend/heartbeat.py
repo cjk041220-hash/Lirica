@@ -206,10 +206,12 @@ async def check_and_proactive_message(app=None, now_dt: datetime.datetime | None
         # 定期维护（裁剪 checkpoint + 备份数据库）
         await _periodic_maintenance()
 
-        # 主动消息（判断是否触发 → 生成 → 存储 → 推送）。
+        # 主动消息（判断是否触发 → era 路由 → 生成 → 三写一推）。
         # now_dt 沿链下传，不在下游再取一次 now（跨整点错位是本文件
-        # 已经踩过的坑，L131-132 注释为证）
-        await _try_proactive_message(mood, daily_event, hour, now_dt=now_dt)
+        # 已经踩过的坑，L131-132 注释为证）；app 沿链传给 checkpoint
+        # 追加用（era 时间线要写进图状态）
+        await _try_proactive_message(mood, daily_event, hour,
+                                     app=app, now_dt=now_dt)
 
     except Exception:
         log.exception("生命状态更新失败")
@@ -334,10 +336,19 @@ async def _should_send_proactive(now_dt: datetime.datetime | None = None) -> boo
 
 
 async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
+                                      *, greeting_allowed: bool = False,
                                       now_dt: datetime.datetime | None = None) -> str:
     """用小汐的人格生成一条主动消息。
 
     使用独立的 LLM 调用（不走 Agent 图），直接生成一句话。
+
+    greeting_allowed（v21，era 时间线）：
+    - True  = 这是独处时间线的开场（冷冷离开后的第一条），先一句当天
+      的时段问候开场，再接此刻心里的话——「登录按时段问好」由它承载；
+    - False = 独处时刻 / 在线时的随机搭话，**禁止任何「早安/午安/晚上
+      好，冷冷」式问候开头**——问候只在开场出现一次，之后的主动消息
+      是小汐的心理活动与跟冷冷生活相联系的信息（2026-08-09 用户裁定：
+      心跳随机信息不能每次都问好）。
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -357,12 +368,30 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
     wk = weekend_label(now_dt or datetime.datetime.now(_HKT))
     weekend_line = f"今天是{wk}，冷冷不用上课。\n" if wk else ""
 
-    user_prompt = (
-        f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
-        f"{weekend_line}"
-        f"用一两句话主动跟冷冷说话。可以是想念、分享心情、关心、撒娇。\n"
-        f"要自然、简短、符合你的性格。不要问客服式的套话。"
-    )
+    if greeting_allowed:
+        user_prompt = (
+            f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
+            f"{weekend_line}"
+            f"这是你这段独处时间的第一条消息——先说一句当天的问候开场"
+            f"（按现在{period}自然地来，如「早安呀，冷冷」这类），"
+            f"然后接上此刻你心里的话。\n"
+            f"用一两句话。要自然、简短、符合你的性格。不要问客服式的套话。"
+        )
+    else:
+        # 独处变体（v21 根因修复）：旧文案永远以「现在是{早晨/下午/晚上}」
+        # 开场且无问候禁令，LLM 天然产出「早安/午安/晚上好，冷冷」——
+        # 积压四五条全是问候就是它造成的。独处时刻写的是内心戏与生活
+        # 信息，问候禁令必须显式（flash 模型无法从正向表达推出禁令）。
+        user_prompt = (
+            f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
+            f"{weekend_line}"
+            f"现在是你的独处时刻，冷冷不在身边。写下此刻你心里的话："
+            f"自己的心理活动、对冷冷生活的惦记与回忆、或你观察到的日子"
+            f"（天气、歌、书、映海的动静）。\n"
+            f"用一两句话。自然、简短、像自己。\n"
+            f"绝对不要以「早安/午安/晚上好，冷冷」之类的问候开头——"
+            f"她在忙，不是对话时间。不要问客服式的套话。"
+        )
 
     # 生理期关心已收敛进事件系统：预测窗口内的 cycle 事件会随下面
     # 的活跃事件列表一起注入（memo 里带完整的关心纪律），且自带
@@ -401,13 +430,25 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
         log.warning("主动消息：读取对话历史失败，省略历史块: %s", e)
         history = []
     if history:
+        if greeting_allowed:
+            tail_guidance = (
+                "接着这个语气和情境自然地搭话。聊到一半没说完的事，"
+                "可以自己跟进；如果上次闹了别扭或气氛僵着，按你生气时的"
+                "性子来——可以别扭地先递个台阶，可以傲娇一点，但别装没"
+                "发生过，也别翻旧账。"
+            )
+        else:
+            # 独处变体：不是「搭话」，是接着自己的心事往下写；闹过别扭
+            # 也只在心里记着，不隔着空气翻旧账
+            tail_guidance = (
+                "接着你自己的心事往下写。之前和冷冷聊到一半的事，可以"
+                "惦记着提一句；如果上次闹了别扭，心里记着就好，别装没"
+                "发生过，也别翻旧账。"
+            )
         user_prompt += (
             "\n\n你最近和冷冷说过这些话（最新在最后）：\n"
             + format_recent_messages(history)
-            + "\n\n接着这个语气和情境自然地搭话。聊到一半没说完的事，"
-            "可以自己跟进；如果上次闹了别扭或气氛僵着，按你生气时的性子"
-            "来——可以别扭地先递个台阶，可以傲娇一点，但别装没发生过，"
-            "也别翻旧账。"
+            + "\n\n" + tail_guidance
         )
 
     # 用独立的轻量 LLM 调用（低 token、无工具）
@@ -474,13 +515,18 @@ async def sweep_orphan_proactive_messages() -> int:
     return cursor.rowcount
 
 
-async def _store_and_push_proactive(content: str, *, label: str = "主动消息") -> None:
-    """主动消息 / 早安共用的「存 pending → 推送 → 失败降级 stored」流水线。
+async def _store_and_push_proactive(content: str, *, label: str = "主动消息",
+                                    session_id: str | None = None) -> None:
+    """主动消息 / 早安 / 前夜提醒共用的「存 pending → 推送 → 失败降级 stored」流水线。
 
-    统一两处曾经的重复实现，并固定更安全的语义：**存库失败则不推送**。
+    统一三处曾经的重复实现，并固定更安全的语义：**存库失败则不推送**。
     否则设备会收到一条 DB 里根本没有的通知，未读轮询也拉不到，形成
     「响了却查无此消息」的静默不一致（原早安路径的缺陷）。
     推送失败（含 web_push 不可用）降级为 stored，供页面打开时轮询拉取。
+
+    session_id（v21）：主动消息的会话归属（era 时间线 / 活跃会话），
+    前端据此决定消息注入哪个窗口。None = 无归属（旧调用方/兜底路径），
+    迁移 v21 已把存量无归属未读全部清账。
     """
     now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
     msg_id = uuid.uuid4().hex[:16]
@@ -489,9 +535,9 @@ async def _store_and_push_proactive(content: str, *, label: str = "主动消息"
     try:
         conn = await get_db()
         await conn.execute(
-            """INSERT INTO proactive_messages (id, content, created_at, status)
-               VALUES (?, ?, ?, 'pending')""",
-            (msg_id, content, now),
+            """INSERT INTO proactive_messages (id, content, created_at, status, session_id)
+               VALUES (?, ?, ?, 'pending', ?)""",
+            (msg_id, content, now, session_id),
         )
         await conn.commit()
     except Exception as e:
@@ -526,18 +572,36 @@ async def _store_and_push_proactive(content: str, *, label: str = "主动消息"
 
 
 async def _try_proactive_message(mood: str, daily_event: str, hour: int,
-                                 now_dt: datetime.datetime | None = None):
-    """尝试生成并推送一条主动消息。"""
+                                 *, app=None, now_dt: datetime.datetime | None = None):
+    """尝试生成并推送一条主动消息（era 路由，v21）。
+
+    路由：在线 → 追加进冷冷当前活跃会话（她实时看到）；
+    离线 → 追加进独处时间线（era），无 era 则新开一段（开场允许问候，
+    其余走独处变体）。每条消息三写一推（档案 + checkpoint + proactive
+    行 + 推送，era.append_proactive_turn 内各自独立降级）。
+    """
     try:
         if not await _should_send_proactive(now_dt=now_dt):
             return
 
-        # 生成消息
-        content = await _generate_proactive_message(mood, daily_event, hour,
-                                                    now_dt=now_dt)
+        # era 路由（失败放行：回退为离线开新 era，绝不塞进未知会话）
+        from config.settings import get_settings
+        from era import append_proactive_turn, resolve_proactive_target
 
-        # 存 pending → 推送 → 失败降级 stored（与早安共用；存库失败则不推送）
-        await _store_and_push_proactive(content, label="主动消息")
+        now_dt = now_dt or datetime.datetime.now(_HKT)
+        conn = await get_db()
+        kind, target_sid, opener = await resolve_proactive_target(
+            conn, now_dt, get_settings().presence_timeout_minutes
+        )
+
+        # 生成消息（开场允许问候；独处时间线后续/在线搭话走独处变体）
+        content = await _generate_proactive_message(
+            mood, daily_event, hour, greeting_allowed=opener, now_dt=now_dt
+        )
+
+        # 三写一推（档案 + checkpoint + proactive 行 + 推送）
+        await append_proactive_turn(app, target_sid, content, kind=kind,
+                                    label="主动消息")
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)
@@ -622,22 +686,60 @@ async def event_watchdog(app=None):
 
 # 默认早安文案（LLM 生成内容过短时的回退）
 _DEFAULT_GOOD_MORNING = "冷冷早安呀～新的一天开始啦，小汐陪你一起！"
+# 独处变体的默认文案（era 已开放的早安心声；不问候，写此刻的话）
+_DEFAULT_SOLO_NOTE = "我在看云，想起你。你不在的时候，映海安安静静的。"
 
 
-async def daily_morning_greeting():
-    """每日 8:00 HKT 早安问候：获取天气 -> LLM 生成问候 -> 存库 -> 推送。
+async def daily_morning_greeting(app=None):
+    """每日 8:00 HKT 早安问候：era 路由 -> 天气 -> LLM 生成 -> 三写一推。
 
     使用独立轻量 LLM 调用（不走 Agent 图），天气 API 失败时降级为
     纯问候，不阻断推送。
+
+    era 路由（v21，主动消息独立会话）：在线 → 当前会话（早安问候照旧）；
+    离线开新窗 → 问候作为独处时间线开场（「登录按时段问好」由它承载）；
+    离线且 era 已开放 → 独处变体（不问候——问候只在窗口开头出现一次，
+    否则冷冷离开三天回来看到三条「早安」）。
     """
+    from era import append_proactive_turn, resolve_proactive_target
+    from config.settings import get_settings
+
+    log.info("早安问候任务触发")
+
+    # ── era 路由（失败放行：回退为离线开新 era）────────────────
+    conn = await get_db()
+    kind, target_sid, opener = await resolve_proactive_target(
+        conn, datetime.datetime.now(_HKT), get_settings().presence_timeout_minutes
+    )
+
+    # 独处变体：era 已开放（离线期间已有一条以上的主动消息），早安不是
+    # 「当天第一次开口」——按心理活动写，不问候（天气/日程等素材段省略）
+    if kind == "era":
+        try:
+            cursor = await conn.execute(
+                "SELECT mood, daily_event FROM life_state WHERE id = 1"
+            )
+            row = await cursor.fetchone()
+            mood = (row[0] if row else None) or "平静"
+            daily_event = (row[1] if row else None) or ""
+            content = await _generate_proactive_message(
+                mood, daily_event, 8, greeting_allowed=False,
+                now_dt=datetime.datetime.now(_HKT),
+            )
+        except Exception as e:
+            log.error("早安独处变体生成失败，用默认文案: %s", e)
+            content = _DEFAULT_SOLO_NOTE
+        await append_proactive_turn(app, target_sid, content, kind=kind,
+                                    label="早安消息")
+        log.info("早安问候任务完成（独处变体 era=%s）", target_sid)
+        return
+
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from agent.soul import BASE_PERSONA
     from memory import location_store
     from providers.deepseek import create_deepseek_llm
     from tools.weather import _WMO, _fetch_open_meteo, _http_client
-
-    log.info("早安问候任务触发")
 
     # 1. 获取定位
     coords = None
@@ -784,16 +886,17 @@ async def daily_morning_greeting():
     if len(content) < 5:
         content = _DEFAULT_GOOD_MORNING
 
-    # 存 pending → 推送 → 失败降级 stored（与主动消息共用；存库失败则不推送）
-    await _store_and_push_proactive(content, label="早安消息")
+    # 三写一推：档案 + checkpoint + proactive 行 + 推送（era 路由）
+    await append_proactive_turn(app, target_sid, content, kind=kind,
+                                label="早安消息")
 
-    log.info("早安问候任务完成")
+    log.info("早安问候任务完成（%s）", kind)
 
 
 # ── 前夜提醒 ──────────────────────────────────────────────────
 
 
-async def daily_evening_reminder():
+async def daily_evening_reminder(app=None):
     """每日 23:00 HKT 前夜提醒：明天有日程就关心一句，没有就安静。
 
     与主动消息的区别：主动消息是「随兴搭话」（有 4h 间隔 + 概率闸门，
@@ -804,12 +907,23 @@ async def daily_evening_reminder():
     关心走主动消息事件上下文路径，不双重打扰；记忆回声是当天内心戏，
     不属于「明天的安排」。
 
+    era 路由（v21）：提醒同样落进独处时间线（离线时）——内容是日程
+    惦记（生活信息），天然不是问候，无需变体。
+
     失败处理：外层整体 try 吞异常——提醒任务宁可静默，不可向调度器
     抛错，更不可在没日程时骚扰。
     """
+    from era import append_proactive_turn, resolve_proactive_target
+    from config.settings import get_settings
     from utils import events as events_mgr
 
     try:
+        # ── era 路由（失败放行：回退为离线开新 era）────────────
+        conn = await get_db()
+        kind, target_sid, _opener = await resolve_proactive_target(
+            conn, datetime.datetime.now(_HKT), get_settings().presence_timeout_minutes
+        )
+
         tomorrow = (datetime.datetime.now(_HKT).date() + datetime.timedelta(days=1)).isoformat()
         events = await events_mgr.list_events_for_calendar(tomorrow, tomorrow)
         if not events:
@@ -861,7 +975,9 @@ async def daily_evening_reminder():
         if len(content) < 5:
             content = f"对啦冷冷，明天有「{events[0]['title']}」，别忘了哦~"
 
-        await _store_and_push_proactive(content, label="前夜提醒")
+        # 三写一推：档案 + checkpoint + proactive 行 + 推送（era 路由）
+        await append_proactive_turn(app, target_sid, content, kind=kind,
+                                    label="前夜提醒")
     except Exception as e:
         log.error("前夜提醒失败: %s", e)
 
@@ -1041,7 +1157,7 @@ def register_jobs(app=None) -> None:
         # 10 分钟内仍补跑，而不是静默跳过
         misfire_grace_time=600,
     )
-    # 早安问候：每日 8:00 HKT
+    # 早安问候：每日 8:00 HKT（v21 起需 app——era 路由的 checkpoint 追加）
     scheduler.add_job(
         daily_morning_greeting,
         "cron",
@@ -1049,6 +1165,7 @@ def register_jobs(app=None) -> None:
         minute=0,
         timezone="Asia/Hong_Kong",
         id="daily_morning_greeting",
+        kwargs={"app": app},
         replace_existing=True,
         misfire_grace_time=3600,  # 1小时宽容窗口，防止Docker重启错过
     )
@@ -1061,6 +1178,7 @@ def register_jobs(app=None) -> None:
         minute=0,
         timezone="Asia/Hong_Kong",
         id="daily_evening_reminder",
+        kwargs={"app": app},
         replace_existing=True,
         misfire_grace_time=3600,
     )

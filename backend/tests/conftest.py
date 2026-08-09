@@ -29,7 +29,8 @@ async def tmp_db(tmp_path):
         CREATE TABLE IF NOT EXISTS proactive_messages (
             id TEXT PRIMARY KEY, content TEXT NOT NULL,
             created_at TEXT NOT NULL, delivered_at TEXT,
-            read_at TEXT, status TEXT DEFAULT 'pending'
+            read_at TEXT, status TEXT DEFAULT 'pending',
+            session_id TEXT
         );
         CREATE TABLE IF NOT EXISTS push_subscriptions (
             id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE,

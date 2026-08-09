@@ -130,17 +130,25 @@ async def unsubscribe(request: Request, endpoint: str | None = None):
 
 @router.get("/push/unread")
 async def get_unread():
-    """获取未读的主动消息（最多 10 条）。"""
+    """获取未读的主动消息（最多 10 条）。
+
+    v21 扩展：返回 session_id（主动消息的会话归属）。前端只注入
+    session_id == 当前活跃会话的消息；era 消息不注入（它已在
+    「小汐的独处时间线」窗口里由回放展示）。
+    WHERE 里挡孤儿：session_id 指向的会话已被删除（级联清理之外的
+    双保险）时不再返回——孤儿未读会永久占住本列表的 LIMIT 槽位。
+    """
     conn = await get_db()
     cursor = await conn.execute(
-        """SELECT id, content, created_at FROM proactive_messages
+        """SELECT id, content, created_at, session_id FROM proactive_messages
            WHERE status IN ('delivered', 'stored') AND read_at IS NULL
+             AND (session_id IS NULL OR session_id IN (SELECT id FROM chat_sessions))
            ORDER BY created_at DESC LIMIT 10"""
     )
     rows = await cursor.fetchall()
 
     messages = [
-        {"id": r[0], "content": r[1], "created_at": r[2]}
+        {"id": r[0], "content": r[1], "created_at": r[2], "session_id": r[3]}
         for r in rows
     ]
     return {"messages": messages, "count": len(messages)}

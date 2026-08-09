@@ -441,8 +441,9 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
     async def always_send(now_dt=None):
         return True  # 跳过 4h 间隔 / 50% 概率 / 深夜判断，保证确定性
 
-    async def fake_generate(mood, daily_event, hour, now_dt=None):
+    async def fake_generate(mood, daily_event, hour, *, greeting_allowed=False, now_dt=None):
         # now_dt：周末感知沿链下传的时间（v5.1 新增，此处忽略）
+        # greeting_allowed：v21 era 路由——开场允许问候，此处忽略
         return "冷冷，小汐在想你~（调度集成测试）"
 
     async def fake_send_push(title, body, url="/"):
@@ -452,6 +453,9 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
         pass  # 跳过 checkpoint 裁剪 / 数据库备份
 
     test_scheduler = AsyncIOScheduler()
+    # v21 起主动消息走 era 三写一推：档案行也要接到临时库（否则
+    # record_solo_message 写生产库，污染真实数据库）
+    import memory.chat_archive as _archive
     saved = {
         "scheduler": hb.scheduler,
         "get_db": hb.get_db,
@@ -459,12 +463,14 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
         "generate": hb._generate_proactive_message,
         "maintenance": hb._periodic_maintenance,
         "push": wp.send_push,
+        "archive_db": _archive.get_db,
     }
     hb.scheduler = test_scheduler
     hb.get_db = mock_get_db
     hb._should_send_proactive = always_send
     hb._generate_proactive_message = fake_generate
     hb._periodic_maintenance = noop
+    _archive.get_db = mock_get_db
     wp.send_push = fake_send_push
     try:
         hb.register_jobs(app=None)
@@ -502,6 +508,7 @@ async def test_scheduler_actually_runs_proactive_chain(tmp_db):
         hb._should_send_proactive = saved["should"]
         hb._generate_proactive_message = saved["generate"]
         hb._periodic_maintenance = saved["maintenance"]
+        _archive.get_db = saved["archive_db"]
         wp.send_push = saved["push"]
 
 
@@ -1266,7 +1273,14 @@ def _capturing_llm(captured, reply="冷冷，小汐在想你~"):
 
 async def test_proactive_prompt_includes_history_tail(tmp_db):
     """patch recent_messages 返回「吵架尾巴」→ prompt 含历史块与
-    「递台阶/别装没发生过」引导词（捕获 LLM 入参，不真调模型）。"""
+    独处变体引导词（「接着自己的心事往下写/别装没发生过」）——
+    捕获 LLM 入参，不真调模型。
+
+    v21 起默认走独处变体（greeting_allowed=False）：尾巴引导语从
+    「自然地搭话」改为「接着自己的心事往下写」（她在忙，不是对话
+    时间）。「递个台阶」的搭话引导只在开场（greeting_allowed=True）
+    出现，见 test_proactive_opener_tail_keeps_approach_guidance。
+    """
     import datetime as dt
     from unittest.mock import AsyncMock, patch
 
@@ -1295,6 +1309,38 @@ async def test_proactive_prompt_includes_history_tail(tmp_db):
     assert "你最近和冷冷说过这些话（最新在最后）" in human
     assert "[08-04 23:41] 冷冷：JK 算什么东西，你也配替他说话？" in human
     assert "[08-04 23:42] 小汐：你这么说，我不高兴了。" in human
+    assert "接着你自己的心事往下写" in human
+    assert "别装没发生过" in human
+
+
+async def test_proactive_opener_tail_keeps_approach_guidance(tmp_db):
+    """开场（greeting_allowed=True）的尾巴引导语保持「搭话/递台阶」原版。"""
+    import datetime as dt
+    from unittest.mock import AsyncMock, patch
+
+    import heartbeat
+    from utils.timezone import HKT
+
+    captured = {}
+    tail = [
+        {"role": "user", "content": "……我刚才是不是说太过分了？",
+         "created_at": "2026-08-04 23:41"},
+        {"role": "assistant", "content": "（安静了一会儿）是有点过分。",
+         "created_at": "2026-08-04 23:42"},
+    ]
+
+    with patch("providers.deepseek.create_deepseek_llm",
+               return_value=_capturing_llm(captured)), \
+         patch("utils.events.get_active_events", return_value=[]), \
+         patch("utils.events.get_recent_proactive_texts", return_value=[]), \
+         patch("memory.chat_archive.recent_messages",
+               new=AsyncMock(return_value=tail)):
+        await heartbeat._generate_proactive_message(
+            "不开心", "映海很安静", 8, greeting_allowed=True,
+            now_dt=dt.datetime(2026, 8, 5, 9, 0, tzinfo=HKT))
+
+    human = captured["human"]
+    assert "自然地搭话" in human
     assert "递个台阶" in human
     assert "别装没发生过" in human
 
@@ -1375,3 +1421,212 @@ async def test_morning_prompt_includes_history_tail(tmp_db):
         assert "如果昨晚收尾僵着，早上是你先开口" in human
     finally:
         db_core._db = original
+
+
+# ── v21 era 路由：问候禁令 + 会话归属 ─────────────────────────
+
+
+async def test_proactive_solo_variant_forbids_greeting(tmp_db):
+    """独处变体 prompt：显式禁止问候开头（截图「问候轰炸」的根因修复）。"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    captured = {}
+    fake_llm = MagicMock()
+
+    async def fake_ainvoke(messages, **kwargs):
+        captured["human"] = messages[-1].content
+        return MagicMock(content="我在看云，想起你。")
+
+    fake_llm.ainvoke = fake_ainvoke
+
+    with patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])), \
+         patch("utils.events.get_active_events", new=AsyncMock(return_value=[])), \
+         patch("utils.events.get_recent_proactive_texts", new=AsyncMock(return_value=[])):
+        import heartbeat as hb
+        text = await hb._generate_proactive_message("开心", "映海很安静", 15)
+
+    human = captured["human"]
+    assert "独处时刻，冷冷不在身边" in human
+    assert "绝对不要以「早安/午安/晚上好，冷冷」之类的问候开头" in human
+    assert "她在忙，不是对话时间" in human
+    assert text == "我在看云，想起你。"
+
+
+async def test_proactive_opener_allows_greeting(tmp_db):
+    """era 开场消息：先一句时段问候开场，再接心里的话。"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    captured = {}
+    fake_llm = MagicMock()
+
+    async def fake_ainvoke(messages, **kwargs):
+        captured["human"] = messages[-1].content
+        return MagicMock(content="早安呀，冷冷。今天映海的云很好看。")
+
+    fake_llm.ainvoke = fake_ainvoke
+
+    with patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])), \
+         patch("utils.events.get_active_events", new=AsyncMock(return_value=[])), \
+         patch("utils.events.get_recent_proactive_texts", new=AsyncMock(return_value=[])):
+        import heartbeat as hb
+        text = await hb._generate_proactive_message("开心", "映海很安静", 8,
+                                                    greeting_allowed=True)
+
+    assert "先说一句当天的问候开场" in captured["human"]
+    assert text.startswith("早安呀，冷冷")
+
+
+async def test_try_proactive_message_routes_to_era(tmp_db, monkeypatch):
+    """era 路由：离线 + 开放 era → 追加进时间线，独处变体（不问候）。"""
+    import heartbeat as hb
+
+    async def mock_get_db():
+        return tmp_db
+
+    async def always_send(now_dt=None):
+        return True
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    monkeypatch.setattr(hb, "_should_send_proactive", always_send)
+
+    seen = {}
+
+    async def fake_target(conn, now_dt, timeout_minutes):
+        return ("era", "e-1", False)
+
+    async def fake_generate(mood, daily_event, hour, *, greeting_allowed=False, now_dt=None):
+        seen["greeting_allowed"] = greeting_allowed
+        return "我在看云。"
+
+    appended = []
+
+    async def fake_append(app, sid, content, *, kind, label="主动消息"):
+        appended.append((sid, content, kind, label))
+
+    monkeypatch.setattr("era.resolve_proactive_target", fake_target)
+    monkeypatch.setattr(hb, "_generate_proactive_message", fake_generate)
+    monkeypatch.setattr("era.append_proactive_turn", fake_append)
+
+    await hb._try_proactive_message("开心", "映海很安静", 15)
+
+    assert seen["greeting_allowed"] is False       # 追加消息不问候
+    assert appended == [("e-1", "我在看云。", "era", "主动消息")]
+
+
+async def test_try_proactive_message_opener_greets(tmp_db, monkeypatch):
+    """era 路由：离线开新窗 → 开场消息允许问候（greeting_allowed=True）。"""
+    import heartbeat as hb
+
+    async def mock_get_db():
+        return tmp_db
+
+    async def always_send(now_dt=None):
+        return True
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    monkeypatch.setattr(hb, "_should_send_proactive", always_send)
+
+    seen = {}
+
+    async def fake_target(conn, now_dt, timeout_minutes):
+        return ("new_era", "e-new", True)
+
+    async def fake_generate(mood, daily_event, hour, *, greeting_allowed=False, now_dt=None):
+        seen["greeting_allowed"] = greeting_allowed
+        return "早安呀，冷冷。我在看云。"
+
+    appended = []
+
+    async def fake_append(app, sid, content, *, kind, label="主动消息"):
+        appended.append((sid, content, kind, label))
+
+    monkeypatch.setattr("era.resolve_proactive_target", fake_target)
+    monkeypatch.setattr(hb, "_generate_proactive_message", fake_generate)
+    monkeypatch.setattr("era.append_proactive_turn", fake_append)
+
+    await hb._try_proactive_message("开心", "映海很安静", 8)
+
+    assert seen["greeting_allowed"] is True        # 开场允许问候
+    assert appended == [("e-new", "早安呀，冷冷。我在看云。", "new_era", "主动消息")]
+
+
+async def test_morning_greeting_era_solo_variant(tmp_db, monkeypatch):
+    """era 已开放 → 早安走独处变体（不问候），且不查天气。"""
+    from unittest.mock import AsyncMock
+
+    import heartbeat as hb
+
+    async def mock_get_db():
+        return tmp_db
+
+    async def fake_target(conn, now_dt, timeout_minutes):
+        return ("era", "e-1", False)
+
+    generated = {}
+
+    async def fake_generate(mood, daily_event, hour, *, greeting_allowed=False, now_dt=None):
+        generated["greeting_allowed"] = greeting_allowed
+        return "我在看云，想起你。"
+
+    appended = []
+
+    async def fake_append(app, sid, content, *, kind, label="主动消息"):
+        appended.append((sid, content, kind, label))
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    monkeypatch.setattr("era.resolve_proactive_target", fake_target)
+    monkeypatch.setattr(hb, "_generate_proactive_message", fake_generate)
+    monkeypatch.setattr("era.append_proactive_turn", fake_append)
+    # 独处变体不该走天气段——真被调用会断言失败（也不该发起网络请求）
+    monkeypatch.setattr("tools.weather._fetch_open_meteo",
+                        AsyncMock(side_effect=AssertionError("独处变体不该查天气")))
+
+    await hb.daily_morning_greeting()
+
+    assert generated["greeting_allowed"] is False
+    assert appended == [("e-1", "我在看云，想起你。", "era", "早安消息")]
+
+
+async def test_morning_greeting_opener_uses_normal_prompt(tmp_db, monkeypatch):
+    """离线开新窗 → 早安作为时间线开场：问候照旧（含天气素材段）。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    import heartbeat as hb
+
+    async def mock_get_db():
+        return tmp_db
+
+    async def fake_target(conn, now_dt, timeout_minutes):
+        return ("new_era", "e-new", True)
+
+    captured = {}
+
+    class FakeLLM:
+        async def ainvoke(self, msgs):
+            captured["human"] = msgs[-1].content
+            return SimpleNamespace(content="早安呀，冷冷。今天要开开心心的哦！")
+
+    async def fake_fetch(client, lat, lon):
+        return {}
+
+    appended = []
+
+    async def fake_append(app, sid, content, *, kind, label="主动消息"):
+        appended.append((sid, content, kind, label))
+
+    monkeypatch.setattr(hb, "get_db", mock_get_db)
+    monkeypatch.setattr("era.resolve_proactive_target", fake_target)
+    monkeypatch.setattr("era.append_proactive_turn", fake_append)
+
+    with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+         patch("memory.location_store.get_any", return_value=None), \
+         patch("tools.weather._fetch_open_meteo", side_effect=fake_fetch), \
+         patch("utils.web_push.send_push", return_value=0):
+        await hb.daily_morning_greeting()
+
+    assert "早安问候" in captured["human"]          # 开场问候照旧
+    assert appended[0][0] == "e-new"
+    assert appended[0][2] == "new_era"
