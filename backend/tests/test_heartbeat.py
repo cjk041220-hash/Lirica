@@ -1426,8 +1426,10 @@ async def test_morning_prompt_includes_history_tail(tmp_db):
 # ── v21 era 路由：问候禁令 + 会话归属 ─────────────────────────
 
 
-async def test_proactive_solo_variant_forbids_greeting(tmp_db):
-    """独处变体 prompt：显式禁止问候开头（截图「问候轰炸」的根因修复）。"""
+async def test_proactive_solo_variant_guards_mechanical_greeting(tmp_db):
+    """独处变体 prompt：拦固定句式问候与反复问好（打卡机感），
+    但不禁止自然流露的招呼（用户 2026-08-10 修正：「倒也不是说完全
+    禁止问好，只是别一天早中晚都问好」）。"""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     captured = {}
@@ -1448,8 +1450,12 @@ async def test_proactive_solo_variant_forbids_greeting(tmp_db):
 
     human = captured["human"]
     assert "独处时刻，冷冷不在身边" in human
-    assert "绝对不要以「早安/午安/晚上好，冷冷」之类的问候开头" in human
-    assert "她在忙，不是对话时间" in human
+    # 拦的是「固定句式开场 + 反复问好」的机械模式，不是问候本身
+    assert "别拿「早安/午安/晚上好，冷冷」这种固定句式当开场白" in human
+    assert "一天里也别反复问好" in human
+    assert "不是自动问候的机器" in human
+    # 自然流露的招呼被保留（「偶尔想打招呼也可以自然带一句」）
+    assert "偶尔想打招呼也可以自然带一句" in human
     assert text == "我在看云，想起你。"
 
 
