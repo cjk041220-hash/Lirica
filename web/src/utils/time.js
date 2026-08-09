@@ -16,6 +16,13 @@ export function isLateNight() {
   return getHKTHour() < 7
 }
 
+/** 当前 HKT 日期串 "YYYY-MM-DD"（2026-08-09 商业级 2.3：连续陪伴天数
+ *  的「今天/昨天」比对用）。offsetDays 前推 N 天。与 getHKTHour 同源，
+ *  不跟设备本地时区。 */
+export function getHKTDateString(offsetDays = 0) {
+  return new Date(Date.now() + 8 * 3600e3 + offsetDays * 86400e3).toISOString().slice(0, 10)
+}
+
 /**
  * 天空时段（SkyBackground 用）。与深夜判定共用 getHKTHour，
  * 保证「天色」和「小汐困不困」永远来自同一个钟。

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback, memo } from 'react'
 // 戳一戳文案池单一真相源（E2E 共用 src/poke-lines.json，改一处即可，免双份同步）
 import POKE_LINES from '../poke-lines.json'
 import Heart from './Heart'
+// 连续陪伴天数的「今天/昨天」按 HKT 判定（项目时区纪律：一切跟 HKT 钟）
+import { getHKTDateString } from '../utils/time'
 
 // 戳一戳爱心迸发的配色轮换（草莓/树莓/蜜桃）
 const BURST_COLORS = ['text-strawberry', 'text-raspberry', 'text-peach']
@@ -39,9 +41,16 @@ const INTIMACY_THRESHOLDS = [10, 30, 80] // 累计戳数 → level 1/2/3
 function loadIntimacy() {
   try {
     const d = JSON.parse(localStorage.getItem(INTIMACY_KEY) || '{}')
-    return { count: d.count | 0, lastPokeAt: d.lastPokeAt | 0, level: d.level | 0 }
+    return {
+      count: d.count | 0,
+      lastPokeAt: d.lastPokeAt | 0,
+      level: d.level | 0,
+      // 连续陪伴（2026-08-09 商业级 2.3）：HKT 日期串 + 连续天数
+      lastPokeDay: typeof d.lastPokeDay === 'string' ? d.lastPokeDay : '',
+      streak: d.streak | 0,
+    }
   } catch {
-    return { count: 0, lastPokeAt: 0, level: 0 }
+    return { count: 0, lastPokeAt: 0, level: 0, lastPokeDay: '', streak: 0 }
   }
 }
 
@@ -74,11 +83,14 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
   const [burst, setBurst] = useState([]) // 戳一戳爱心迸发（自清理）
   const [pokeOverride, setPokeOverride] = useState(null) // 深夜戳醒的临时立绘
   const [wiggle, setWiggle] = useState(false) // 冷却中的轻晃反馈
+  const [nuzzle, setNuzzle] = useState(false) // 摸头的轻蹭反馈（商业级 2.1）
   const [broken, setBroken] = useState(false) // 立绘加载失败 → 回退 idle
   const cooldownRef = useRef(0)
+  const lastTapRef = useRef(0) // 双击摸头的手势计时（区别于冷却计时）
   const bubbleTimerRef = useRef(null)
   const overrideTimerRef = useRef(null)
   const wiggleTimerRef = useRef(null)
+  const nuzzleTimerRef = useRef(null)
   const crossfadeTimerRef = useRef(null)
   // curr 的镜像 ref：crossfade effect 只应响应 state 变化（App 的显示状态），
   // 用 ref 读「当前状态」避免把 setCurr 结果塞进依赖数组造成空跑
@@ -111,9 +123,54 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
       clearTimeout(bubbleTimerRef.current)
       clearTimeout(overrideTimerRef.current)
       clearTimeout(wiggleTimerRef.current)
+      clearTimeout(nuzzleTimerRef.current)
       clearTimeout(crossfadeTimerRef.current)
     },
     []
+  )
+
+  // 摸头（2026-08-09 商业级 2.1）：冷却窗口内 350ms 的紧跟第二击 =
+  // 双击手势，升级为摸头而非「别戳了」的轻晃。台词池独立（pat），
+  // 亲密度 2/3 级掺入更亲昵的摸头文案；爱心更多更大；立绘轻蹭一下；
+  // 非睡态时短暂开心（不覆盖 listening/thinking/talking 聊天流程态）
+  const handlePat = useCallback(
+    (now) => {
+      const intimacy = loadIntimacy()
+      const pool = (POKE_LINES.pat || POKE_LINES.default).concat(
+        ...(intimacy.level >= 2 ? POKE_LINES.patbond2 || [] : []),
+        ...(intimacy.level >= 3 ? POKE_LINES.patbond3 || [] : [])
+      )
+      setBubble({ id: now, text: pool[Math.floor(Math.random() * pool.length)] })
+      clearTimeout(bubbleTimerRef.current)
+      bubbleTimerRef.current = setTimeout(() => setBubble(null), BUBBLE_MS)
+
+      setNuzzle(true)
+      clearTimeout(nuzzleTimerRef.current)
+      nuzzleTimerRef.current = setTimeout(() => setNuzzle(false), 550)
+
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const heartCount = 10 + intimacy.level * 2 // 比戳一戳更盛
+        setBurst(
+          Array.from({ length: heartCount }, (_, i) => ({
+            id: now + i,
+            left: 25 + Math.random() * 50,
+            top: 14 + Math.random() * 10,
+            size: 9 + Math.random() * 5 + intimacy.level,
+            dx: (Math.random() - 0.5) * 64,
+            dy: -(40 + Math.random() * 26),
+            r: (Math.random() - 0.5) * 40,
+            color: BURST_COLORS[i % BURST_COLORS.length],
+          }))
+        )
+      }
+
+      if (!['sleepy', 'halfawake', 'listening', 'thinking', 'talking'].includes(curr)) {
+        setPokeOverride('happy')
+        clearTimeout(overrideTimerRef.current)
+        overrideTimerRef.current = setTimeout(() => setPokeOverride(null), 1600)
+      }
+    },
+    [curr]
   )
 
   // 戳一戳：纯本地交互。pokeOverride 只是局部视觉层，
@@ -122,6 +179,13 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
     if (!pokeable) return
     const now = Date.now()
     if (now - cooldownRef.current < POKE_COOLDOWN_MS) {
+      // 双击手势 → 摸头（商业级 2.1）；判定后清手势计时，防三连击重复触发
+      if (lastTapRef.current && now - lastTapRef.current < 350) {
+        lastTapRef.current = 0
+        cooldownRef.current = now // 摸头后重新进入冷却
+        handlePat(now)
+        return
+      }
       // 冷却中：不弹新气泡，只给一个轻晃反馈（不是完全无响应）
       setWiggle(true)
       clearTimeout(wiggleTimerRef.current)
@@ -129,6 +193,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
       return
     }
     cooldownRef.current = now
+    lastTapRef.current = now
 
     // 亲密度累积（U3）：冷却通过才算一次「认真的戳」，连戳刷屏不计
     const intimacy = loadIntimacy()
@@ -137,6 +202,17 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
     const newLevel = INTIMACY_THRESHOLDS.filter((t) => intimacy.count >= t).length
     const leveledUp = newLevel > intimacy.level
     intimacy.level = newLevel
+
+    // 连续陪伴天数（商业级 2.3）：HKT 跨天即结算——昨天来过 streak+1，
+    // 断签归 1。每日第一戳且 streak≥2 时用专属台词盖掉随机抽取
+    //（同 levelup 的「关系变化时刻不该淹没在池子里」）
+    const today = getHKTDateString()
+    const firstToday = intimacy.lastPokeDay !== today
+    if (firstToday) {
+      intimacy.streak = intimacy.lastPokeDay === getHKTDateString(-1) ? intimacy.streak + 1 : 1
+      intimacy.lastPokeDay = today
+    }
+
     try {
       localStorage.setItem(INTIMACY_KEY, JSON.stringify(intimacy))
     } catch {
@@ -157,7 +233,9 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
     const levelupLines = leveledUp ? POKE_LINES.levelup?.[String(newLevel)] : null
     const text = levelupLines?.length
       ? levelupLines[Math.floor(Math.random() * levelupLines.length)]
-      : pool[Math.floor(Math.random() * pool.length)]
+      : firstToday && intimacy.streak >= 2
+        ? `这是你连续来看我的第 ${intimacy.streak} 天呢。`
+        : pool[Math.floor(Math.random() * pool.length)]
     setBubble({ id: now, text })
     clearTimeout(bubbleTimerRef.current)
     bubbleTimerRef.current = setTimeout(() => setBubble(null), BUBBLE_MS)
@@ -187,7 +265,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
       clearTimeout(overrideTimerRef.current)
       overrideTimerRef.current = setTimeout(() => setPokeOverride(null), SLEEPY_OVERRIDE_MS)
     }
-  }, [pokeable, pokeOverride, curr])
+  }, [pokeable, pokeOverride, curr, handlePat])
 
   const effectiveState = pokeOverride || curr
   const src = broken ? spriteMap.idle : spriteMap[effectiveState] || spriteMap.idle
@@ -270,7 +348,7 @@ export const CharacterSprite = memo(function CharacterSprite({ state = 'idle', p
           真 crossfade：旧图淡出 + 新图淡入双图叠放，无空白帧 */}
       <div
         className={
-          `${wiggle ? 'animate-wiggle ' : ''}` +
+          `${wiggle ? 'animate-wiggle ' : ''}${nuzzle ? 'animate-nuzzle ' : ''}` +
           (effectiveState === 'sleepy'
             ? 'animate-breathe-slow relative'
             : effectiveState === 'halfawake'

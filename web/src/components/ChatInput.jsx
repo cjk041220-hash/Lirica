@@ -7,12 +7,31 @@ const MAX_LEN = 2000 // 与后端 _MAX_MESSAGE_LENGTH 一致，物理阻断超�
 export default function ChatInput({ onSend, isStreaming, onStop }) {
   const [text, setText] = useState('')
   const [focused, setFocused] = useState(false)
+  // 发送微反馈（2026-08-09 商业级 2.4）：发送瞬间从按钮绽开三颗
+  // 小爱心向左上飘（消息飞去的方向），强化「话说出去了」的确认感
+  const [sendBurst, setSendBurst] = useState([])
   const inputRef = useRef(null)
+
+  const triggerSendBurst = () => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const now = Date.now()
+    setSendBurst(
+      Array.from({ length: 3 }, (_, i) => ({
+        id: now + i,
+        dx: -10 - Math.random() * 22,
+        dy: -(22 + Math.random() * 16),
+        r: (Math.random() - 0.5) * 40,
+        size: 6 + Math.random() * 3,
+        delay: i * 0.05,
+      }))
+    )
+  }
 
   const handleSend = () => {
     const trimmed = text.trim()
     if (!trimmed || isStreaming) return
     onSend(trimmed)
+    triggerSendBurst()
     setText('')
     inputRef.current?.focus()
   }
@@ -32,10 +51,33 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
         </div>
       )}
       <div
-        className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
+        className={`relative flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
           focused ? 'bg-white/70 shadow-[0_2px_12px_rgba(242,120,159,0.14)]' : 'bg-white/40'
         } border border-white/50`}
       >
+        {/* 发送爱心迸发（onAnimationEnd 自清理） */}
+        {sendBurst.length > 0 && (
+          <span
+            className="absolute right-3 top-1/2 pointer-events-none"
+            onAnimationEnd={() => setSendBurst([])}
+            aria-hidden
+          >
+            {sendBurst.map((h) => (
+              <span
+                key={h.id}
+                className="heart-burst absolute text-strawberry"
+                style={{
+                  '--dx': `${h.dx.toFixed(1)}px`,
+                  '--dy': `${h.dy.toFixed(1)}px`,
+                  '--r': `${h.r.toFixed(1)}deg`,
+                  animation: `heartBurst 0.8s cubic-bezier(0.16, 1, 0.3, 1) ${h.delay}s backwards`,
+                }}
+              >
+                <Heart size={h.size} />
+              </span>
+            ))}
+          </span>
+        )}
         <input
           ref={inputRef}
           type="text"

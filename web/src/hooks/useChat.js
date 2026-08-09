@@ -3,6 +3,7 @@ import { apiFetch, getToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { getGpsCoords, isGpsEnabled } from '../api/location'
 import { isValidNav } from '../utils/mapLink'
 import { isValidTarot } from '../utils/tarot'
+import { getHKTHour } from '../utils/time'
 
 // iOS Safari <17.4 的 fetch + ReadableStream 会整段缓冲、生成完毕才
 // 一次性吐出（WebKit 17.4 起才真增量）——打字机效果全毁，用户盯着
@@ -66,6 +67,43 @@ const summarizeOutput = (output) => {
   return text.length > 300 ? text.slice(0, 300) + '……' : text
 }
 
+// ── 时段问候（2026-08-09 商业级 2.2）──────────────────────────
+// 只在「新会话、没有任何历史」时出现一次——是开门时小汐抬头打招呼，
+// 不是每次刷新都刷存在感。按 HKT 时段分池，深夜放轻音量（与沉睡
+// 叙事同频）。纯前端插入（proactive 风格），不触达后端、不进档案。
+const GREETING_POOLS = [
+  {
+    hours: [5, 6, 7, 8],
+    lines: ['早安呀。窗外刚亮起来，第一缕光我给你留着呢。', '（打着哈欠）早……今天的天空是浅粉色的哦。'],
+  },
+  {
+    hours: [9, 10, 11],
+    lines: ['你来啦。上午的云走得可慢了，我都数到第七朵。', '上午好呀。地板上的光斑刚挪到窗边，暖乎乎的。'],
+  },
+  {
+    hours: [12, 13],
+    lines: ['午安。这个点最容易犯困……你吃饭了吗？', '中午好。我刚给窗台上的小盆栽浇完水。'],
+  },
+  {
+    hours: [14, 15, 16, 17],
+    lines: ['下午好呀。有什么事想聊聊吗？我正好闲下来了。', '你回来啦。下午的房间最舒服了，要坐一会儿吗。'],
+  },
+  {
+    hours: [18, 19, 20, 21],
+    lines: ['晚上好。天刚擦黑，星星一颗一颗打卡上班了。', '你回来啦。今天过得怎么样？'],
+  },
+  {
+    hours: [22, 23, 0, 1, 2, 3, 4],
+    lines: ['（小声）……你还没睡呀。我也是。', '（灯光调暗了一点）夜深了，轻一点聊吧。'],
+  },
+]
+
+/** 按 HKT 小时取一条时段问候（导出供单测注入小时）。 */
+export function timeGreeting(hour = getHKTHour()) {
+  const pool = GREETING_POOLS.find((p) => p.hours.includes(hour)) || GREETING_POOLS[0]
+  return pool.lines[Math.floor(Math.random() * pool.lines.length)]
+}
+
 export function useChat() {
   const [messages, setMessages] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
@@ -113,7 +151,32 @@ export function useChat() {
         console.warn('[useChat] failed to load history:', e)
       }
     }
-    if (history.length === 0) return
+    if (history.length === 0) {
+      // 时段问候（商业级 2.2）：新会话一句招呼，每会话仅一次
+      //（localStorage 按会话 id 记账，刷新不重复）；仅当消息列表
+      // 仍为空时注入，绝不覆盖期间到达的主动消息
+      const greetKey = `xiaoxi-greeted-${sid}`
+      let greeted = false
+      try {
+        greeted = !!localStorage.getItem(greetKey)
+      } catch {
+        /* 私密模式读不了就当没问候过——多一句招呼无害 */
+      }
+      if (!greeted) {
+        try {
+          localStorage.setItem(greetKey, '1')
+        } catch {
+          /* 写不进去就不记账，下次可能再问候一次，可接受 */
+        }
+        const greeting = timeGreeting()
+        setMessages((prev) =>
+          prev.length === 0
+            ? [{ id: nextId(), role: 'system', type: 'proactive', content: greeting }]
+            : prev
+        )
+      }
+      return
+    }
     // 仅在当前为空时注入，避免覆盖已到达的主动消息
     setMessages((prev) => (prev.length === 0 ? history : prev))
     // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
