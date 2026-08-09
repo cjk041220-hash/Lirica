@@ -20,7 +20,9 @@ const MIN_VH = 10
 const MAX_VH = 85
 // 渲染尾窗口：只挂载最近 N 条消息的 DOM，更早的折叠为一行提示。
 // 不引入虚拟化库——单用户长会话的量级下尾窗口已够（评审 P2）
-const RENDER_WINDOW = 150
+// 2026-08-09 商业级 3.2：150→100，配合气泡 content-visibility 跳过
+// 屏外渲染，长会话首屏与滚动都更轻
+const RENDER_WINDOW = 100
 
 export default function ChatPanel({ chat, status, displayState }) {
   const { messages, isStreaming, sendMessage, stopStreaming } = chat

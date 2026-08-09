@@ -646,3 +646,11 @@ body::before {
   background: rgba(110, 74, 86, 0.08);
   animation: shimmer 1.6s ease-in-out infinite;
 }
+
+/* 长会话渲染预算（2026-08-09 商业级 3.2）：屏外气泡跳过布局/绘制，
+   滚动接近时再渲染。contain-intrinsic-size 给屏外元素一个 72px 的
+   估算占位，滚动条总长不因跳过渲染而跳动 */
+.cv-bubble {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}

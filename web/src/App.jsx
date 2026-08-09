@@ -184,7 +184,11 @@ export default function App() {
 
   return (
     <div className="relative h-full w-full max-w-[430px] mx-auto overflow-hidden bg-cream select-none sm:shadow-[0_24px_90px_-16px_rgba(110,74,86,0.6),0_4px_24px_rgba(110,74,86,0.35)]">
-      <RoomScene characterState={displayState} moodLight={moodLight} />
+      {/* 面板打开期间主内容 inert（2026-08-09 商业级 3.4）：模态语义
+          补完——焦点圈定管键盘，inert 管指针命中与辅助技术可读性，
+          背景层在面板存活期间从可及性树里退场 */}
+      <div style={{ display: 'contents' }} inert={renderedPanel !== null}>
+        <RoomScene characterState={displayState} moodLight={moodLight} />
 
       {/* 顶栏控制台：四个入口收进顶部居中的一条磨砂胶囊。
           四图标用 2+2 分组（回望类「对话/记忆」| 打点类「日历/设置」），
@@ -225,6 +229,7 @@ export default function App() {
       </div>
 
       <ChatPanel chat={chat} status={status} displayState={displayState} />
+      </div>
       {/* 面板区 Suspense：fallback 用一块奶油色占位，避免首次打开白闪。
           2026-08-09：占位不再用 glass-panel——全屏 backdrop-filter 盖住
           整个动画房间，弹出瞬间整页重光栅化喂模糊（.panel-surface 注释

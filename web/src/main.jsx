@@ -41,3 +41,14 @@ createRoot(document.getElementById('root')).render(
     </ErrorBoundary>
   </StrictMode>
 )
+
+// 启动页谢幕（2026-08-09 商业级 3.1）：首帧提交后淡出移除。
+// rAF 保证 #root 已画出第一帧再揭盖；transitionend 未触发的环境
+//（reduced-motion 把过渡归零→立即触发，但保险起见）用超时兜底
+requestAnimationFrame(() => {
+  const splash = document.getElementById('splash')
+  if (!splash) return
+  splash.classList.add('hide')
+  splash.addEventListener('transitionend', () => splash.remove(), { once: true })
+  setTimeout(() => splash.remove(), 600)
+})
