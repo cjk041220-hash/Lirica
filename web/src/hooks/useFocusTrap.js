@@ -46,7 +46,10 @@ export function useFocusTrap() {
 
     // 打开：聚焦容器自身（tabIndex=-1），避免突兀地跳进某个控件；
     // 屏幕阅读器仍会因 role=dialog + aria-modal 播报对话框。
-    node.focus()
+    // preventScroll（2026-08-09）：面板容器钉在视口底部，聚焦触发的
+    // scroll-into-view 会把移动浏览器的可视视口整个向下拽——用户观感
+    // 是「点顶部按钮，整页快速下滑一下」。焦点圈定只要焦点不要滚动。
+    node.focus({ preventScroll: true })
 
     const onKeyDown = (e) => {
       if (e.key !== 'Tab') return
@@ -86,7 +89,8 @@ export function useFocusTrap() {
         typeof previouslyFocused.focus === 'function' &&
         document.contains(previouslyFocused)
       ) {
-        previouslyFocused.focus()
+        // preventScroll：归还给顶栏按钮时同理，防可视视口被拽回顶部
+        previouslyFocused.focus({ preventScroll: true })
       }
     }
   }, [node])

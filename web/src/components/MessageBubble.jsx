@@ -94,7 +94,10 @@ function MessageBubble({ message }) {
   if (role === 'user') {
     return (
       <div className="flex justify-end animate-fade-in-up">
-        <div className="max-w-[75%] bg-white/45 backdrop-blur-sm rounded-[18px] rounded-br-[6px] px-4 py-2.5 shadow-[0_1px_4px_rgba(110,74,86,0.05)]">
+        {/* 无 backdrop-blur-sm（2026-08-09 卡顿修复）：气泡嵌在滚动容器里，
+            列表每滚一帧每个可见气泡的模糊都要对背后内容重采样——滚动路径上
+            最贵的操作。面板底已是近不透明奶油色，微差的不透明度足够分层 */}
+        <div className="max-w-[75%] bg-white/55 rounded-[18px] rounded-br-[6px] px-4 py-2.5 shadow-[0_1px_4px_rgba(110,74,86,0.05)]">
           <p className="text-[15px] leading-[1.7] text-plum whitespace-pre-wrap">{content}</p>
         </div>
       </div>

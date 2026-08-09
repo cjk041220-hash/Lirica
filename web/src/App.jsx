@@ -67,6 +67,26 @@ export default function App() {
   const status = useStatus()
   const injectedRef = useRef(new Set())
 
+  // 面板 chunk 空闲预加载（2026-08-09）：四个控制台面板是 lazy 的，
+  // 首次点击要现拉 chunk——弱网下 Suspense 全屏占位会停留到可感，
+  // 观感是一次突兀的闪屏。首屏稳定后借浏览器空闲把 chunk 预拉进
+  // 缓存，之后点击即开；requestIdleCallback 缺席时（Safari）用
+  // 延时兜底，绝不挤占首屏加载
+  useEffect(() => {
+    const preload = () => {
+      import('./components/ConfigPanel')
+      import('./components/MemoriesPanel')
+      import('./components/SessionsPanel')
+      import('./components/CalendarPanel')
+    }
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(preload, { timeout: 4000 })
+      return () => cancelIdleCallback(id)
+    }
+    const t = setTimeout(preload, 2500)
+    return () => clearTimeout(t)
+  }, [])
+
   // 立绘状态归并（优先级）：
   //   1. 聊天流程态（listening/thinking/talking/刚聊完的 happy）
   //      —— 聊天进行中必须让路，否则立绘跟文字脱节
@@ -185,11 +205,11 @@ export default function App() {
       </div>
 
       <ChatPanel chat={chat} status={status} displayState={displayState} />
-      {/* 面板区 Suspense：fallback 用一块同风格磨砂占位，避免首次打开
-          白闪；面板各自挂载后再做数据拉取，加载链不重叠 */}
-      <Suspense
-        fallback={<div className="absolute inset-0 z-[70] glass-panel animate-fade-in-up" />}
-      >
+      {/* 面板区 Suspense：fallback 用一块奶油色占位，避免首次打开白闪。
+          2026-08-09：占位不再用 glass-panel——全屏 backdrop-filter 盖住
+          整个动画房间，弹出瞬间整页重光栅化喂模糊（.panel-surface 注释
+          记录过的扫掠感根因）；配合下方 idle 预加载，fallback 几乎不露面 */}
+      <Suspense fallback={<div className="absolute inset-0 z-[70] bg-cream/95 animate-fade-in-up" />}>
         {activePanel === 'config' && (
           <ConfigPanel config={config} push={push} onClose={() => setActivePanel(null)} />
         )}

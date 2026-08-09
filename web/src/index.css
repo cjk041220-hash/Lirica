@@ -399,6 +399,12 @@ body::before {
 }
 
 /* 滚动条 */
+.chat-scroll {
+  /* 滚动链截断：列表滚到底/顶不再把滚动手势穿透给背后的房间层；
+     惯性滚动声明（旧 iOS 需要，新版默认开启，无副作用） */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
 .chat-scroll::-webkit-scrollbar {
   width: 2.5px;
 }
@@ -423,6 +429,29 @@ body::before {
     0 -8px 32px rgba(110, 74, 86, 0.06),
     0 -2px 8px rgba(110, 74, 86, 0.03),
     inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* 聊天面板专用表面（2026-08-09 滑动卡顿修复）：不再继承 .glass-panel 的
+   backdrop-filter。聊天面板背后是整个房间场景（60+ 无限动画：云漂/呼吸/
+   星光）——背景每帧都在变，毛玻璃采样就得每帧重算，滑动时与触摸滚动
+   抢 GPU，表现为列表跟手卡顿（同 .panel-surface 注释记录的扫掠感根因，
+   只是那条只修了四个控制台面板，漏了聊天面板这个最大面积消费者）。
+   默认近不透明奶油底（0.88 仍透一点房间暖色，视觉与玻璃版接近）；
+   仅桌面精确指针设备（GPU 裕量大、无触摸滑动手感问题）保留真玻璃模糊 */
+.chat-glass {
+  background: rgba(255, 246, 248, 0.88);
+  border-top: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 -8px 32px rgba(110, 74, 86, 0.06),
+    0 -2px 8px rgba(110, 74, 86, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+@media (hover: hover) and (pointer: fine) {
+  .chat-glass {
+    background: rgba(255, 246, 248, 0.62);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  }
 }
 
 /* 底部面板统一表面：奶油粉底 + 半错波点。此前同款玻璃样式在四个面板里

@@ -143,7 +143,7 @@ export default function ChatPanel({ chat, status, displayState }) {
     <div
       ref={panelRef}
       data-testid="chat-panel"
-      className={`absolute bottom-0 left-0 right-0 z-50 flex flex-col glass-panel rounded-t-[24px] safe-bottom ${
+      className={`absolute bottom-0 left-0 right-0 z-50 flex flex-col chat-glass rounded-t-[24px] safe-bottom ${
         isDragging ? '' : 'transition-[height] duration-200 ease-out'
       }`}
       style={{ height: isDragging ? undefined : `${heightVh}dvh` }}
