@@ -208,11 +208,17 @@ async def test_resolve_returns_sid_for_new_era(monkeypatch, tmp_db):
 # ── append_proactive_turn：三写一推 ───────────────────────────
 
 class _FakeAgent:
+    """模拟真实 agent：get_graph 暴露节点（era 的 as_node 归属发现），
+    aupdate_state 记录调用参数。"""
+
     def __init__(self):
         self.updates = []
 
-    async def aupdate_state(self, config, values):
-        self.updates.append((config, values))
+    def get_graph(self):
+        return type("G", (), {"nodes": {"model": object(), "tools": object()}})()
+
+    async def aupdate_state(self, config, values, as_node=None):
+        self.updates.append((config, values, as_node))
 
 
 @pytest.fixture
@@ -265,11 +271,12 @@ async def test_append_era_writes_all_three(fake_app, monkeypatch):
     sessions = await chat_archive.list_sessions()
     assert sessions[0]["is_era"] is True
 
-    # 2) checkpoint 追加
+    # 2) checkpoint 追加（as_node 归属节点——langgraph 1.x 外部更新强校验）
     assert len(agent.updates) == 1
-    config, values = agent.updates[0]
+    config, values, as_node = agent.updates[0]
     assert config == {"configurable": {"thread_id": "e-20260809"}}
     assert values["messages"][0].content == "我在看云，想起你上周说想喝汤。"
+    assert as_node == "model"  # 运行时从图里发现的归属节点
 
     # 3) proactive 行 + 推送
     assert pushed == [("我在看云，想起你上周说想喝汤。", "e-20260809")]
@@ -299,11 +306,35 @@ async def test_append_session_route_not_era(fake_app, monkeypatch):
     assert agent.updates[0][0] == {"configurable": {"thread_id": "s-active"}}
 
 
+async def test_append_no_discoverable_node_skips_checkpoint(fake_app, monkeypatch):
+    """agent 无 get_graph（异常形态）→ 归属节点发现失败 → 只跳 checkpoint，
+    档案与推送照常（失败放行）。"""
+    app, agent, tmp_db = fake_app
+    agent.get_graph = None  # 实例属性遮蔽类方法 → 调用抛 TypeError → 降级
+
+    import heartbeat
+
+    pushed = []
+
+    async def fake_push(content, *, session_id=None, label="主动消息"):
+        pushed.append(session_id)
+
+    monkeypatch.setattr(heartbeat, "_store_and_push_proactive", fake_push)
+
+    from era import append_proactive_turn
+    await append_proactive_turn(app, "e-x", "内容照常", kind="new_era")
+
+    from memory import chat_archive
+    assert len(await chat_archive.get_messages("e-x")) == 1  # 档案没丢
+    assert pushed == ["e-x"]                                  # 推送没丢
+    assert agent.updates == []                                # checkpoint 被跳过
+
+
 async def test_append_checkpoint_failure_degrades(fake_app, monkeypatch):
     """checkpoint 追加失败 → 档案与推送照常（失败放行）。"""
     app, agent, tmp_db = fake_app
 
-    async def boom(config, values):
+    async def boom(config, values, as_node=None):
         raise RuntimeError("图状态写入失败")
 
     agent.aupdate_state = boom

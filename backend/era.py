@@ -188,10 +188,37 @@ async def append_proactive_turn(app, session_id: str, content: str, *,
         from langchain_core.messages import AIMessage
 
         agent = app.state.agent
-        await agent.aupdate_state(
-            {"configurable": {"thread_id": session_id}},
-            {"messages": [AIMessage(content=content)]},
+        # as_node 必须显式传：langgraph 1.x 对外部 aupdate_state 强校验
+        # ——不传时从 checkpoint 的 versions_seen 推断「最后更新状态的
+        # 节点」，全新线程（era 首条消息天然如此）为空 → InvalidUpdateError:
+        # Ambiguous update（2026-08-09 实锤）。create_agent 的节点名
+        # （model/tools/middleware.*）随版本演进不能硬编码——运行时从图
+        # 里挑一个真实节点做归属标注（优先 model/agent，回退任一非伪节点）
+        nodes = {}
+        try:
+            nodes = agent.get_graph().nodes
+        except Exception:
+            pass
+        attribution = next(
+            (n for n in ("model", "agent") if n in nodes),
+            next(
+                (
+                    n
+                    for n in nodes
+                    if n not in ("__start__", "__end__", "start", "end", "input", "output")
+                ),
+                None,
+            ),
         )
+        if attribution is None:
+            log.warning("%s checkpoint 追加跳过：图中无可用归属节点（%s）",
+                        label, sorted(nodes))
+        else:
+            await agent.aupdate_state(
+                {"configurable": {"thread_id": session_id}},
+                {"messages": [AIMessage(content=content)]},
+                as_node=attribution,
+            )
     except Exception as e:
         log.warning("%s checkpoint 追加失败（sid=%s，不影响档案与推送）: %s",
                     label, session_id, e)
