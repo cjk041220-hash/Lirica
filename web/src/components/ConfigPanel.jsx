@@ -257,17 +257,26 @@ export default function ConfigPanel({ config, push, onClose }) {
               />
             </button>
           </div>
-          {/* 三档引导：iOS 未装主屏幕（平台限制订阅必失败）> 权限被拒 > 环境不支持 */}
+          {/* 引导优先级：iOS 未装主屏幕（平台限制订阅必失败）> 权限被拒 >
+              订阅失败原因 > 环境不支持。任何状态都有可见解释——「点了没反应」
+              不再发生 */}
           {push.iosInstallNeeded ? (
             <p className="text-[10px] text-plum/60 mt-1.5 leading-relaxed">
               iPhone 上先用 Safari 的「分享 → 添加到主屏幕」把小汐装好，就能收到她主动找你的通知啦
             </p>
           ) : push.permissionDenied ? (
             <p className="text-[10px] text-plum/60 mt-1.5 leading-relaxed">
-              没拿到通知权限——在浏览器或系统设置里允许通知后，再打开这个开关
+              浏览器拒绝过通知权限，不会再自动弹出询问了——点地址栏左侧的锁形/铃铛图标
+              →「网站设置」→ 把「通知」改为「允许」，再回来打开这个开关
+            </p>
+          ) : push.subscribeError ? (
+            <p className="text-[10px] text-[#C2477B] mt-1.5 leading-relaxed" role="alert">
+              {push.subscribeError}
             </p>
           ) : !push.supported ? (
-            <p className="text-[10px] text-plum/60 mt-1.5">当前浏览器或环境不支持推送通知</p>
+            <p className="text-[10px] text-plum/60 mt-1.5">
+              当前浏览器或环境不支持推送通知（需要 HTTPS 安全连接或 localhost）
+            </p>
           ) : null}
         </div>
 

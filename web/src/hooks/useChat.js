@@ -126,6 +126,31 @@ export function useChat() {
   // 值变不触发重算（此前靠 characterState 变化间接重算才碰巧工作）
   const [userMsgCount, setUserMsgCount] = useState(0)
 
+  // 时段问候注入（商业级 2.2）：新会话一句招呼，每会话仅一次
+  //（localStorage 按会话 id 记账，刷新不重复）；仅当消息列表
+  // 仍为空时注入，绝不覆盖期间到达的主动消息
+  const maybeGreet = useCallback((sid) => {
+    const greetKey = `xiaoxi-greeted-${sid}`
+    let greeted = false
+    try {
+      greeted = !!localStorage.getItem(greetKey)
+    } catch {
+      /* 私密模式读不了就当没问候过——多一句招呼无害 */
+    }
+    if (greeted) return
+    try {
+      localStorage.setItem(greetKey, '1')
+    } catch {
+      /* 写不进去就不记账，下次可能再问候一次，可接受 */
+    }
+    const greeting = timeGreeting()
+    setMessages((prev) =>
+      prev.length === 0
+        ? [{ id: nextId(), role: 'system', type: 'proactive', content: greeting }]
+        : prev
+    )
+  }, [])
+
   // 刷新后恢复对话历史（修复 P1-1 的"刷新即失忆"）：
   // 优先读持久对话档案（迁移 v8）；档案为空的旧会话（v8 之前
   // 建立、还没有新消息）回退 checkpoint 历史兜底
@@ -152,29 +177,7 @@ export function useChat() {
       }
     }
     if (history.length === 0) {
-      // 时段问候（商业级 2.2）：新会话一句招呼，每会话仅一次
-      //（localStorage 按会话 id 记账，刷新不重复）；仅当消息列表
-      // 仍为空时注入，绝不覆盖期间到达的主动消息
-      const greetKey = `xiaoxi-greeted-${sid}`
-      let greeted = false
-      try {
-        greeted = !!localStorage.getItem(greetKey)
-      } catch {
-        /* 私密模式读不了就当没问候过——多一句招呼无害 */
-      }
-      if (!greeted) {
-        try {
-          localStorage.setItem(greetKey, '1')
-        } catch {
-          /* 写不进去就不记账，下次可能再问候一次，可接受 */
-        }
-        const greeting = timeGreeting()
-        setMessages((prev) =>
-          prev.length === 0
-            ? [{ id: nextId(), role: 'system', type: 'proactive', content: greeting }]
-            : prev
-        )
-      }
+      maybeGreet(sid)
       return
     }
     // 仅在当前为空时注入，避免覆盖已到达的主动消息
@@ -612,7 +615,11 @@ export function useChat() {
   // 开一段新聊天（满足后端 ^[a-z0-9-]{1,64}$；序号尾缀防同毫秒撞 id）
   const newSession = useCallback(() => {
     changeSession(`s-${Date.now().toString(36)}-${(sessionSeq++).toString(36)}`)
-  }, [changeSession])
+    // 商业级 2.2 原意「新会话小汐抬头打招呼」：loadHistory 只在挂载时跑，
+    // 页内新建会话走不到问候注入——这里补上（changeSession 已同步更新
+    // sessionIdRef，maybeGreet 的空列表守卫防覆盖期间到达的主动消息）
+    maybeGreet(sessionIdRef.current)
+  }, [changeSession, maybeGreet])
 
   // 回到一段旧聊天：载入档案消息，可直接续聊（session_id 就是
   // LangGraph thread_id，checkpoint 还在时小汐本人也接得上）

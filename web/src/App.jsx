@@ -160,20 +160,19 @@ export default function App() {
     // 后端 unread 按 created_at DESC 返回（最新在前），注入聊天流前
     // 先按时间升序排回，多条积压未读才不会倒序出现
     fresh.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
-    fresh.forEach((m) => injectedRef.current.add(m.id))
-    receiveProactive(fresh)
-    // 已读门控：后台标签页不标已读（用户没看到不算已读），回到前台
-    // 由 useDeferredMarkRead 补发。promise 只在「真实 ack 完成」后 settle
-    // （隐藏期间一直 pending，窗口内 id 保留在防重集合里）——settle 后移除：
-    // ack 成功则服务端不再返回这些 id（留着只涨不消）；真实 ack 失败则
-    // 回滚移除，让下一轮 60s 轮询拉到未读时重试注入（边角：ack 与在途
-    // 轮询快照的极小竞争窗口内可能重复注入一条，与既有失败回滚同级，接受）。
-    // 2026-08-09 P1 修复：此前 defer 假成功 + 无条件移除，后台轮询会把
-    // 未 ack 的消息复利式重复注入聊天流。
-    markReadWhenVisible(fresh.map((m) => m.id)).then(() => {
-      fresh.forEach((m) => injectedRef.current.delete(m.id))
+    // 积压只注入最新一条（2026-08-09 用户裁定）：积压全量注入 = 刷屏式
+    // 「不同时段问好」堆进当前对话，人机感太重。更早的积压直接标已读
+    // 丢弃（不展示就不算未读）；注入的那条仍走可见门控——后台标签页
+    // 没看到就不标已读（useDeferredMarkRead 语义不变）
+    const latest = fresh[fresh.length - 1]
+    const dropped = fresh.slice(0, -1)
+    injectedRef.current.add(latest.id)
+    receiveProactive([latest])
+    markReadWhenVisible([latest.id]).then(() => {
+      injectedRef.current.delete(latest.id)
     })
-  }, [unread, receiveProactive, markReadWhenVisible])
+    if (dropped.length > 0) markRead(dropped.map((m) => m.id))
+  }, [unread, receiveProactive, markReadWhenVisible, markRead])
 
   // 心情光色族：跟随 status.mood（5min 轮询 + 心跳后刷新），
   // 不追聊天流程态——环境光是慢变量，聊天瞬间的表情由立绘负责

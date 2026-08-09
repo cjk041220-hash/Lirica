@@ -28,6 +28,10 @@ export function usePush() {
   })
   // 通知权限被拒（系统级 denied / subscribe 抛 NotAllowedError）→ 引导去设置里开
   const [permissionDenied, setPermissionDenied] = useState(false)
+  // 订阅失败的具体原因（2026-08-09：subscribe 有多个静默 return false 路径——
+  // VAPID 未配 / 服务端拒绝 / subscribe 抛错。此前这些路径「点了没反应」，
+  // 用户只会得到一句「开关点不动」。错误显性化：任何点击都有可见解释）
+  const [subscribeError, setSubscribeError] = useState('')
 
   // 检查未读消息
   const checkUnread = useCallback(async () => {
@@ -50,6 +54,7 @@ export function usePush() {
   // 订阅推送
   const subscribe = useCallback(async () => {
     if (!supported || iosInstallNeeded) return false
+    setSubscribeError('')
     // Safari 规范要求「先请求通知权限、再 subscribe」，且权限请求必须
     // 留在用户手势闭包内——故放在本函数第一个 await 之前（开关点击
     // onClick → 本调用是同步直进，手势链未断）。Chrome 系靠
@@ -64,12 +69,26 @@ export function usePush() {
     }
     try {
       const vapidRes = await apiFetch('/api/push/vapid-key')
-      if (!vapidRes.ok) return false
+      if (!vapidRes.ok) {
+        setSubscribeError('订阅请求没送达服务器（网络或令牌问题），刷新后再试')
+        return false
+      }
       const { key, enabled } = await vapidRes.json()
       // 后端未配置 VAPID 时 key 为 null / enabled 为 false，不尝试订阅
-      if (!key || enabled === false) return false
+      if (!key || enabled === false) {
+        setSubscribeError('服务器还没开通消息推送，小汐暂时递不了话')
+        return false
+      }
 
-      const registration = await navigator.serviceWorker.ready
+      // serviceWorker.ready 在「从未注册过 SW」的环境（如本地 dev 模式
+      // 故意反注册）会永久 pending——点击后无声无息卡死。10s 超时兜底，
+      // 把「卡死」变成一句看得见的解释
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error('serviceWorker.ready 超时'), { name: 'ReadyTimeout' })), 10_000)
+        ),
+      ])
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: key,
@@ -84,6 +103,7 @@ export function usePush() {
         await subscription
           .unsubscribe()
           .catch((e) => console.warn('[usePush] cleanup subscribe failed:', e))
+        setSubscribeError('订阅请求被服务器拒绝了（检查访问令牌/网络），刷新后再试')
         return false
       }
 
@@ -92,6 +112,11 @@ export function usePush() {
     } catch (e) {
       // iOS 普通标签页 / 权限被系统撤回：subscribe 抛 NotAllowedError
       if (e?.name === 'NotAllowedError') setPermissionDenied(true)
+      else if (e?.name === 'ReadyTimeout') {
+        setSubscribeError('推送服务初始化超时（10 秒没等来 Service Worker），刷新页面再试')
+      } else {
+        setSubscribeError(`订阅失败（${e?.message || '未知原因'}），刷新页面再试一次`)
+      }
       console.warn('[usePush] subscribe failed:', e)
       return false
     }
@@ -198,6 +223,7 @@ export function usePush() {
     supported,
     iosInstallNeeded,
     permissionDenied,
+    subscribeError,
     subscribed,
     unread,
     subscribe,
