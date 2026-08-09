@@ -33,7 +33,9 @@ export default function ChatPanel({ chat, status, displayState }) {
   const panelRef = useRef(null)
   const [heightVh, setHeightVh] = useState(DEFAULT_HEIGHT)
   const [isDragging, setIsDragging] = useState(false)
-  const dragData = useRef({ startY: 0, startH: 0, raf: null })
+  const dragData = useRef({ startY: 0, startH: 0, raf: null, moved: false })
+  // 把手双击快切的手势计时（区别于拖拽数据）
+  const lastHandleTapRef = useRef(0)
   // 用户是否停留在底部附近 —— 向上翻看历史时不再被流式输出拽回底部
   const stickBottomRef = useRef(true)
   // 滚动跟随的挂起 rAF（流式 40ms flush 期合并为每帧一次布局写）
@@ -127,6 +129,7 @@ export default function ChatPanel({ chat, status, displayState }) {
     setIsDragging(true)
     dragData.current.startY = e.clientY
     dragData.current.startH = panelRef.current.offsetHeight
+    dragData.current.moved = false
     e.currentTarget.setPointerCapture(e.pointerId)
   }, [])
 
@@ -137,6 +140,8 @@ export default function ChatPanel({ chat, status, displayState }) {
     dragData.current.raf = requestAnimationFrame(() => {
       dragData.current.raf = null
       const delta = dragData.current.startY - e.clientY
+      // 位移超过 2px 才算拖拽（纯点击的亚像素抖动不算）
+      if (Math.abs(delta) > 2) dragData.current.moved = true
       const nextPx = Math.min(
         (window.innerHeight * MAX_VH) / 100,
         Math.max((window.innerHeight * MIN_VH) / 100, dragData.current.startH + delta)
@@ -153,23 +158,52 @@ export default function ChatPanel({ chat, status, displayState }) {
       cancelAnimationFrame(dragData.current.raf)
       dragData.current.raf = null
     }
-    // 松手后把最终高度同步回 state（转为 dvh 单位）
+    const wasDrag = dragData.current.moved
+    dragData.current.startH = 0
+    dragData.current.moved = false
+
+    if (!wasDrag) {
+      // 纯点击（未拖动）：必须跳过高度回读——pointerdown 的 setIsDragging(true)
+      // 重渲染后内联 height 为空，此时 offsetHeight 是内容自然高度，
+      // 回读会把面板误缩（2026-08-09 Playwright 实测：双击把手后面板
+      // 从 38vh 缩成 ~22vh 即此 bug）
+      if (panelRef.current) panelRef.current.style.height = ''
+      // 双击把手三档快切（商业级 1.5）：350ms 内第二击 → 默认 38 →
+      // 展开 70 → 收起 10 → 回到默认。自做手势判定而非 onDoubleClick——
+      // pointerdown 的 preventDefault 在 Chromium 会抑制 dblclick 事件，
+      // 且触屏双击本就不可靠。拖拽仍是主路径，双击是「快点到位」的捷径
+      const now = Date.now()
+      if (now - lastHandleTapRef.current < 350) {
+        lastHandleTapRef.current = 0
+        setHeightVh((h) => (h >= 60 ? 10 : h >= 20 ? 70 : DEFAULT_HEIGHT))
+      } else {
+        lastHandleTapRef.current = now
+      }
+      return
+    }
+
+    // 真拖拽：松手后把最终高度同步回 state（转为 dvh 单位）
     if (panelRef.current) {
       const px = panelRef.current.offsetHeight
       const vh = (px / window.innerHeight) * 100
       setHeightVh(vh)
       panelRef.current.style.height = '' // 清除内联，交回 state 控制
     }
+  }, [])
+
+  // 手势取消（系统抢走指针等）：只清理现场，不参与双击判定
+  const onPointerCancel = useCallback(() => {
+    setIsDragging(false)
+    if (dragData.current.raf) {
+      cancelAnimationFrame(dragData.current.raf)
+      dragData.current.raf = null
+    }
     dragData.current.startH = 0
+    dragData.current.moved = false
+    if (panelRef.current) panelRef.current.style.height = ''
   }, [])
 
   const collapsed = heightVh < 14
-
-  // 双击把手三档快切（2026-08-09 商业级 1.5）：默认 38 → 展开 70 →
-  // 收起 10 → 回到默认。拖拽仍是主路径，双击是「只想快点到位」的捷径
-  const onHandleDoubleClick = useCallback(() => {
-    setHeightVh((h) => (h >= 60 ? 10 : h >= 20 ? 70 : DEFAULT_HEIGHT))
-  }, [])
 
   return (
     <div
@@ -187,8 +221,7 @@ export default function ChatPanel({ chat, status, displayState }) {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onDoubleClick={onHandleDoubleClick}
+        onPointerCancel={onPointerCancel}
       >
         <div
           className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/60' : 'bg-blush'}`}
