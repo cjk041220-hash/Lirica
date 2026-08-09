@@ -36,19 +36,41 @@ export default function ChatPanel({ chat, status, displayState }) {
   const stickBottomRef = useRef(true)
   // 滚动跟随的挂起 rAF（流式 40ms flush 期合并为每帧一次布局写）
   const scrollRafRef = useRef(null)
+  // 上翻期间到达的新消息计数（2026-08-09 商业级 1.3）：以条数增量计——
+  // 流式 flush 只改写最后一条的内容、不增加条数，天然不会误计
+  const [pendingNew, setPendingNew] = useState(0)
+  const prevCountRef = useRef(0)
 
   const handleScroll = useCallback(() => {
     const el = listRef.current
     if (!el) return
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    const sticking = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    stickBottomRef.current = sticking
+    // 自己滚回底部 = 已看完，清掉新消息提醒
+    if (sticking) setPendingNew(0)
+  }, [])
+
+  // 胶囊点击：回到底部并清零提醒
+  const scrollToBottom = useCallback(() => {
+    const el = listRef.current
+    if (el) el.scrollTop = el.scrollHeight
+    stickBottomRef.current = true
+    setPendingNew(0)
   }, [])
 
   useEffect(() => {
     const el = listRef.current
     if (!el) return
     const last = messages[messages.length - 1]
+    const arrived = messages.length - prevCountRef.current
+    prevCountRef.current = messages.length
     // 新消息是用户自己发的 → 强制滚到底；流式追加 → 仅在已停留底部时跟随
-    if (last?.role !== 'user' && !stickBottomRef.current) return
+    if (last?.role !== 'user' && !stickBottomRef.current) {
+      // 上翻历史期间有新消息到达 → 浮出「↓ 小汐刚说话了」胶囊
+      if (arrived > 0) setPendingNew((c) => c + arrived)
+      return
+    }
+    if (stickBottomRef.current) setPendingNew(0)
     // rAF 合并（评审 F7）：流式期每个 flush 直接写 scrollTop 会强制
     // 同步布局；合并到每帧一次，同一帧内的重复 flush 只滚一回
     if (scrollRafRef.current) return
@@ -92,6 +114,8 @@ export default function ChatPanel({ chat, status, displayState }) {
   // 对话的「正在往上翻」（否则载入的历史会停在另一段对话的中部）
   useEffect(() => {
     stickBottomRef.current = true
+    setPendingNew(0)
+    prevCountRef.current = 0
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [chat.sessionId])
@@ -139,6 +163,12 @@ export default function ChatPanel({ chat, status, displayState }) {
 
   const collapsed = heightVh < 14
 
+  // 双击把手三档快切（2026-08-09 商业级 1.5）：默认 38 → 展开 70 →
+  // 收起 10 → 回到默认。拖拽仍是主路径，双击是「只想快点到位」的捷径
+  const onHandleDoubleClick = useCallback(() => {
+    setHeightVh((h) => (h >= 60 ? 10 : h >= 20 ? 70 : DEFAULT_HEIGHT))
+  }, [])
+
   return (
     <div
       ref={panelRef}
@@ -156,6 +186,7 @@ export default function ChatPanel({ chat, status, displayState }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onDoubleClick={onHandleDoubleClick}
       >
         <div
           className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/60' : 'bg-blush'}`}
@@ -217,6 +248,21 @@ export default function ChatPanel({ chat, status, displayState }) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 「有新消息」胶囊（商业级 1.3）：上翻历史时小汐的话到达，
+          浮在列表底沿；点击回到底部并清零。h-0 容器不占布局，
+          胶囊向上浮进列表区。白字落在 strawberry→raspberry 渐变底上，
+          符合色板纪律 */}
+      {pendingNew > 0 && !collapsed && (
+        <div className="relative h-0 shrink-0 z-10">
+          <button
+            onClick={scrollToBottom}
+            className="btn-press absolute left-1/2 -translate-x-1/2 -top-10 flex items-center gap-1 rounded-full bg-gradient-to-br from-strawberry to-raspberry text-white text-[11px] pl-3 pr-3.5 py-1.5 shadow-[0_4px_14px_rgba(194,71,123,0.4)] animate-fade-in-up whitespace-nowrap"
+          >
+            ↓ 小汐刚说话了{pendingNew > 1 ? ` · ${pendingNew} 条` : ''}
+          </button>
         </div>
       )}
 

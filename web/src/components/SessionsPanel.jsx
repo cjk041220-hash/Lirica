@@ -134,9 +134,21 @@ export default function SessionsPanel({ chat, onClose }) {
 
         <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll">
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-3">
-              <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
-              <span className="text-[11px] text-plum/60">正在翻找以前的对话……</span>
+            // 骨架屏（2026-08-09 商业级 1.2）：形状预告列表结构——
+            // 标题条 + 预览条，错落 delay 渐次铺开，替代 spinner
+            <div className="space-y-2 pt-1" aria-busy="true" aria-label="正在加载对话列表">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="rounded-xl px-3.5 py-2.5 bg-plum/[0.04]">
+                  <div
+                    className="skeleton-bar h-3 w-2/5"
+                    style={{ animationDelay: `${i * 0.12}s` }}
+                  />
+                  <div
+                    className="skeleton-bar h-2.5 w-3/4 mt-2"
+                    style={{ animationDelay: `${i * 0.12 + 0.06}s` }}
+                  />
+                </div>
+              ))}
             </div>
           ) : sessions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">

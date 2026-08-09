@@ -359,8 +359,20 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
             ))}
           </div>
           {loading ? (
-            <div className="flex items-center justify-center h-48">
-              <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
+            // 骨架屏（2026-08-09 商业级 1.2）：7 列日期格点阵预告月历结构
+            <div
+              className="grid grid-cols-7 gap-1"
+              style={{ minHeight: '300px' }}
+              aria-busy="true"
+              aria-label="正在加载日历"
+            >
+              {Array.from({ length: 35 }, (_, i) => (
+                <div
+                  key={i}
+                  className="skeleton-bar rounded-xl"
+                  style={{ animationDelay: `${(i % 7) * 0.06 + Math.floor(i / 7) * 0.1}s` }}
+                />
+              ))}
             </div>
           ) : (
             <div

@@ -192,11 +192,25 @@ export default function MemoriesPanel({ onClose }) {
 
         <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll">
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-3">
-              <div className="w-6 h-6 border-2 border-strawberry/20 border-t-strawberry/60 rounded-full animate-spin" />
-              <span className="text-[11px] text-plum/60">
-                正在翻阅{tab === 'memories' ? '记忆' : '日记'}……
-              </span>
+            // 骨架屏（2026-08-09 商业级 1.2）：左侧描边 + 日期条 + 正文条，
+            // 与记忆条目的真实形状一致，替代 spinner
+            <div className="space-y-5 pt-2" aria-busy="true" aria-label="正在加载">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="border-l-2 border-strawberry/15 pl-3.5 py-0.5">
+                  <div
+                    className="skeleton-bar h-2.5 w-16 mb-2"
+                    style={{ animationDelay: `${i * 0.14}s` }}
+                  />
+                  <div
+                    className="skeleton-bar h-3 w-11/12"
+                    style={{ animationDelay: `${i * 0.14 + 0.05}s` }}
+                  />
+                  <div
+                    className="skeleton-bar h-3 w-3/5 mt-1.5"
+                    style={{ animationDelay: `${i * 0.14 + 0.1}s` }}
+                  />
+                </div>
+              ))}
             </div>
           ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3">

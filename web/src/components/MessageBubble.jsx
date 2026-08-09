@@ -93,7 +93,8 @@ function MessageBubble({ message }) {
 
   if (role === 'user') {
     return (
-      <div className="flex justify-end animate-fade-in-up">
+      // 方向感入场（商业级 1.4）：用户的话从右侧滑入
+      <div className="flex justify-end animate-fade-in-right">
         {/* 无 backdrop-blur-sm（2026-08-09 卡顿修复）：气泡嵌在滚动容器里，
             列表每滚一帧每个可见气泡的模糊都要对背后内容重采样——滚动路径上
             最贵的操作。面板底已是近不透明奶油色，微差的不透明度足够分层 */}
@@ -106,7 +107,8 @@ function MessageBubble({ message }) {
 
   const isProactive = type === 'proactive'
   return (
-    <div className="flex animate-fade-in-up">
+    // 方向感入场（商业级 1.4）：小汐的话从左侧滑入
+    <div className="flex animate-fade-in-left">
       <div className="flex gap-2.5 max-w-[85%]">
         <div
           className={`w-[2.5px] rounded-full shrink-0 my-1 ${isProactive ? 'bg-strawberry/20' : 'bg-strawberry/45'}`}

@@ -56,6 +56,26 @@ export default function App() {
   // 面板互斥（P1-16）：单个枚举替代四个布尔——同一时刻至多一个面板挂载，
   // 天然互斥；再点同一按钮 = 关闭（toggle）
   const [activePanel, setActivePanel] = useState(null)
+  // 退场动画的延迟卸载（2026-08-09 商业级 1.1）：activePanel 归零后
+  // renderedPanel 多活 240ms、容器挂 .panel-closing 播下滑淡出，播完
+  // 才真卸载——入场/退场合成闭环，不再是「凭空消失」
+  const [renderedPanel, setRenderedPanel] = useState(null)
+  const [panelClosing, setPanelClosing] = useState(false)
+  useEffect(() => {
+    if (activePanel) {
+      setRenderedPanel(activePanel)
+      setPanelClosing(false)
+      return
+    }
+    // 归零时若没有面板在渲染（如初始挂载）→ 无需退场
+    if (!renderedPanel) return
+    setPanelClosing(true)
+    const t = setTimeout(() => {
+      setRenderedPanel(null)
+      setPanelClosing(false)
+    }, 240)
+    return () => clearTimeout(t)
+  }, [activePanel, renderedPanel])
   // 页面打开时即判定深夜——即使立绘状态后续因聊天流改变，
   // 深夜侧初始沉睡的判断基准是"打开页面的那一刻是不是深夜"。
   const [openedAtLateNight] = useState(isLateNight)
@@ -209,18 +229,24 @@ export default function App() {
           2026-08-09：占位不再用 glass-panel——全屏 backdrop-filter 盖住
           整个动画房间，弹出瞬间整页重光栅化喂模糊（.panel-surface 注释
           记录过的扫掠感根因）；配合下方 idle 预加载，fallback 几乎不露面 */}
-      <Suspense fallback={<div className="absolute inset-0 z-[70] bg-cream/95 animate-fade-in-up" />}>
-        {activePanel === 'config' && (
-          <ConfigPanel config={config} push={push} onClose={() => setActivePanel(null)} />
-        )}
-        {activePanel === 'memories' && <MemoriesPanel onClose={() => setActivePanel(null)} />}
-        {activePanel === 'sessions' && (
-          <SessionsPanel chat={chat} onClose={() => setActivePanel(null)} />
-        )}
-        {activePanel === 'calendar' && (
-          <CalendarPanel onClose={() => setActivePanel(null)} lastDoneAt={chat.lastDoneAt} />
-        )}
-      </Suspense>
+      {/* display:contents 容器只承担 .panel-closing 的 CSS 作用域，
+          不参与布局——面板仍是相对根容器的绝对定位 */}
+      <div style={{ display: 'contents' }} className={panelClosing ? 'panel-closing' : ''}>
+        <Suspense fallback={<div className="absolute inset-0 z-[70] bg-cream/95 animate-fade-in-up" />}>
+          {renderedPanel === 'config' && (
+            <ConfigPanel config={config} push={push} onClose={() => setActivePanel(null)} />
+          )}
+          {renderedPanel === 'memories' && (
+            <MemoriesPanel onClose={() => setActivePanel(null)} />
+          )}
+          {renderedPanel === 'sessions' && (
+            <SessionsPanel chat={chat} onClose={() => setActivePanel(null)} />
+          )}
+          {renderedPanel === 'calendar' && (
+            <CalendarPanel onClose={() => setActivePanel(null)} lastDoneAt={chat.lastDoneAt} />
+          )}
+        </Suspense>
+      </div>
     </div>
   )
 }

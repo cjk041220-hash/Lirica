@@ -33,6 +33,11 @@
   /* fill 用 backwards 而非 forwards：delay 期间取首帧（防闪现）一样兜住，
      动画结束后不再霸占 transform——入场后的元素才能响应 .springy 的悬浮位移 */
   --animate-fade-in-up: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  /* 对话方向感（2026-08-09 商业级 1.4）：用户的话从右侧来、小汐的话
+     从左侧来——入场位移暗示「谁在说」，对话有一来一回的体感。
+     位移量克制在 14px，配合 backwards fill 防首帧闪 */
+  --animate-fade-in-right: fadeInRight 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  --animate-fade-in-left: fadeInLeft 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   --animate-pulse-dot: pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-twinkle: twinkle 3.5s ease-in-out infinite;
   --animate-float-soft: floatSoft 6s ease-in-out infinite;
@@ -79,6 +84,26 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+@keyframes fadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(14px) translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(0) scale(1);
+  }
+}
+@keyframes fadeInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-14px) translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(0) scale(1);
   }
 }
 @keyframes pulseDot {
@@ -565,4 +590,43 @@ body::before {
   to {
     opacity: 1;
   }
+}
+
+/* 面板退场（2026-08-09 商业级 1.1）：此前关闭面板是瞬间卸载——入场有
+   panelSlideUp、退场凭空消失，开合不成闭环。App 在 activePanel 归零后
+   把面板多留 240ms 并给容器挂 .panel-closing（display:contents 不影响
+   布局），容器内的入场类被覆写为对应的退场动画。加速曲线（cubic-bezier
+   0.55,0,0.55,1）：退场不拖泥带水。reduced-motion 由全局规则归零 */
+.panel-closing .panel-enter {
+  animation: panelSlideDown 0.24s cubic-bezier(0.55, 0, 0.55, 1) forwards;
+}
+.panel-closing .overlay-enter {
+  animation: overlayFadeOut 0.2s ease forwards;
+}
+@keyframes panelSlideDown {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 0.4;
+  }
+}
+@keyframes overlayFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 骨架屏呼吸条（2026-08-09 商业级 1.2）：替代面板加载态的 spinner——
+   骨架形状预告内容结构，等待感从「卡住」变成「正在铺开」。
+   复用 shimmer 关键帧（透明度呼吸），错落 delay 模拟渐次铺开 */
+.skeleton-bar {
+  border-radius: 6px;
+  background: rgba(110, 74, 86, 0.08);
+  animation: shimmer 1.6s ease-in-out infinite;
 }

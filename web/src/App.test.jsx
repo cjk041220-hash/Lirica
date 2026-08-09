@@ -78,6 +78,12 @@ describe('App 四面板互斥（P1-16）', () => {
     fireEvent.click(screen.getByLabelText('小汐的记忆'))
     expect(await screen.findByTestId('panel-memories')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('小汐的记忆')) // 再次点击同一按钮
+    // 2026-08-09 退场动画（商业级 1.1）：关闭后面板多留 240ms 播下滑
+    // 淡出才卸载——断言从「立即消失」改为「退场动画播完后消失」
+    await new Promise((r) => setTimeout(r, 320))
     expect(screen.queryByTestId('panel-memories')).toBeNull()
+    // 播完还能再打开（渲染槽位正确复位）
+    fireEvent.click(screen.getByLabelText('小汐的记忆'))
+    expect(await screen.findByTestId('panel-memories')).toBeTruthy()
   })
 })
