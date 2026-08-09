@@ -15,6 +15,7 @@ import { useChat } from './hooks/useChat'
 import { useConfig } from './hooks/useConfig'
 import { usePush } from './hooks/usePush'
 import { usePresence } from './hooks/usePresence'
+import { usePresenceReport } from './hooks/usePresenceReport'
 import { useStatus } from './hooks/useStatus'
 import { useDeferredMarkRead } from './hooks/useDeferredMarkRead'
 
@@ -86,6 +87,9 @@ export default function App() {
   const presence = usePresence()
   const status = useStatus()
   const injectedRef = useRef(new Set())
+  // 在线状态上报（v21 era 路由的数据源）：挂载/回前台/每 2 分钟报在线
+  // + 当前会话；pagehide 上报离开（关页面即离线）
+  usePresenceReport(chat.sessionId)
 
   // 面板 chunk 空闲预加载（2026-08-09）：四个控制台面板是 lazy 的，
   // 首次点击要现拉 chunk——弱网下 Suspense 全屏占位会停留到可感，
@@ -149,30 +153,83 @@ export default function App() {
   ])
 
   // 小汐的主动消息（页面加载时的未读 / 实时推送到达）→ 注入聊天流并标记已读。
+  // v21 era 归属过滤：主动消息带 session_id（后端 proactive_messages 列），
+  // 只注入「当前活跃会话」的消息——在线时小汐实时搭话，实时可见；
+  // era 时间线的消息不注入（它们属于「小汐的独处时间线」窗口，由
+  // syncEra 切过去回放展示，这里注入会灌错窗口——本批要修的 bug 本体）。
+  // 内容去重兜底：syncEra「先标已读再切会话」与注入 effect 之间存在
+  // 竞态窗口，同一条消息可能已被回放展示——按内容去重，宁可漏不双写。
   // 依赖只收 unread 列表和两个稳定回调（useCallback 引用不变），
   // 避免 push/chat 对象每次渲染换新引用导致 effect 空转
-  const { receiveProactive } = chat
-  const { markRead, unread } = push
+  const { receiveProactive, switchSession } = chat
+  const { markRead, unread, checkUnread } = push
   const markReadWhenVisible = useDeferredMarkRead(markRead)
+  // 消息列表镜像（ref 非依赖）：注入 effect 读「当前渲染的消息」做内容
+  // 去重——加进 deps 会让流式期间每 token 都重跑一次注入 effect
+  const messagesRef = useRef([])
+  messagesRef.current = chat.messages
   useEffect(() => {
     const fresh = unread.filter((m) => m.id != null && !injectedRef.current.has(m.id))
     if (fresh.length === 0) return
+    const mine = fresh.filter((m) => !m.session_id || m.session_id === chat.sessionId)
+    const seenContent = new Set(messagesRef.current.map((m) => m.content || ''))
+    const deduped = mine.filter((m) => !seenContent.has(m.content || ''))
+    if (deduped.length === 0) return
     // 后端 unread 按 created_at DESC 返回（最新在前），注入聊天流前
     // 先按时间升序排回，多条积压未读才不会倒序出现
-    fresh.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+    deduped.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
     // 积压只注入最新一条（2026-08-09 用户裁定）：积压全量注入 = 刷屏式
     // 「不同时段问好」堆进当前对话，人机感太重。更早的积压直接标已读
     // 丢弃（不展示就不算未读）；注入的那条仍走可见门控——后台标签页
     // 没看到就不标已读（useDeferredMarkRead 语义不变）
-    const latest = fresh[fresh.length - 1]
-    const dropped = fresh.slice(0, -1)
+    const latest = deduped[deduped.length - 1]
+    const dropped = deduped.slice(0, -1)
     injectedRef.current.add(latest.id)
     receiveProactive([latest])
     markReadWhenVisible([latest.id]).then(() => {
       injectedRef.current.delete(latest.id)
     })
     if (dropped.length > 0) markRead(dropped.map((m) => m.id))
-  }, [unread, receiveProactive, markReadWhenVisible, markRead])
+  }, [unread, receiveProactive, markReadWhenVisible, markRead, chat.sessionId])
+
+  // era 时间线同步（v21，用户裁定「一上线就能在新的聊天窗口看到小汐
+  // 这段时间的活动和话语」）：status.unseen_era_id 非空 = 小汐在独处
+  // 时间线写了新话（era 会话有未读主动消息）且不是当前会话 → 自动切过去。
+  // 次序保证：checkUnread 拉全 → 先批量 markRead era 未读（从 unread
+  // state 乐观移除，注入 effect 摸不到它们、不会双写）→ 再 switchSession
+  // 回放展示完整时间线。markRead 失败则保留在 unread，下一轮 status
+  // 刷新 / 新消息到达时重试。
+  useEffect(() => {
+    const eraId = status.unseen_era_id
+    if (!eraId) return
+    if (eraId === chat.sessionId) {
+      // 已在 era 窗口（回放已展示）：清掉它的未读状态即可
+      const eraUnread = unread.filter((m) => m.session_id === eraId)
+      if (eraUnread.length > 0) markRead(eraUnread.map((m) => m.id))
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        // checkUnread 返回最新一次拉取结果（闭包里的 unread 是旧 state，
+        // await 后尚未更新）——era 归属过滤必须用返回值
+        const fresh = await checkUnread()
+        if (cancelled) return
+        const eraUnread = (fresh || []).filter((m) => m.session_id === eraId)
+        if (eraUnread.length > 0) await markRead(eraUnread.map((m) => m.id))
+        if (cancelled) return
+        await switchSession(eraId)
+      } catch (e) {
+        console.warn('[App] syncEra failed:', e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // 依赖收窄：unread 变化（markRead 乐观移除）会触发重跑，用 cancelled
+    // 让旧一轮让位；status 5 分钟轮询刷新 unseen_era_id 是重试通道；
+    // switchSession 内部有「id 相同则跳过」守卫，双跑也安全
+  }, [status.unseen_era_id, chat.sessionId, unread, markRead, switchSession, checkUnread])
 
   // 心情光色族：跟随 status.mood（5min 轮询 + 心跳后刷新），
   // 不追聊天流程态——环境光是慢变量，聊天瞬间的表情由立绘负责

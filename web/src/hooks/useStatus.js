@@ -10,7 +10,16 @@ import { apiFetch } from '../api/client'
  * @returns {{ mood: string|null, daily_event: string|null, refreshStatus: () => void }}
  */
 export function useStatus() {
-  const [status, setStatus] = useState({ mood: null, daily_event: null })
+  // v21 扩展字段：last_seen_at / active_session_id（presence 回显）、
+  // unseen_era_id（小汐在独处时间线写了新话的切换信号）——默认 null
+  // 与服务端「无」语义一致，避免旧后端响应缺字段时 undefined 穿透
+  const [status, setStatus] = useState({
+    mood: null,
+    daily_event: null,
+    last_seen_at: null,
+    active_session_id: null,
+    unseen_era_id: null,
+  })
 
   const refreshStatus = useCallback(async () => {
     try {

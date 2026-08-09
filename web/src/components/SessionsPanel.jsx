@@ -181,6 +181,13 @@ export default function SessionsPanel({ chat, onClose }) {
                       <p className="flex-1 truncate text-[13px] font-medium text-plum/75">
                         {s.title || '(没有标题)'}
                       </p>
+                      {/* v21 era 标记：小汐的独处时间线窗口（离线期间主动
+                          消息新开的会话），与冷冷自己的对话区分开 */}
+                      {s.is_era && (
+                        <span className="shrink-0 text-[9px] text-plum/55 bg-plum/8 px-1.5 py-0.5 rounded-full">
+                          小汐的日记
+                        </span>
+                      )}
                       {isCurrent && (
                         <span className="shrink-0 text-[9px] text-raspberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
                           现在

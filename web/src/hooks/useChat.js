@@ -159,7 +159,16 @@ export function useChat() {
     const toLocal = (list) =>
       (list || [])
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map((m) => ({ id: nextId(), role: m.role, content: m.content }))
+        .map((m) => ({
+          id: nextId(),
+          role: m.role,
+          content: m.content,
+          // v21：档案行带 msg_type（'solo' 独处消息）与 created_at——
+          // MessageBubble 据此渲染日记风 + 时间戳；checkpoint 回退路径
+          // 无这两字段，undefined 自然回退普通样式
+          msg_type: m.msg_type,
+          created_at: m.created_at,
+        }))
 
     let history = []
     try {
@@ -184,7 +193,8 @@ export function useChat() {
     setMessages((prev) => (prev.length === 0 ? history : prev))
     // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
     setUserMsgCount(history.filter((m) => m.role === 'user').length)
-  }, [])
+    // maybeGreet 是 useCallback([]) 恒稳定，加入依赖不改变 loadHistory 身份
+  }, [maybeGreet])
 
   // 挂载时拉一次历史
   useEffect(() => {
@@ -633,7 +643,13 @@ export function useChat() {
         if (!res.ok) return
         const msgs = ((await res.json()).messages || [])
           .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-          .map((m) => ({ id: nextId(), role: m.role, content: m.content }))
+          .map((m) => ({
+            id: nextId(),
+            role: m.role,
+            content: m.content,
+            msg_type: m.msg_type,
+            created_at: m.created_at,
+          }))
         if (msgs.length === 0) return
         // fetch 返回前用户又切了会话 → 丢弃过期结果，不往新会话上盖
         if (epochRef.current !== myEpoch) return
@@ -659,6 +675,9 @@ export function useChat() {
         role: 'system',
         type: 'proactive',
         content: item.content || item.text || '',
+        // v21：unread 带 created_at——实时注入的消息也要时间戳（与回放
+        // 的 solo 消息同款日记风）
+        created_at: item.created_at || '',
       })),
     ])
     // 小汐主动说话了 → 立绘高兴一阵。abortRef 非空 = 聊天流程进行中，

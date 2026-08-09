@@ -105,7 +105,15 @@ function MessageBubble({ message }) {
     )
   }
 
-  const isProactive = type === 'proactive'
+  // v21：独处消息的判定扩展到档案回放路径——注入的消息带 type='proactive'，
+  // 回放的 solo 消息（msg_type='solo'，来自 /api/sessions/{id}/messages）走
+  // 同样的弱化样式 + 时间戳，让「小汐的独处时间线」读起来像日记
+  const isProactive = type === 'proactive' || message.msg_type === 'solo'
+  // 时间戳 chip：只有后端带 created_at（"YYYY-MM-DD HH:MM"）的独处消息
+  // 才有——[5:16] 切出 "MM-DD HH:MM"，她不在的那段时间一目了然
+  const timeChip = isProactive && message.created_at
+    ? String(message.created_at).slice(5, 16)
+    : ''
   return (
     // 方向感入场（商业级 1.4）：小汐的话从左侧滑入
     <div className="cv-bubble flex animate-fade-in-left">
@@ -116,6 +124,7 @@ function MessageBubble({ message }) {
         <div
           className={`text-[15px] leading-[1.75] py-0.5 ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}
         >
+          {timeChip && <p className="text-[10px] text-plum/30 mb-0.5">{timeChip}</p>}
           {isProactive ? (
             <p className="whitespace-pre-wrap">{content}</p>
           ) : (

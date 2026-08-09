@@ -33,21 +33,25 @@ export function usePush() {
   // 用户只会得到一句「开关点不动」。错误显性化：任何点击都有可见解释）
   const [subscribeError, setSubscribeError] = useState('')
 
-  // 检查未读消息
+  // 检查未读消息。返回拉到的消息列表（v21：App.jsx 的 syncEra 需要
+  // 拿「最新一次拉取的结果」做 era 归属过滤——闭包里读 unread state
+  // 是旧值，await 后 state 还没更新；返回值是唯一新鲜通道）
   const checkUnread = useCallback(async () => {
     try {
       const res = await apiFetch('/api/push/unread')
-      if (!res.ok) return
+      if (!res.ok) return []
       const data = await res.json()
+      const next = Array.isArray(data.messages) ? data.messages : []
       // 函数式更新 + id 浅比较 bail-out：未读没变就不换新引用，
       // 否则 60s 轮询每次都逼整棵 App 重渲染一次（体检 🟠-4）
       setUnread((prev) => {
-        const next = Array.isArray(data.messages) ? data.messages : []
         if (next.length === prev.length && next.every((m, i) => m.id === prev[i].id)) return prev
         return next
       })
+      return next
     } catch (e) {
       console.warn('[usePush] fetch unread failed:', e)
+      return []
     }
   }, [])
 
