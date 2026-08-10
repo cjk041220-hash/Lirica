@@ -257,3 +257,21 @@ async def test_zero_degrees_gets_cold_hint(monkeypatch):
         "city": "北京", "latitude": 39.9, "longitude": 116.4,
     })
     assert "多穿一件" in result  # t < 15 分支必须命中，哪怕恰好 0.0°C
+
+
+async def test_weather_http_status_error_no_status_code(monkeypatch):
+    """错误文案批（2026-08-11）：HTTPStatusError 不露状态码数字。"""
+    import httpx
+    import tools.weather as weather_module
+    from tools.weather import get_weather
+
+    req = httpx.Request("GET", "https://example.test/weather")
+    resp = httpx.Response(502, request=req)
+
+    async def boom(client, lat, lon, **kw):
+        raise httpx.HTTPStatusError("bad gateway", request=req, response=resp)
+
+    monkeypatch.setattr(weather_module, "_fetch_open_meteo", boom)
+    result = await get_weather.ainvoke({"city": "香港"})
+    assert "状态码" not in result
+    assert "天气服务" in result

@@ -94,9 +94,10 @@ async def remember(category: str, content: str) -> str:
         return "\n".join(lines)
 
     except ValueError as e:
-        # manager.add 的参数校验（category/content 为空）——原文是我们
-        # 自己写的校验文案，可安全展示给 LLM 供其修正参数
-        return f"呜，这段记忆没能收好：{e}。category 和 content 都要有内容哦。"
+        # manager.add 仅抛「category/content 不能为空」两处自写校验
+        # （memory/manager.py:327,330，2026-08-10 核实 add 路径无其他
+        # ValueError 源），原文安全可展示，且给 LLM 参数修正信号
+        return f"呜，这段记忆没能收好：{e}。category（放哪个盒子）和 content（记什么）都要有内容，补上再给小汐一次~"
     except Exception as e:
         log_tool_error("remember", e)
         return "呜，小汐没接住这段记忆……过一会儿再记一次好不好？"

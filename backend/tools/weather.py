@@ -301,8 +301,8 @@ async def get_weather(
     except httpx.HTTPStatusError as e:
         log_tool_error("get_weather", e)
         return (
-            f"天气服务暂时出了点问题（状态码 {e.response.status_code}），"
-            f"小汐再去映海里看看，冷冷等一下再试试~"
+            "天气服务暂时出了点问题，"
+            "小汐再去映海里看看，冷冷等一下再试试~"
         )
     except (KeyError, ValueError, TypeError) as e:
         log_tool_error("get_weather", e)

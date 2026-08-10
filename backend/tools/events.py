@@ -183,9 +183,15 @@ async def update_event(
             memo=memo or None,
         )
     except ValueError as e:
-        if "readonly" in str(e):
+        msg = str(e)
+        if "readonly" in msg:
             return "生日和相识纪念日是从冷冷档案里派生的日子，小汐改不了这个哦……"
-        return f"呜，这样改不了呢：{e}"
+        if ("title 不能为空" in msg or "event_type 只能是" in msg
+                or "end_date 不能早于" in msg):
+            # 自写校验文案（utils/events.py:365,370,377），可安全转述给 LLM 修正参数
+            return f"呜，这样改不了呢：{msg}"
+        # 日期格式不对（strptime 英文原文）或未知校验 → 角色化兜底
+        return "呜，这个日子小汐没看懂……要写成 2026-08-05 这个样子才行哦。"
     except Exception as e:
         log_tool_error("update_event", e)
         return "呜，小汐改小本本的时候手滑了……过一会儿再跟小汐说一次好不好？"

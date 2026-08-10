@@ -236,6 +236,19 @@ async def test_update_event_not_found_and_readonly(events_tool_db):
     assert "改不了" in await update_event.ainvoke({"event_id": "b1", "title": "x"})
 
 
+async def test_update_event_bad_date_friendly(events_tool_db):
+    """错误文案批（2026-08-11）：日期格式错误走角色化兜底，不露 strptime 英文原文。"""
+    from tools.events import update_event
+    from utils import events as ev
+
+    saved, _ = await ev.create_event("爬山", "trip", _d(10))
+    result = await update_event.ainvoke({
+        "event_id": saved["id"], "event_date": "8月5日",
+    })
+    assert "没看懂" in result
+    assert "does not match" not in result
+
+
 async def test_delete_event_happy(events_tool_db):
     from tools.events import delete_event, list_events
     from utils import events as ev

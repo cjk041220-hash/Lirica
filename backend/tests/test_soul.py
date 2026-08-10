@@ -196,7 +196,8 @@ def test_dialogue_examples_include_new_groups():
     # 「看书/随便翻翻」的懒示例已换成有精神版本（批次 H 积极化）
     assert "随便翻翻。" not in DIALOGUE_EXAMPLES
     assert "正好我也看累了，来聊会儿" in DIALOGUE_EXAMPLES
-    assert "你不是需要减肥，是需要早点睡" in DIALOGUE_EXAMPLES
+    assert "你问十遍我也还是那个答案。你这样就很好。" in DIALOGUE_EXAMPLES
+    assert "你不是需要减肥，是需要早点睡" not in DIALOGUE_EXAMPLES  # 防说教回潮
     assert "一禾" in DIALOGUE_EXAMPLES  # 工具转述示例
     assert "要不要打会星露谷" in DIALOGUE_EXAMPLES  # 主动提议示例
 
@@ -327,25 +328,59 @@ def test_rules_rescoped_for_jk():
     assert "替 JK 辩护也一样" in INTERACTION_RULES
 
 
+# ── 吃瓜起哄批（2026-08-11 人格深度优化）──────────────────────
+
+
+def test_gossip_not_lobbying():
+    """吃瓜起哄批（2026-08-11）：感情线升温为中度吃瓜——
+    起哄是看热闹，不劝、不逼站队、不适即收、停瓜开关、主动消息不拿八卦开场。"""
+    assert "中度吃瓜群众" in BASE_PERSONA
+    assert "不逼她站队" in BASE_PERSONA
+    assert "绝不说「你该选 JK」" in BASE_PERSONA
+    assert "起哄克制、低频" in BASE_PERSONA
+    assert "一条消息最多一句" in BASE_PERSONA
+    assert "立刻收住换话头" in BASE_PERSONA
+    assert "不拿这类八卦开场" in BASE_PERSONA
+    assert "吃瓜立刻停" in BASE_PERSONA          # 停瓜开关
+    assert "她的眼泪不是" in BASE_PERSONA
+    assert "那是她自己在琢磨" in BASE_PERSONA    # 触发门排除解读类问题
+    # 吃瓜不破劝选禁令（与 test_no_lobbying_hard_rule 互为镜像）
+    assert "不劝冷冷的感情" in BASE_PERSONA
+
+
+def test_gossip_examples_present():
+    """吃瓜示例两组：起哄有分寸（不站队）/ 不适立刻收；句式差异化防复读机。"""
+    from agent.soul import DIALOGUE_EXAMPLES, TOOL_GUIDELINES
+
+    assert "直接送到楼下呀" in DIALOGUE_EXAMPLES
+    assert "你心里有数的" in DIALOGUE_EXAMPLES
+    assert "好，那不聊" in DIALOGUE_EXAMPLES
+    assert "又发啦？" in DIALOGUE_EXAMPLES
+    assert "JK 侧的感情线进展" in TOOL_GUIDELINES
+
+
 # ── JK 资料库：填好翻开开关才注入，默认零影响（2026-08-10）────
 
 
 def test_jk_info_skeleton_sections():
-    """JK 资料库骨架：五节结构齐备，开关默认关闭。"""
+    """JK 资料库：五节结构齐备，开关已翻开（2026-08-11 填好启用）。"""
     from agent.soul import JK_INFO, JK_PROFILE_READY
 
-    assert JK_PROFILE_READY is False
+    assert JK_PROFILE_READY is True
     for section in ("### 他是谁", "### 性格和说话方式",
                     "### 他为冷冷做过的事", "### 最近的动静",
                     "### 小汐怎么聊他"):
         assert section in JK_INFO
 
 
-async def test_jk_profile_hidden_until_ready(tmp_db):
-    """开关默认关闭：JK 资料库不注入，行为与改动前一致。"""
+async def test_jk_profile_hidden_when_gate_off(tmp_db):
+    """开关仍是闸门：patch 成 False 时不注入（行为与启用前一致）。"""
     from unittest.mock import patch
 
-    with patch("agent.soul.get_db", return_value=tmp_db), \
+    import agent.soul as soul
+
+    with patch.object(soul, "JK_PROFILE_READY", False), \
+         patch("agent.soul.get_db", return_value=tmp_db), \
          patch("utils.events.get_db", return_value=tmp_db):
         prompt = await build_system_prompt()
 
