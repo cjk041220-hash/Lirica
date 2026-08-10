@@ -212,6 +212,54 @@ class _ToolErrorGuardMiddleware(AgentMiddleware):
             return self._error_message(request, exc)
 
 
+class _PersonaAnchorMiddleware(AgentMiddleware):
+    """人格重锚（批次①，2026-08-11 计划）：每 N 次模型调用重申人格锚。
+
+    依据 arXiv:2402.10962（8 轮漂移定律）+ SillyTavern Author's Note
+    的 depth/频率设计：锚是 BASE_PERSONA 的蒸馏压缩版（soul.PERSONA_ANCHOR），
+    经 llm_input_messages 注入、不进 checkpoint，注入后计数归零。
+    计数器按模型调用数计：活跃会话（工具循环多轮）上下文长得快、
+    锚得更勤，符合"上下文越长越需重锚"的深度语义。
+    """
+
+    def __init__(self, interval: int = 8):
+        self._interval = max(1, interval)
+        self._calls_since_anchor = 0
+
+    async def abefore_model(self, state, runtime):
+        self._calls_since_anchor += 1
+        if self._calls_since_anchor < self._interval:
+            return {}
+        self._calls_since_anchor = 0
+        from agent.soul import PERSONA_ANCHOR  # 惰性 import：soul 在 graph 上无环
+
+        # 优先用前序中间件（pre_model_hook）已构造的 llm_input_messages：
+        # langchain 中间件链的 state 合并语义随版本可能为「覆盖」或
+        # 「链式传递」，无论哪种，从该 key 取到已有输入再追加锚都正确；
+        # 取不到（链式传递时该 key 不落 state）则退回从 messages 组装。
+        llm_input = state.get("llm_input_messages") or []
+        if not llm_input:
+            messages = state.get("messages", [])
+            system_msgs = [m for m in messages if getattr(m, "type", "") == "system"]
+            conversation = [m for m in messages if getattr(m, "type", "") != "system"]
+            llm_input = system_msgs + conversation
+
+        anchor_msg = SystemMessage(
+            content=(
+                "[人格锚 —— 这是你一直以来的自己，别被漫长的对话带偏了]\n"
+                f"{PERSONA_ANCHOR}\n"
+                "[锚结束]"
+            )
+        )
+        # 追加在系统段末尾（最接近当前对话的位置，Author's Note 的
+        # depth 语义：锚离对话越近、重申力越强）
+        first_conv = next(
+            (i for i, m in enumerate(llm_input) if getattr(m, "type", "") != "system"),
+            len(llm_input),
+        )
+        return {"llm_input_messages": llm_input[:first_conv] + [anchor_msg] + llm_input[first_conv:]}
+
+
 # ── Agent 构建 ──────────────────────────────────────────────────
 
 
