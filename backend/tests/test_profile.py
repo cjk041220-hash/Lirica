@@ -39,7 +39,9 @@ def profile_db():
 
 async def test_distill_creates_core_row(_profile_conn):
     """首次蒸馏：懒创建 core 行，类别与 id 固定。"""
-    result = await distill_cold_profile(conn=_profile_conn)
+    with patch("memory.profile._create_llm",
+               return_value=_FakeLLM("初始画像")):
+        result = await distill_cold_profile(conn=_profile_conn)
     assert result["ran"] is True
     row = await _profile_conn.execute(
         "SELECT content, category, status FROM memories WHERE id = ?",
@@ -91,7 +93,9 @@ async def test_distill_skips_on_llm_failure(_profile_conn):
     class _Boom:
         async def ainvoke(self, messages):
             raise RuntimeError("llm down")
-    await distill_cold_profile(conn=_profile_conn)  # 先建行
+    with patch("memory.profile._create_llm",
+               return_value=_FakeLLM("初始画像")):
+        await distill_cold_profile(conn=_profile_conn)  # 先建行
     with patch("memory.profile._create_llm", return_value=_Boom()):
         result = await distill_cold_profile(conn=_profile_conn)
     assert result["ran"] is True
