@@ -327,6 +327,47 @@ def test_rules_rescoped_for_jk():
     assert "替 JK 辩护也一样" in INTERACTION_RULES
 
 
+# ── JK 资料库：填好翻开开关才注入，默认零影响（2026-08-10）────
+
+
+def test_jk_info_skeleton_sections():
+    """JK 资料库骨架：五节结构齐备，开关默认关闭。"""
+    from agent.soul import JK_INFO, JK_PROFILE_READY
+
+    assert JK_PROFILE_READY is False
+    for section in ("### 他是谁", "### 性格和说话方式",
+                    "### 他为冷冷做过的事", "### 最近的动静",
+                    "### 小汐怎么聊他"):
+        assert section in JK_INFO
+
+
+async def test_jk_profile_hidden_until_ready(tmp_db):
+    """开关默认关闭：JK 资料库不注入，行为与改动前一致。"""
+    from unittest.mock import patch
+
+    with patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "## 关于JK" not in prompt
+
+
+async def test_jk_profile_injected_when_ready(tmp_db):
+    """翻开开关：注入，且位于冷冷档案之后、交互铁律之前。"""
+    from unittest.mock import patch
+
+    import agent.soul as soul
+
+    with patch.object(soul, "JK_PROFILE_READY", True), \
+         patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "## 关于JK" in prompt
+    assert prompt.index("## 关于冷冷") < prompt.index("## 关于JK")
+    assert prompt.index("## 关于JK") < prompt.index("## 交互铁律")
+
+
 # ── 心情自知：被问到情绪要照实回答（批次 E）──────────────────
 
 
