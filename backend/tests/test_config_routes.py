@@ -115,9 +115,11 @@ async def test_rebuild_agent_for_app_syncs_model_prompt_agent(monkeypatch):
 
     monkeypatch.setattr(cfg, "build_system_prompt", fake_prompt)
 
-    def fake_build_agent(model, tools, system_prompt, checkpointer, pre_model_hook):
+    def fake_build_agent(model, tools, system_prompt, checkpointer,
+                         pre_model_hook, anchor_interval=None):
         build_calls["model"] = model
         build_calls["prompt"] = system_prompt
+        build_calls["anchor_interval"] = anchor_interval
         return sentinel_agent
 
     monkeypatch.setattr(cfg, "build_agent", fake_build_agent)
@@ -128,6 +130,8 @@ async def test_rebuild_agent_for_app_syncs_model_prompt_agent(monkeypatch):
     # 构建用的是运行时配置的新 LLM，而不是启动时的旧引用
     assert build_calls["model"] is sentinel_llm
     assert build_calls["prompt"] == "PROMPT"
+    # 人格重锚（批①）：Agent 重建必须带 anchor_interval=8
+    assert build_calls["anchor_interval"] == 8
 
     # 三者同时更新，保持单一数据源
     assert app.state.model is sentinel_llm

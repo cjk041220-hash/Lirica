@@ -112,6 +112,7 @@ async def _rebuild_agent_inner(app) -> None:
         system_prompt,
         app.state.checkpointer,
         pre_model_hook,
+        anchor_interval=8,  # 人格重锚（批①）：每 8 次模型调用重申人格锚
     )
 
     # 三者同时更新，保持单一数据源

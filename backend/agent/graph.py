@@ -8,9 +8,13 @@ v2 重构：
 v2.2 迁移（修复 P3-2）：
 - langgraph.prebuilt.create_react_agent 已废弃（LangGraph V1.0，V2.0 移除），
   迁移到其官方继任者 langchain.agents.create_agent（同一实现的上移）；
-- pre_model_hook 机制在新 API 中演化为 middleware.before_model，
-  语义一致（返回 llm_input_messages / RemoveMessage 更新），
-  由 _PreModelHookMiddleware 桥接，现有 hook 逻辑与单测零改动。
+- 实测（批① Task 2 Step 0）：langchain 1.3.14 的 create_agent 中
+  llm_input_messages 不是 state channel——abefore_model 返回的
+  llm_input_messages 更新被静默丢弃，模型节点只读
+  state["messages"] + system_prompt（记忆叙事自 v2.2 迁移后因此
+  未达模型）。注入改经 awrap_model_call 就地改写 request.messages
+  （纯内存、不进 checkpoint），RemoveMessage 裁剪经
+  ExtendedModelResponse.command 应用到 state，hook 逻辑与单测零改动。
 """
 import logging
 
@@ -159,20 +163,44 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
 class _PreModelHookMiddleware(AgentMiddleware):
     """将 pre_model_hook 风格的函数桥接到 create_agent 的 middleware API。
 
-    abefore_model 与旧 pre_model_hook 契约相同：接收含 "messages" 的
-    state，返回 {"llm_input_messages": [...]} 和/或带 RemoveMessage 的
-    {"messages": [...]}。langchain 1.x 内部按同一 reducer 语义处理。
+    实测（批① Task 2 Step 0）：langchain 1.3.14 的 create_agent 中
+    llm_input_messages 不是 state channel——abefore_model 返回的
+    llm_input_messages 更新被静默丢弃，模型节点只读 state["messages"]
+    + system_prompt（记忆叙事因此自 v2.2 迁移后未达模型）。修复：
+    - 记忆注入改经 awrap_model_call 就地改写 request.messages
+      （纯内存、不进 checkpoint，恢复丢失的注入语义）；
+    - RemoveMessage 裁剪经 ExtendedModelResponse.command 在模型节点
+      后应用到 state（走 add_messages reducer，与旧 abefore_model
+      等效且无跨请求缓存竞态）。
+    hook 每轮只调用一次、无共享实例状态，天然并发安全。
 
-    注意：新 API 同步/异步钩子分离——异步实现必须叫 abefore_model，
-    覆写 before_model 会被当作同步钩子直接调用（协程不被 await，
-    抛 InvalidUpdateError）。
+    注意：新 API 同步/异步钩子分离——异步实现必须叫 awrap_model_call，
+    覆写 wrap_model_call 会被当作同步钩子直接调用（协程不被 await）。
     """
 
     def __init__(self, hook):
         self._hook = hook
 
-    async def abefore_model(self, state, runtime):
-        return await self._hook(state)
+    async def awrap_model_call(self, request, handler):
+        result = await self._hook(request.state)
+        llm_input = result.get("llm_input_messages")
+        if llm_input:
+            # request.messages 不含 system_prompt（模型节点在调用前前置
+            # system_message）；llm_input 中来自 state 的 system 消息与
+            # 记忆叙事保持在前，对话消息在后。override 为不可变替换，
+            # 链上内层 handler 收到的是新 request（官方推荐写法）。
+            request = request.override(messages=list(llm_input))
+        model_response = await handler(request)
+        trim = result.get("messages")
+        if trim:
+            from langchain.agents.middleware import ExtendedModelResponse
+            from langgraph.types import Command
+
+            return ExtendedModelResponse(
+                model_response=model_response,
+                command=Command(update={"messages": list(trim)}),
+            )
+        return model_response
 
 
 class _ToolErrorGuardMiddleware(AgentMiddleware):
@@ -216,9 +244,11 @@ class _PersonaAnchorMiddleware(AgentMiddleware):
     """人格重锚（批次①，2026-08-11 计划）：每 N 次模型调用重申人格锚。
 
     依据 arXiv:2402.10962（8 轮漂移定律）+ SillyTavern Author's Note
-    的 depth/频率设计：锚是 BASE_PERSONA 的蒸馏压缩版（soul.PERSONA_ANCHOR），
-    经 llm_input_messages 注入、不进 checkpoint，注入后计数归零。
-    计数器按模型调用数计：活跃会话（工具循环多轮）上下文长得快、
+    的 depth/频率设计：锚是 BASE_PERSONA 的蒸馏压缩版（soul.PERSONA_ANCHOR）。
+    实测（批① Task 2 Step 0）：langchain 1.3.14 的 create_agent 中
+    llm_input_messages 不是 state channel，注入改经 awrap_model_call
+    就地追加到 request.messages——纯内存、不进 checkpoint，注入后计数
+    归零。计数器按模型调用数计：活跃会话（工具循环多轮）上下文长得快、
     锚得更勤，符合"上下文越长越需重锚"的深度语义。
     """
 
@@ -226,38 +256,38 @@ class _PersonaAnchorMiddleware(AgentMiddleware):
         self._interval = max(1, interval)
         self._calls_since_anchor = 0
 
-    async def abefore_model(self, state, runtime):
+    async def awrap_model_call(self, request, handler):
         self._calls_since_anchor += 1
-        if self._calls_since_anchor < self._interval:
-            return {}
-        self._calls_since_anchor = 0
-        from agent.soul import PERSONA_ANCHOR  # 惰性 import：soul 在 graph 上无环
+        if self._calls_since_anchor >= self._interval:
+            self._calls_since_anchor = 0
+            from agent.soul import PERSONA_ANCHOR  # 惰性 import：soul 在 graph 上无环
 
-        # 优先用前序中间件（pre_model_hook）已构造的 llm_input_messages：
-        # langchain 中间件链的 state 合并语义随版本可能为「覆盖」或
-        # 「链式传递」，无论哪种，从该 key 取到已有输入再追加锚都正确；
-        # 取不到（链式传递时该 key 不落 state）则退回从 messages 组装。
-        llm_input = state.get("llm_input_messages") or []
-        if not llm_input:
-            messages = state.get("messages", [])
-            system_msgs = [m for m in messages if getattr(m, "type", "") == "system"]
-            conversation = [m for m in messages if getattr(m, "type", "") != "system"]
-            llm_input = system_msgs + conversation
-
-        anchor_msg = SystemMessage(
-            content=(
-                "[人格锚 —— 这是你一直以来的自己，别被漫长的对话带偏了]\n"
-                f"{PERSONA_ANCHOR}\n"
-                "[锚结束]"
+            anchor_msg = SystemMessage(
+                content=(
+                    "[人格锚 —— 这是你一直以来的自己，别被漫长的对话带偏了]\n"
+                    f"{PERSONA_ANCHOR}\n"
+                    "[锚结束]"
+                )
             )
-        )
-        # 追加在系统段末尾（最接近当前对话的位置，Author's Note 的
-        # depth 语义：锚离对话越近、重申力越强）
-        first_conv = next(
-            (i for i, m in enumerate(llm_input) if getattr(m, "type", "") != "system"),
-            len(llm_input),
-        )
-        return {"llm_input_messages": llm_input[:first_conv] + [anchor_msg] + llm_input[first_conv:]}
+            # 追加在系统段末尾（最接近当前对话的位置，Author's Note 的
+            # depth 语义：锚离对话越近、重申力越强）。request.messages
+            # 不含 system_prompt（模型节点在调用前前置），其中的 system
+            # 消息来自前序 hook 的 llm_input（记忆叙事等）；锚在其后、
+            # 对话之前，与前序中间件的输入共存且不重复记忆。override
+            # 为不可变替换，链上内层 handler 收到的是新 request。
+            first_conv = next(
+                (i for i, m in enumerate(request.messages)
+                 if getattr(m, "type", "") != "system"),
+                len(request.messages),
+            )
+            request = request.override(
+                messages=(
+                    request.messages[:first_conv]
+                    + [anchor_msg]
+                    + request.messages[first_conv:]
+                )
+            )
+        return await handler(request)
 
 
 # ── Agent 构建 ──────────────────────────────────────────────────
@@ -269,6 +299,7 @@ def build_agent(
     system_prompt: str,
     checkpointer=None,
     pre_model_hook=None,
+    anchor_interval: int | None = None,
 ) -> CompiledStateGraph:
     """构建小汐的 ReAct Agent 图。
 
@@ -279,6 +310,9 @@ def build_agent(
         checkpointer: 可复用的 checkpointer（用于跨轮次状态持久化）。
                       不传则自动创建 MemorySaver。
         pre_model_hook: 每次 LLM 调用前执行的钩子，用于注入记忆和裁剪消息。
+        anchor_interval: 人格重锚间隔（模型调用次数）。None=不启用
+                         （与旧版行为逐字节一致）；传入 N 则每 N 次模型
+                         调用重申一次人格锚（soul.PERSONA_ANCHOR）。
 
     Returns:
         编译后的 LangGraph StateGraph，可直接 ainvoke / astream_events。
@@ -292,6 +326,14 @@ def build_agent(
     middleware = [_ToolErrorGuardMiddleware()]
     if pre_model_hook is not None:
         middleware.append(_PreModelHookMiddleware(pre_model_hook))
+    # 排序理由（Task 2 Step 0 实测后定）：wrap_model_call 按列表顺序
+    # 组合、第一个为最外层先执行——_PreModelHookMiddleware 在前、锚在
+    # 后，记忆叙事先构造进 request.messages，锚在其上追加（锚的
+    # Author's Note depth 语义要求贴近对话、重申力最强）。两中间件都
+    # 只就地改写 request.messages（纯内存不进 checkpoint），顺序即
+    # 语义：叙事在先、锚在后、互不覆盖。
+    if anchor_interval is not None:
+        middleware.append(_PersonaAnchorMiddleware(anchor_interval))
 
     kwargs = dict(
         model=model,
