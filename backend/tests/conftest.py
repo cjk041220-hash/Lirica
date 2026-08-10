@@ -100,6 +100,49 @@ async def _close_global_db_after_session():
     await core.close_db_connection()
 
 
+@pytest.fixture
+async def _profile_conn():
+    """画像测试专用内存库：memories（含 v15/v18 列）+ chat_messages。"""
+    import aiosqlite
+    conn = await aiosqlite.connect(":memory:")
+    await conn.executescript("""
+        CREATE TABLE memories (
+            id TEXT PRIMARY KEY, content TEXT, category TEXT,
+            created_at TEXT, last_used_at TEXT, access_count INTEGER,
+            status TEXT, updated_at TEXT, source TEXT,
+            last_mention_ts TEXT, importance INTEGER,
+            valence REAL, arousal REAL, prev_content TEXT,
+            superseded_by TEXT, hit_count INTEGER DEFAULT 0,
+            last_hit_date TEXT
+        );
+        CREATE TABLE chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT, role TEXT, content TEXT,
+            created_at TEXT, msg_type TEXT
+        );
+    """)
+    # seed：2 条用户对话（now-1h 相对时间戳，落在蒸馏 30 天窗口内）——
+    # 计划缺陷裁决（2026-08-11）：计划原测试 1-4 断言 ran=True 需要
+    # 窗口内有对话，空表下「先建行」不可能成立；test 5 自行清空。
+    import datetime
+
+    from utils.timezone import HKT as _HKT
+    _recent = (datetime.datetime.now(_HKT) - datetime.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    await conn.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
+        "VALUES ('seed', 'user', '最近在赶论文，常凌晨才睡', ?, 'chat')",
+        (_recent,),
+    )
+    await conn.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
+        "VALUES ('seed', 'user', '昨天和 JK 去吃了火锅', ?, 'chat')",
+        (_recent,),
+    )
+    await conn.commit()
+    yield conn
+    await conn.close()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_tool_globals():
     """每个用例后重置工具模块的进程级全局注入（P2-1 测试隔离）。

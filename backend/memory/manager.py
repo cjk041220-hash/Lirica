@@ -91,6 +91,13 @@ MOOD_MEMORY_SOURCE = "system:mood"
 # 读面，无需本谓词照顾）。挂在所有浮现/计数读面的 WHERE 后。
 _MOOD_ROW_FILTER = f"AND id != '{MOOD_MEMORY_ID}'"
 
+# 画像块（批次②）：固定 id 的 core 行，只走叙事专属通道（narrative.py
+# 单独查它做「画像优先注入」），不进常规召回/热度/衰减候选。
+# PROFILE_MEMORY_ID 与 memory/profile.py 蒸馏侧双定义同值（本侧只做读面
+# 过滤用），两处必须一致。
+PROFILE_MEMORY_ID = "profile_cold"
+PROFILE_ROW_FILTER = f"AND id != '{PROFILE_MEMORY_ID}'"
+
 
 def _cap_content(content: str, context: str) -> str:
     """截断超长记忆内容（500 字），超限部分替换为省略号并记日志。"""
@@ -634,7 +641,7 @@ class MemoryManager:
             cursor = await self._db.execute(
                 f"""SELECT * FROM memories
                     WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
-                    {_MOOD_ROW_FILTER}""",
+                    {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}""",
                 (f"%{_escape_like(category)}%",),
             )
         else:
@@ -644,7 +651,7 @@ class MemoryManager:
             # 退化成「最新路」（narrative 的 hybrid 注入名存实亡）。
             # 单用户记忆量级（百级～千级）全表评分完全可承受。
             cursor = await self._db.execute(
-                f"SELECT * FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
+                f"SELECT * FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}"
             )
         rows = await cursor.fetchall()
         matched = rows_to_dicts(cursor, rows)
@@ -718,7 +725,7 @@ class MemoryManager:
         cursor = await self._db.execute(
             f"""SELECT * FROM memories
                 WHERE category LIKE ? ESCAPE '\\' AND status IN ('active', 'core')
-                {_MOOD_ROW_FILTER}
+                {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                 ORDER BY created_at DESC LIMIT ?""",
             (f"%{_escape_like(category)}%", limit),
         )
@@ -735,7 +742,7 @@ class MemoryManager:
         cursor = await self._db.execute(
             f"""SELECT * FROM (
                     SELECT * FROM memories
-                    WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}
+                    WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                     ORDER BY COALESCE(last_mention_ts, created_at) DESC LIMIT ?   -- O1
                 ) ORDER BY COALESCE(last_mention_ts, created_at) ASC""",
             (limit,),
@@ -770,7 +777,7 @@ class MemoryManager:
                     WHERE status IN ('active', 'core')
                       AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
                       AND id NOT IN ({placeholders})
-                      {_MOOD_ROW_FILTER}
+                      {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                     ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, *exclude, limit),
             )
@@ -779,7 +786,7 @@ class MemoryManager:
                 f"""SELECT * FROM memories
                     WHERE status IN ('active', 'core')
                       AND COALESCE(last_mention_ts, created_at) <= ?   -- O1
-                      {_MOOD_ROW_FILTER}
+                      {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                     ORDER BY RANDOM() LIMIT ?""",
                 (cutoff, limit),
             )
@@ -792,7 +799,7 @@ class MemoryManager:
         """列出所有类别及活跃记忆数量。"""
         cursor = await self._db.execute(
             f"""SELECT category, COUNT(*) as cnt FROM memories
-                WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}
+                WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                 GROUP BY category"""
         )
         rows = await cursor.fetchall()
@@ -801,7 +808,7 @@ class MemoryManager:
     async def count(self) -> int:
         """返回活跃记忆总数。"""
         cursor = await self._db.execute(
-            f"SELECT COUNT(*) FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
+            f"SELECT COUNT(*) FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}"
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -850,7 +857,7 @@ class MemoryManager:
         status_filter = "IN ('active', 'core')" if not include_archived \
             else "IN ('active', 'core', 'archived')"
         cursor = await self._db.execute(
-            f"SELECT * FROM memories WHERE status {status_filter} {_MOOD_ROW_FILTER} "
+            f"SELECT * FROM memories WHERE status {status_filter} {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER} "
             "ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
@@ -871,7 +878,7 @@ class MemoryManager:
         「心情」，且高频心跳 update 刷它的 last_used_at 钉死榜首。
         """
         cursor = await self._db.execute(
-            f"""SELECT * FROM memories WHERE status = 'core' {_MOOD_ROW_FILTER}
+            f"""SELECT * FROM memories WHERE status = 'core' {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}
                 ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT ?""",
             (limit,),
         )
@@ -1033,7 +1040,7 @@ class MemoryManager:
             # v18：排除情绪核心记忆——它每小时可能被心跳 update，若计入，
             # 「0 记忆」与「记忆停滞」两条告警恒假，健康检查全废
             "SELECT COUNT(*), MAX(COALESCE(updated_at, created_at)) "
-            f"FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER}"
+            f"FROM memories WHERE status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}"
         )
         row = await cursor.fetchone()
         count, newest = (row[0], row[1]) if row else (0, None)
@@ -1056,12 +1063,12 @@ class MemoryManager:
         chats_7d = (await cursor.fetchone())[0]
         cursor = await self._db.execute(
             f"SELECT COUNT(*) FROM memories WHERE created_at >= ? "
-            f"AND status IN ('active', 'core') {_MOOD_ROW_FILTER}",
+            f"AND status IN ('active', 'core') {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}",
             (cutoff,),
         )
         added_7d = (await cursor.fetchone())[0]
         cursor = await self._db.execute(
-            f"SELECT COUNT(*) FROM memories WHERE status = 'archived' {_MOOD_ROW_FILTER}"
+            f"SELECT COUNT(*) FROM memories WHERE status = 'archived' {_MOOD_ROW_FILTER} {PROFILE_ROW_FILTER}"
         )
         archived_count = (await cursor.fetchone())[0]
         total = count + archived_count
