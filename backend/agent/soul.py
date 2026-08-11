@@ -564,7 +564,9 @@ async def _build_relationship_text() -> str:
         density = "这几天她来得不勤，每次来都好好陪。"
 
     return "\n".join(
+        part for part in
         ["## 你们现在的相处", f"今天是你们相识的第 {days_known} 天。", density, stage]
+        if part
     )
 
 

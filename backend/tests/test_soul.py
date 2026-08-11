@@ -527,6 +527,34 @@ async def test_relationship_text_no_first_met(tmp_db):
         assert await _build_relationship_text() == ""
 
 
+async def test_relationship_text_invalid_or_future_first_met(tmp_db):
+    """first_met_on 非法 / 相识日在未来 → 空串（审查 Minor-3）。"""
+    import datetime
+    from unittest.mock import patch
+
+    from agent.soul import _build_relationship_text
+    from utils.timezone import HKT
+
+    today = datetime.datetime.now(HKT).date()
+
+    # 非法日期串
+    await tmp_db.execute(
+        "UPDATE life_state SET first_met_on = ? WHERE id = 1", ("not-a-date",)
+    )
+    await tmp_db.commit()
+    with patch("agent.soul.get_db", return_value=tmp_db):
+        assert await _build_relationship_text() == ""
+
+    # 相识日在未来（填错了，不声张）
+    await tmp_db.execute(
+        "UPDATE life_state SET first_met_on = ? WHERE id = 1",
+        ((today + datetime.timedelta(days=10)).isoformat(),),
+    )
+    await tmp_db.commit()
+    with patch("agent.soul.get_db", return_value=tmp_db):
+        assert await _build_relationship_text() == ""
+
+
 async def test_relationship_text_new_vs_old(tmp_db):
     """相识 <14 天走「初识」档；≥90 天走「很熟」档；密度修饰随近 7 天聊天。
 
@@ -562,6 +590,9 @@ async def test_relationship_text_new_vs_old(tmp_db):
     text_new = await build(7, 5)
     assert "初识" in text_new
     assert "你们正聊在热络的时候" in text_new
+    # 输出形态钉死：标题行 + 天数行（审查 Minor-2）
+    assert "## 你们现在的相处" in text_new
+    assert "第 7 天" in text_new
 
     # 相识 200 天 + 近 7 天零消息 → 很熟档 + 久未归密度
     text_old = await build(200, 0)
@@ -573,3 +604,16 @@ async def test_relationship_text_new_vs_old(tmp_db):
     text_sparse = await build(30, 1)
     assert "很熟络" in text_sparse
     assert "来得不勤" in text_sparse
+
+    # 相识 30 天 + 近 7 天 2 条 → 密度落空：无密度句、无中间空行
+    # （审查 Minor-1：join 需过滤空串，否则提示词里出现空行）
+    text_mid = await build(30, 2)
+    assert "很熟络" in text_mid
+    assert "第 30 天。\n你们已经很熟络了" in text_mid
+
+    # 分档边界：14 天恰好 → 熟络档；90 天恰好 → 很熟档（审查 Minor-1）
+    text_boundary14 = await build(14, 0)
+    assert "很熟络" in text_boundary14
+    assert "初识" not in text_boundary14
+    text_boundary90 = await build(90, 0)
+    assert "很熟" in text_boundary90
