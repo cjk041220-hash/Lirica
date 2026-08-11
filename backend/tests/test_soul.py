@@ -651,6 +651,13 @@ async def test_relationship_section_between_days_and_rules(tmp_db):
     # 裁决⑥：天数句与「重要的日子」段重复——关系段去掉该行，
     # 全提示词只出现一次（防重复钉）
     assert prompt.count("今天是你们相识的第") == 1
+    # 归属方向钉（审查 Minor-2）：count==1 只钉「不重复」，
+    # 钉不住「天数句留在重要日子段」——按段分割验证归属
+    sections = prompt.split("## ")
+    days_owner = next(s for s in sections if s.startswith("重要的日子"))
+    rel_owner = next(s for s in sections if s.startswith("你们现在的相处"))
+    assert "今天是你们相识的第" in days_owner
+    assert "今天是你们相识的第" not in rel_owner
 
     # first_met_on 未设置 → 关系段整段缺失（brief docstring 明言）
     await tmp_db.execute(
