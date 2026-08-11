@@ -152,7 +152,9 @@ dreaming-lite 周期自动维护：心跳整合时用近 30 天对话蒸馏更�
 life_state 有 mood 时，在「小汐的今日状态」段拼一句「说话的样子：{hint}」
 （如「今天心情亮，话可以多一点」）；未知词不注入（返回 None）。
 与批③ 的区分：**批③ 是长线相处底色，批④ 是此刻心情的短线文风**。
-新心情词要同时补 `MOOD_VECTORS` 坐标与文风句（词表一致性有单测钉死）。
+新心情词要同时补 `MOOD_VECTORS` 坐标与文风句——模块纪律如此
+（`mood_style_hint` 的 docstring 明言词表必须与 `MOOD_VECTORS` 键集一致）；
+漏补文风句的后果只是返回 None 静默不注入，安全降级。
 
 **人格评测探针（批⑤）：** `tests/test_persona_eval.py` 的 PROBES 探针集
 （20 组剧本式场景，InCharacter 访谈法——不直接问人格题，用场景探测行为承诺）
