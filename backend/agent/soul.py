@@ -507,6 +507,67 @@ async def _build_important_days_text() -> str:
     return "\n".join(lines)
 
 
+async def _build_relationship_text() -> str:
+    """关系成长语气层（批次③，2026-08-11 计划）：相识天数 × 近 7 天
+    互动密度 → 一段「你们现在的相处」。人格恒定、态度可变（Coze 警告）：
+    这里只描述相处状态的语气底色，不改变小汐是谁、不分支改写人设。
+    Knapp 简化三档 + 密度修饰；first_met_on 未设/非法 → '' 不注入。
+    """
+    import datetime
+
+    from utils.timezone import HKT as _HKT
+
+    conn = await get_db()
+    cursor = await conn.execute(
+        "SELECT first_met_on FROM life_state WHERE id = 1"
+    )
+    row = await cursor.fetchone()
+    if not row or not row[0]:
+        return ""
+    try:
+        first_met = datetime.date.fromisoformat(row[0])
+    except ValueError:
+        log.warning("关系成长：first_met_on 非法：%s", row[0])
+        return ""
+
+    today = datetime.datetime.now(_HKT).date()
+    days_known = (today - first_met).days + 1
+    if days_known < 1:
+        return ""
+
+    # 近 7 天冷冷有没有来过（互动密度）：chat_messages 是档案表，
+    # 数据是分钟精度时间戳；user 侧消息 = 她主动来找小汐说话。
+    cursor = await conn.execute(
+        """SELECT COUNT(*) FROM chat_messages
+           WHERE role = 'user' AND created_at >= ?""",
+        ((today - datetime.timedelta(days=7)).strftime("%Y-%m-%d") + " 00:00",),
+    )
+    row = await cursor.fetchone()
+    chats_7d = int(row[0]) if row else 0
+
+    if days_known < 14:
+        stage = ("你们认识不久，她对小汐还带着一点初识的新鲜和试探。"
+                 "话不用太满，她问什么答什么，让她先习惯你的存在。")
+    elif days_known < 90:
+        stage = ("你们已经很熟络了。可以自然地开玩笑、惦记她的事，"
+                 "但保持一点点分寸，别替她做决定。")
+    else:
+        stage = ("你们已经相处很久、很熟了。彼此的习惯都清楚，她的话你接得住，"
+                 "你的惦记她也懂。这是最舒服的状态——自然就好，不用刻意。")
+
+    density = ""
+    if chats_7d >= 3:
+        density = "这几天她来得勤，你们正聊在热络的时候。"
+    elif chats_7d == 0:
+        density = "最近她忙，有几天没来了——她回来时，别追问，先欢迎。"
+    elif chats_7d == 1:
+        density = "这几天她来得不勤，每次来都好好陪。"
+
+    return "\n".join(
+        ["## 你们现在的相处", f"今天是你们相识的第 {days_known} 天。", density, stage]
+    )
+
+
 async def build_system_prompt() -> str:
     """组装完整的系统提示词（含生命状态注入）。"""
     # 读取生命状态

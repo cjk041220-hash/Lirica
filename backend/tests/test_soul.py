@@ -512,3 +512,64 @@ async def test_prompt_anniversary_hint_within_week(tmp_db):
     with patch("agent.soul.get_db", return_value=tmp_db):
         prompt = await build_system_prompt()
     assert "## 重要的日子" not in prompt
+
+
+# ── 关系成长批（2026-08-11 计划批③）──────────────────────────
+
+
+async def test_relationship_text_no_first_met(tmp_db):
+    """first_met_on 未设置 → 空串（不注入，与旧版一致）。"""
+    from unittest.mock import patch
+
+    from agent.soul import _build_relationship_text
+
+    with patch("agent.soul.get_db", return_value=tmp_db):
+        assert await _build_relationship_text() == ""
+
+
+async def test_relationship_text_new_vs_old(tmp_db):
+    """相识 <14 天走「初识」档；≥90 天走「很熟」档；密度修饰随近 7 天聊天。
+
+    mock 模式与既有 `_build_important_days_text` 测试一致（tmp_db +
+    patch get_db）；brief 的 AsyncMock 链是参考形态，断言逐字保留。
+    """
+    import datetime
+    from unittest.mock import patch
+
+    from agent.soul import _build_relationship_text
+    from utils.timezone import HKT
+
+    today = datetime.datetime.now(HKT).date()
+
+    async def build(days_known: int, chats_7d: int) -> str:
+        await tmp_db.execute("DELETE FROM chat_messages")
+        await tmp_db.execute(
+            "UPDATE life_state SET first_met_on = ? WHERE id = 1",
+            ((today - datetime.timedelta(days=days_known - 1)).isoformat(),),
+        )
+        for i in range(chats_7d):
+            await tmp_db.execute(
+                "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
+                "VALUES ('rel', 'user', ?, ?, 'chat')",
+                (f"测试消息{i}",
+                 (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d") + " 10:00"),
+            )
+        await tmp_db.commit()
+        with patch("agent.soul.get_db", return_value=tmp_db):
+            return await _build_relationship_text()
+
+    # 相识 7 天 + 近 7 天 5 条用户消息 → 初识档 + 热络密度
+    text_new = await build(7, 5)
+    assert "初识" in text_new
+    assert "你们正聊在热络的时候" in text_new
+
+    # 相识 200 天 + 近 7 天零消息 → 很熟档 + 久未归密度
+    text_old = await build(200, 0)
+    assert "很熟" in text_old
+    assert "初识" not in text_old
+    assert "别追问，先欢迎" in text_old
+
+    # 相识 30 天（中档）+ 近 7 天 1 条 → 不勤密度
+    text_sparse = await build(30, 1)
+    assert "很熟络" in text_sparse
+    assert "来得不勤" in text_sparse
