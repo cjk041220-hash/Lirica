@@ -590,9 +590,10 @@ async def test_relationship_text_new_vs_old(tmp_db):
     text_new = await build(7, 5)
     assert "初识" in text_new
     assert "你们正聊在热络的时候" in text_new
-    # 输出形态钉死：标题行 + 天数行（审查 Minor-2）
-    assert "## 你们现在的相处" in text_new
-    assert "第 7 天" in text_new
+    # 输出形态钉死：标题行在首（审查 Minor-2）。
+    # 注意：天数句已随裁决⑥移出本段——由「重要的日子」段独有，防重复。
+    assert text_new.startswith("## 你们现在的相处")
+    assert "今天是你们相识的第" not in text_new
 
     # 相识 200 天 + 近 7 天零消息 → 很熟档 + 久未归密度
     text_old = await build(200, 0)
@@ -609,7 +610,7 @@ async def test_relationship_text_new_vs_old(tmp_db):
     # （审查 Minor-1：join 需过滤空串，否则提示词里出现空行）
     text_mid = await build(30, 2)
     assert "很熟络" in text_mid
-    assert "第 30 天。\n你们已经很熟络了" in text_mid
+    assert "## 你们现在的相处\n你们已经很熟络了" in text_mid
 
     # 分档边界：14 天恰好 → 熟络档；90 天恰好 → 很熟档（审查 Minor-1）
     text_boundary14 = await build(14, 0)
@@ -617,3 +618,46 @@ async def test_relationship_text_new_vs_old(tmp_db):
     assert "初识" not in text_boundary14
     text_boundary90 = await build(90, 0)
     assert "很熟" in text_boundary90
+
+
+async def test_relationship_section_between_days_and_rules(tmp_db):
+    """关系段注入于「重要的日子」之后、「交互铁律」之前；无 first_met 时整段缺失。
+
+    镜像既有 build_system_prompt 测试的 DB mock 结构（tmp_db + patch
+    get_db 双通道：soul + events）。brief 原测试依赖「既有测试的 DB mock
+    夹具」——按此说明复用；brief 断言逐字保留，另补 brief docstring
+    明言的「无 first_met 整段缺失」钉子和裁决⑥ 的防重复钉子。
+    """
+    import datetime
+    from unittest.mock import patch
+
+    from agent.soul import build_system_prompt
+    from utils.timezone import HKT
+
+    today = datetime.datetime.now(HKT).date()
+    await tmp_db.execute(
+        "UPDATE life_state SET first_met_on = ? WHERE id = 1",
+        ((today - datetime.timedelta(days=40)).isoformat(),),
+    )
+    await tmp_db.commit()
+
+    with patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "## 你们现在的相处" in prompt
+    assert prompt.index("## 你们现在的相处") > prompt.index("## 重要的日子")
+    assert prompt.index("## 交互铁律") > prompt.index("## 你们现在的相处")
+    # 裁决⑥：天数句与「重要的日子」段重复——关系段去掉该行，
+    # 全提示词只出现一次（防重复钉）
+    assert prompt.count("今天是你们相识的第") == 1
+
+    # first_met_on 未设置 → 关系段整段缺失（brief docstring 明言）
+    await tmp_db.execute(
+        "UPDATE life_state SET first_met_on = NULL WHERE id = 1"
+    )
+    await tmp_db.commit()
+    with patch("agent.soul.get_db", return_value=tmp_db), \
+         patch("utils.events.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+    assert "## 你们现在的相处" not in prompt

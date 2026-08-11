@@ -563,10 +563,10 @@ async def _build_relationship_text() -> str:
     elif chats_7d == 1:
         density = "这几天她来得不勤，每次来都好好陪。"
 
+    # 裁决⑥（2026-08-11，Task 7 接线时）：天数句由「重要的日子」段独有
+    # （两段同一门卫——first_met_on 有效则两段都在——本段再写即重复）。
     return "\n".join(
-        part for part in
-        ["## 你们现在的相处", f"今天是你们相识的第 {days_known} 天。", density, stage]
-        if part
+        part for part in ["## 你们现在的相处", density, stage] if part
     )
 
 
@@ -601,6 +601,14 @@ async def build_system_prompt() -> str:
     except Exception as e:
         log.warning("纪念日上下文读取失败：%s", e)
 
+    # 关系成长语气层（批次③）：相识天数 × 互动密度。first_met_on
+    # 未设置时返回空串，整段不注入。
+    relationship_text = ""
+    try:
+        relationship_text = await _build_relationship_text()
+    except Exception as e:
+        log.warning("关系成长上下文读取失败：%s", e)
+
     # 生理期关心不再单独注入：预测窗口内的 cycle 事件随下方事件上下文
     # 一起进提示词（事件单通道，memo 带完整关心纪律），避免三路唠叨。
 
@@ -634,6 +642,10 @@ async def build_system_prompt() -> str:
     if important_days_text:
         parts.append("")
         parts.append(important_days_text)
+
+    if relationship_text:
+        parts.append("")
+        parts.append(relationship_text)
 
     if events_text:
         parts.append("")
