@@ -212,8 +212,8 @@ async def consolidate_memories(conn=None) -> dict:
         profile_updated = bool(presult.get("updated"))
         if presult.get("ran"):
             log.info("画像蒸馏：%s", "已更新" if profile_updated else "无变化")
-    except Exception as e:
-        log.error("画像蒸馏失败：%s", e)
+    except Exception:
+        log.exception("画像蒸馏失败")
 
     await _mark_consolidated(conn, now)
     log.info("记忆整合：合并 %d 组（无效提案 %d 个）", merged, invalid)

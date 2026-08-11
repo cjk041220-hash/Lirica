@@ -5,8 +5,6 @@
 累积——单用户设计下这是特性（活跃用户上下文长得快、锚得更勤），不是
 缺陷。
 """
-import pytest
-
 from agent.graph import _PersonaAnchorMiddleware, _PreModelHookMiddleware
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
@@ -72,7 +70,9 @@ async def test_anchor_injected_on_interval():
         _make_request(_make_state()["messages"]), _capture_handler(captured))
     model_input = captured[0]
     system_msgs = [m for m in model_input if isinstance(m, SystemMessage)]
-    assert "冷冷感受永远第一" in system_msgs[-1].content  # 锚在系统段末尾
+    # 位置钉用中间件自有标记（锚首/锚尾），不绑锚文本措辞——锚内容
+    # 与 soul 常量的一致性由 test_anchor_content_is_soul_constant 钉死
+    assert "[锚结束]" in system_msgs[-1].content  # 锚在系统段末尾
     assert len(_anchors(model_input)) == 1  # 锚唯一
 
 
@@ -249,7 +249,7 @@ async def test_real_chain_anchor_round_preserves_narrative():
         pre_model_hook=make_pre_model_hook(_StubNarrative()),
         anchor_interval=1,  # 首轮即锚：同时验证 hook 与锚共存
     )
-    await agent.ainvoke(
+    result = await agent.ainvoke(
         {"messages": [HumanMessage(content="你好", id="h1")]},
         config={"configurable": {"thread_id": "semantics-test"}},
     )
@@ -258,3 +258,6 @@ async def test_real_chain_anchor_round_preserves_narrative():
     assert "人格锚" in sys_msgs[-1].content
     assert len(_anchors(captured)) == 1  # 锚唯一
     assert "爱吃芒果" in "".join(m.content for m in sys_msgs)  # 记忆叙事必须保留
+    # 不进 checkpoint：ainvoke 终态 messages 不得含锚（override 纯内存，
+    # 结构性钉死——此前仅读码验证）
+    assert not _anchors(result["messages"])

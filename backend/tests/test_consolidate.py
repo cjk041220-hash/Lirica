@@ -150,7 +150,7 @@ async def test_category_below_threshold_not_scanned(tmp_db, fake_llm):
 
     result = await consolidate_memories(tmp_db)
 
-    assert result["ran"] is False
+    assert result == {"ran": False, "merged": 0, "invalid": 0, "profile": False}
     assert fake.calls == 0  # LLM 没被调用
 
 
@@ -176,7 +176,8 @@ async def test_throttle_blocks_second_run_within_24h(tmp_db, fake_llm):
     r2 = await consolidate_memories(tmp_db)
 
     assert r1["ran"] is True
-    assert r2["ran"] is False
+    # 四键形状钉死（Task 5 裁决④）：早退路径也带 profile 键，调用方无需判空
+    assert r2 == {"ran": False, "merged": 0, "invalid": 0, "profile": False}
     assert fake.calls == 1  # 第二次没调 LLM
 
 
@@ -206,7 +207,6 @@ async def test_throttle_expires_after_24h(tmp_db, fake_llm):
 
 async def test_consolidate_runs_profile_distill(_profile_conn):
     """consolidate_memories 顺带跑画像蒸馏（同一 24h 节流窗口）。"""
-    from memory.consolidate import consolidate_memories
     from unittest.mock import patch
 
     # 种一条用户消息 + 一个合格类别（≥8 条）让 consolidate 进入主流程

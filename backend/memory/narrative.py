@@ -55,7 +55,11 @@ class NarrativeBuilder:
         )
         prow = await cursor.fetchone()
         if prow and prow[0]:
-            profile_text = f"## 小汐眼里的冷冷\n- {prow[0]}"
+            # 与常规叙事同纪律：压平换行（防伪造结构）+ 截断超长
+            content = " ".join(prow[0].split())
+            if len(content) > _MAX_ITEM_LEN:
+                content = content[:_MAX_ITEM_LEN] + "……"
+            profile_text = f"## 小汐眼里的冷冷\n- {content}"
 
         total = await self._manager.count()
         if total == 0:

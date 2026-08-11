@@ -182,7 +182,7 @@ class _PreModelHookMiddleware(AgentMiddleware):
         self._hook = hook
 
     async def awrap_model_call(self, request, handler):
-        result = await self._hook(request.state)
+        result = await self._hook(request.state) or {}
         llm_input = result.get("llm_input_messages")
         if llm_input:
             # request.messages 不含 system_prompt（模型节点在调用前前置

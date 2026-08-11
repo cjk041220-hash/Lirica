@@ -4,9 +4,7 @@
 不删除（旧画像走 superseded 链，v15）。固定 id 的 core 行，首次
 懒创建，此后 update_content 覆盖——与 mood_current（v18）同一模式。
 """
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from memory.profile import (
     PROFILE_CATEGORY,
@@ -25,16 +23,6 @@ class _FakeLLM:
         class _Resp:
             content = self._content
         return _Resp()
-
-
-@pytest.fixture
-def profile_db():
-    """内存库：建 memories + chat_messages 表的最小夹具。"""
-    import aiosqlite
-
-    db = None
-    # 由调用方注入 conn 的方式测试（distill_cold_profile(conn=...)）
-    return None
 
 
 async def test_distill_creates_core_row(_profile_conn):
@@ -141,6 +129,7 @@ async def test_narrative_injects_profile_first(_profile_conn):
     assert "## 小汐眼里的冷冷" in text
     assert text.index("## 小汐眼里的冷冷") < text.index("以下是小汐记住的")
     assert "她最近在赶论文" in text
+    assert text.count("她最近在赶论文") == 1  # 读面排除：画像行不得重复浮现于常规段
     assert "爱吃芒果" in text  # 常规记忆仍注入（画像只多不少）
 
 
