@@ -120,6 +120,13 @@ async def _profile_conn():
             session_id TEXT, role TEXT, content TEXT,
             created_at TEXT, msg_type TEXT
         );
+        -- life_state：Task 4 叙事注入测试走完整 build() 路径，
+        -- 其中 get_mood_valence 读 life_state（无行 → None，降级不崩）
+        CREATE TABLE life_state (
+            id INTEGER PRIMARY KEY,
+            mood TEXT, daily_event TEXT,
+            mood_changed_at TEXT, updated_at TEXT
+        );
     """)
     # seed：2 条用户对话（now-1h 相对时间戳，落在蒸馏 30 天窗口内）——
     # 计划缺陷裁决（2026-08-11）：计划原测试 1-4 断言 ran=True 需要

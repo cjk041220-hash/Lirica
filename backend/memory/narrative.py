@@ -45,6 +45,18 @@ class NarrativeBuilder:
         if total == 0:
             return ""
 
+        # 画像优先注入（批次②）：固定 id 的「小汐眼里的冷冷」块单独
+        # 渲染在最前——它是蒸馏过的动态认识，比单条记忆更值得先看。
+        # 常规召回已排除该行（PROFILE_ROW_FILTER），这里不会重复。
+        profile_text = ""
+        cursor = await self._manager._db.execute(
+            "SELECT content FROM memories WHERE id = ?",
+            ("profile_cold",),
+        )
+        prow = await cursor.fetchone()
+        if prow and prow[0]:
+            profile_text = f"## 小汐眼里的冷冷\n- {prow[0]}"
+
         # 情绪联动（schema v18）：查一次当前心情效价，传给 recall 的
         # mood-congruent 因子。未知 mood 词 / 无 life_state 行 → None，
         # 因子自动关闭，行为退回 v17（降级路径有测试钉死）。
@@ -85,7 +97,9 @@ class NarrativeBuilder:
         memories = sorted(picked, key=lambda m: m.get("created_at") or "")
 
         if not memories:
-            return ""
+            # 常规记忆为空但画像存在：仍把画像段带回去，不整段丢弃。
+            # （无画像时 profile_text 为 ""，两种情况合一行。）
+            return profile_text
 
         # 按类别分组（memories 已由 recent() 按时间正序排列）
         # 每条内容压平换行（防止伪造叙事结构）并截断超长内容
@@ -99,7 +113,12 @@ class NarrativeBuilder:
                 grouped[cat] = []
             grouped[cat].append(content)
 
-        lines = ["以下是小汐记住的关于冷冷的事情：", ""]
+        lines: list[str] = []
+        if profile_text:
+            lines.append(profile_text)
+            lines.append("")
+        lines.append("以下是小汐记住的关于冷冷的事情：")
+        lines.append("")
         for cat, items in grouped.items():
             lines.append(f"### {cat}")
             for item in items:

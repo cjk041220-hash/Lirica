@@ -111,3 +111,34 @@ async def test_distill_no_chat_no_run(_profile_conn):
         result = await distill_cold_profile(conn=_profile_conn)
     assert result["ran"] is False
     mock_llm.assert_not_called()
+
+
+async def test_narrative_injects_profile_first(_profile_conn):
+    """画像段出现在叙事最前，且不与常规记忆重复。"""
+    from memory.narrative import NarrativeBuilder
+    from memory.profile import PROFILE_MEMORY_ID
+
+    # 种画像行 + 一条普通记忆
+    await _profile_conn.execute(
+        """INSERT INTO memories (id, content, category, created_at, status,
+           last_used_at, access_count, updated_at)
+           VALUES (?, '她最近在赶论文', '小汐眼里的冷冷', '2026-08-11 10:00',
+                   'core', '2026-08-11 10:00', 0, '2026-08-11 10:00')""",
+        (PROFILE_MEMORY_ID,),
+    )
+    await _profile_conn.execute(
+        """INSERT INTO memories (id, content, category, created_at, status,
+           last_used_at, access_count, updated_at)
+           VALUES ('m1', '爱吃芒果', '喜好', '2026-08-10 10:00',
+                   'active', '2026-08-10 10:00', 0, '2026-08-10 10:00')""",
+    )
+    await _profile_conn.commit()
+
+    from memory.manager import MemoryManager
+    builder = NarrativeBuilder(MemoryManager(_profile_conn))
+    text = await builder.build(max_items=5)
+
+    assert "## 小汐眼里的冷冷" in text
+    assert text.index("## 小汐眼里的冷冷") < text.index("以下是小汐记住的")
+    assert "她最近在赶论文" in text
+    assert "爱吃芒果" in text  # 常规记忆仍注入（画像只多不少）
