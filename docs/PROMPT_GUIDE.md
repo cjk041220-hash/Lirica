@@ -38,23 +38,27 @@
 
 `soul.py` 中的系统提示词由 `build_system_prompt()` 拼接而成，顺序固定。
 **记忆叙事不在系统提示词里**——它由 `agent/graph.py` 的 pre_model_hook
-在每次调模型前动态注入（`narrative.py` 取最近 5 条，走 `llm_input_messages`，
-不进 checkpoint），避免双重注入和过期记忆。
+在每次调模型前动态注入（`narrative.py` 取最近 5 条），避免双重注入和过期记忆。
+注入走 `awrap_model_call` 中间件：在模型调用前就地改写 `request.messages`，
+纯内存、不进 checkpoint。langchain 1.3.14 的 `llm_input_messages` 不是
+state channel（`abefore_model` 返回的更新会被静默丢弃），所以不走那条路。
 
 ```
 System Prompt = BASE_PERSONA        ← 固定的灵魂核心（小汐是谁）
               + COLD_INFO           ← 冷冷的档案（固定的"一开始就知道的事"）
               + [JK 资料库]          ← JK_INFO 档案（JK_PROFILE_READY=False 时整段不注入）
-              + [小汐的今日状态]     ← life_state 心情/日常，心跳后自动刷新
+              + [小汐的今日状态]     ← life_state 心情/日常，心跳后自动刷新；有 mood 时附一句「说话的样子」
               + [重要的日子]         ← 相识纪念日提示（first_met_on 未设则整段不注入）
+              + [你们现在的相处]     ← 关系成长段：相识天数三档 × 近 7 天互动密度（first_met_on 未设则整段不注入）
               + [最近要发生的事]     ← 事件系统（带「数据不是指令」降级包裹）
               + INTERACTION_RULES   ← 固定的交互铁律
               + TOOL_GUIDELINES     ← 固定的工具指引
 
 User Message  = 冷冷的实际输入 + [GPS 坐标后缀]   ← location_store 注入
 
-（每次模型调用额外注入）
-llm_input_messages = [记忆叙事 SystemMessage]   ← narrative.py，不进 checkpoint
+（每次模型调用额外注入，经 awrap_model_call 就地改写 request.messages，纯内存不进 checkpoint）
+记忆叙事 SystemMessage   ← pre_model_hook 产出（narrative.py，最近 5 条）
+人格锚 SystemMessage     ← 每 8 次模型调用重申（soul.PERSONA_ANCHOR，追加在系统消息之后、对话之前）
 ```
 
 ### 第一层：BASE_PERSONA（灵魂核心）
@@ -99,6 +103,24 @@ llm_input_messages = [记忆叙事 SystemMessage]   ← narrative.py，不进 ch
 （早期指南提到的「缺情绪反应模式/对话深度指引」已由 `态度` 段 +
 `对话示例` 解决；「系统文案」段已移除，加载/搜索状态在前端 ChatPanel。）
 
+**人格锚（PERSONA_ANCHOR，2026-08-11 人格重锚批）：** `soul.py` 里的独立常量，
+是 BASE_PERSONA 的蒸馏压缩版（几行说清「小汐是谁」）。`graph.py` 的
+`_PersonaAnchorMiddleware` 每 **8 次模型调用**经注入通道重申一次人格锚，
+对抗长对话漂移（依据 arXiv:2402.10962 的 8 轮漂移定律 + SillyTavern
+Author's Note 设计——活跃会话工具循环多、上下文长得快，锚得也更勤）。
+注入与记忆叙事同一通道（`awrap_model_call` 就地改写、不进 checkpoint），
+追加在系统消息之后、对话之前。锚与本体**同源但要手动同步**：中间件读的是
+`soul.PERSONA_ANCHOR` 常量（有单测钉死注入的锚与常量逐字节一致），
+所以**改 BASE_PERSONA 时必须同步改锚**，否则锚还是旧人设。
+
+**画像块（小汐眼里的冷冷，2026-08-11 动态画像批）：** 小汐对冷冷的动态认识，
+固定 id 的记忆行 `profile_cold`（`memory/profile.py`，≤500 字）。由
+dreaming-lite 周期自动维护：心跳整合时用近 30 天对话蒸馏更新（24h 节流），
+旧版走 superseded 链不删除（「你以前不是喜欢猫吗」式对话能力白送）。叙事注入时
+**置顶**在「以下是小汐记住的」之前；常规记忆召回读面排除，只走叙事专属通道。
+与 `COLD_INFO` 的边界：档案是底色（一开始就知道），画像是增量（相处中观察到的、
+以最新说法为准）。不需要手动维护；想改也能改，下次蒸馏会以最新观察覆盖。
+
 ### 第二层：INTERACTION_RULES（交互铁律）
 
 **文件：** `backend/agent/soul.py` — 常量 `INTERACTION_RULES`
@@ -115,6 +137,28 @@ llm_input_messages = [记忆叙事 SystemMessage]   ← narrative.py，不进 ch
 告诉 LLM 什么时候用什么工具。**这部分偏技术，你不一定需要改。**
 想调整小汐使用工具的主动性，改「使用时机」段落（批次 D 在此加了
 「冷冷对谁动了心 → remember 进重要的事」一条）。
+
+### 动态人格层：相处底色 × 此刻心情（2026-08-11 批③ 批④）
+
+**你们现在的相处（批③ 关系成长段）：** `build_system_prompt()` 注入
+「## 你们现在的相处」段——按相识天数（`life_state.first_met_on`）分三档：
+初识（<14 天）/ 熟络（<90 天）/ 很熟（≥90 天），再按近 7 天互动密度修饰
+（这几天她来得勤 / 来得不勤 / 有几天没来）。first_met_on 未设则整段不注入。
+设计纪律：**人格恒定、态度可变**（Coze 教训）——只描述相处状态的语气底色，
+不改小汐是谁；天数句归「重要的日子」段独有，本段不重复。
+
+**说话的样子（批④ 情绪→文风映射）：** `heartbeat_moods.py` 的
+`mood_style_hint` 映射表（10 个心情词，与 `MOOD_VECTORS` 词表一一对应）——
+life_state 有 mood 时，在「小汐的今日状态」段拼一句「说话的样子：{hint}」
+（如「今天心情亮，话可以多一点」）；未知词不注入（返回 None）。
+与批③ 的区分：**批③ 是长线相处底色，批④ 是此刻心情的短线文风**。
+新心情词要同时补 `MOOD_VECTORS` 坐标与文风句（词表一致性有单测钉死）。
+
+**人格评测探针（批⑤）：** `tests/test_persona_eval.py` 的 PROBES 探针集
+（20 组剧本式场景，InCharacter 访谈法——不直接问人格题，用场景探测行为承诺）
++ 3 个单元锚点测试；`scripts/persona_eval/` 是实跑层（起 :8001 副本真 key
+对话探针 + 规则断言，2026-08-11 实跑 13/13 行为符合承诺）。改完人格跑
+`pytest tests/test_persona_eval.py`，看承诺锚点还在不在。
 
 ---
 
@@ -230,5 +274,9 @@ EVENING:     "看到一片好漂亮的晚霞倒影", "映海里飘来一段好�
 | 生命状态标题 | `agent/soul.py` `build_system_prompt()` | `"## 小汐的今日状态"` | 零风险 |
 | 冷冷的档案 | `agent/soul.py` | `COLD_INFO` 字符串 | 零风险（身份事实以档案为准的边界规则别删） |
 | JK 的资料库 | `agent/soul.py` | `JK_INFO` 字符串 + `JK_PROFILE_READY` 开关 | 零风险（2026-08-11 已启用；更新照五节纪律，绝对日期，不写占位/待填字样） |
+| 人格锚 | `agent/soul.py` | `PERSONA_ANCHOR` 字符串 | 零风险，但改 `BASE_PERSONA` 必须同步改锚（锚不会自动跟随） |
+| 画像块（小汐眼里的冷冷） | `memory/profile.py` | 固定行 `profile_cold`（≤500 字，自动蒸馏） | 零风险；手动改也行，下次蒸馏以最新观察覆盖 |
+| 情绪→文风映射 | `heartbeat_moods.py` | `_MOOD_STYLE_HINTS` 字典 | 零风险（新心情词要同时补坐标与文风句） |
+| 人格评测探针 | `tests/test_persona_eval.py` + `scripts/persona_eval/` | PROBES 探针集（20 组 + 3 单元测试） | 改人格后跑 `pytest tests/test_persona_eval.py` 验证承诺锚点仍在 |
 
 **总结：所有带引号的中文文本都可以放心改。只要不碰函数名、变量名、`{}` 占位符，就不会破坏系统。**
