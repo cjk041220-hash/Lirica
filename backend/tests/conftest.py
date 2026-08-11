@@ -128,6 +128,11 @@ async def _profile_conn():
             mood_changed_at TEXT, updated_at TEXT
         );
     """)
+    # memory_extract_state：Task 5 裁决（2026-08-11）——consolidate_memories
+    # 的节流查询/记时无条件依赖该表（_throttle_allowed/_mark_consolidated），
+    # 与 tmp_db 同源共享同一份 DDL 常量，防止夹具漂移
+    from database.migrations import MEMORY_EXTRACT_STATE_SQL
+    await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
     # seed：2 条用户对话（now-1h 相对时间戳，落在蒸馏 30 天窗口内）——
     # 计划缺陷裁决（2026-08-11）：计划原测试 1-4 断言 ran=True 需要
     # 窗口内有对话，空表下「先建行」不可能成立；test 5 自行清空。

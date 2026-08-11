@@ -151,7 +151,8 @@ async def consolidate_memories(conn=None) -> dict:
 
     返回值供日志与测试断言：
     {"ran": 是否实际运行（False=节流中/无合格类别）,
-     "merged": 实际执行的合并数, "invalid": 校验失败跳过的提案数}
+     "merged": 实际执行的合并数, "invalid": 校验失败跳过的提案数,
+     "profile": 本周期画像蒸馏是否写入新画像}
     """
     if conn is None:
         from database.core import get_db
@@ -160,13 +161,13 @@ async def consolidate_memories(conn=None) -> dict:
 
     now = datetime.datetime.now(_HKT)
     if not await _throttle_allowed(conn, now):
-        return {"ran": False, "merged": 0, "invalid": 0}
+        return {"ran": False, "merged": 0, "invalid": 0, "profile": False}
 
     cats = await mgr.list_categories()
     eligible = [c for c, n in cats.items() if n >= _MIN_CATEGORY_SIZE]
     if not eligible:
         # 无合格类别：不调 LLM、不计节流（下轮再看，纯读近零开销）
-        return {"ran": False, "merged": 0, "invalid": 0}
+        return {"ran": False, "merged": 0, "invalid": 0, "profile": False}
 
     llm = _create_llm()
     merged = 0
@@ -202,6 +203,19 @@ async def consolidate_memories(conn=None) -> dict:
             else:
                 invalid += 1
 
+    # 动态画像蒸馏（批次②）：与整合共用 24h 节流窗口——画像需要
+    # 「近 30 天对话」做素材，节流越紧素材越新，成本越低。
+    profile_updated = False
+    try:
+        from memory.profile import distill_cold_profile
+        presult = await distill_cold_profile(conn=conn)
+        profile_updated = bool(presult.get("updated"))
+        if presult.get("ran"):
+            log.info("画像蒸馏：%s", "已更新" if profile_updated else "无变化")
+    except Exception as e:
+        log.error("画像蒸馏失败：%s", e)
+
     await _mark_consolidated(conn, now)
     log.info("记忆整合：合并 %d 组（无效提案 %d 个）", merged, invalid)
-    return {"ran": True, "merged": merged, "invalid": invalid}
+    return {"ran": True, "merged": merged, "invalid": invalid,
+            "profile": profile_updated}

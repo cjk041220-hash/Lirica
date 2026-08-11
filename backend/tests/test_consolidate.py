@@ -60,7 +60,7 @@ async def test_merge_combines_duplicates(tmp_db, fake_llm):
 
     result = await consolidate_memories(tmp_db)
 
-    assert result == {"ran": True, "merged": 1, "invalid": 0}
+    assert result == {"ran": True, "merged": 1, "invalid": 0, "profile": False}
     mgr = MemoryManager(tmp_db)
     assert await mgr.count() == 7  # 8 条 → 合并掉 1 条
     active = {m["content"] for m in await mgr.all()}
@@ -161,7 +161,7 @@ async def test_unparseable_output_skips_category(tmp_db, fake_llm):
 
     result = await consolidate_memories(tmp_db)
 
-    assert result == {"ran": True, "merged": 0, "invalid": 0}
+    assert result == {"ran": True, "merged": 0, "invalid": 0, "profile": False}
 
 
 # ── 节流 ──────────────────────────────────────────────────────
@@ -199,3 +199,37 @@ async def test_throttle_expires_after_24h(tmp_db, fake_llm):
 
     assert r2["ran"] is True
     assert fake.calls == 2
+
+
+# ── 画像蒸馏并入（Task 5 批②：consolidate 顺带跑 distill） ────
+
+
+async def test_consolidate_runs_profile_distill(_profile_conn):
+    """consolidate_memories 顺带跑画像蒸馏（同一 24h 节流窗口）。"""
+    from memory.consolidate import consolidate_memories
+    from unittest.mock import patch
+
+    # 种一条用户消息 + 一个合格类别（≥8 条）让 consolidate 进入主流程
+    await _profile_conn.execute(
+        """INSERT INTO chat_messages (session_id, role, content, created_at)
+           VALUES ('s1', 'user', '我最近在赶论文', '2026-08-11 10:00')""")
+    for i in range(8):
+        await _profile_conn.execute(
+            """INSERT INTO memories (id, content, category, created_at, status,
+               last_used_at, access_count, updated_at)
+               VALUES (?, ?, '喜好', '2026-08-01 10:00', 'active',
+                       '2026-08-01 10:00', 0, '2026-08-01 10:00')""",
+            (f"c{i}", f"喜欢的东西 {i}"))
+    await _profile_conn.commit()
+
+    with patch("memory.consolidate._create_llm", autospec=True) as clm, \
+         patch("memory.profile._create_llm", autospec=True) as plm:
+        clm.return_value = _FakeLLM("[]")   # consolidate：无合并提案
+        plm.return_value = _FakeLLM("她最近在赶论文，常熬夜")
+        result = await consolidate_memories(conn=_profile_conn)
+
+    assert result["profile"] is True
+    cur = await _profile_conn.execute(
+        "SELECT content FROM memories WHERE id = 'profile_cold'")
+    row = await cur.fetchone()
+    assert row is not None and "赶论文" in row[0]
