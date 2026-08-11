@@ -84,7 +84,11 @@ log = get_logger(__name__)
 #       user/assistant，solo 消息落 role='assistant'）；
 #     life_state.last_seen_at / active_session_id（presence 上报：冷冷
 #       在线状态 + 当前活跃会话，era 路由判定的数据源）。
-SCHEMA_VERSION = 21
+# v22: chat_messages (role, created_at) 组合索引 — 批③关系密度查询
+#     （agent/soul.py 近7天互动密度）与批②画像蒸馏查询（memory/profile.py
+#     近30天画像素材）都按 (role='user', created_at) 谓词扫 chat_messages，
+#     无索引时全表扫。组合索引一次覆盖两处；纯索引迁移，无数据语义变更。
+SCHEMA_VERSION = 22
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -1007,6 +1011,29 @@ async def _migrate_v21(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[21] = _migrate_v21
+
+
+# ── v22 迁移：chat_messages 关系查询组合索引 ───────────────────
+
+async def _migrate_v22(conn: aiosqlite.Connection) -> None:
+    """v22: chat_messages (role, created_at) 索引 — 批③关系密度与批②画像蒸馏查询去全表扫。
+
+    两处新查询（agent/soul.py 近7天互动密度、memory/profile.py 近30天
+    画像素材）都按 (role='user', created_at) 谓词扫描 chat_messages，
+    无索引时全表扫。加组合索引一次覆盖两处。
+
+    纯增量建索引（IF NOT EXISTS 幂等），无数据语义变更；全新安装经
+    ensure_schema 全量迁移同样获得本索引，与升级路径终态一致。
+    """
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_role_created "
+        "ON chat_messages (role, created_at)"
+    )
+    await conn.commit()
+    log.info("迁移 v22 完成：chat_messages (role, created_at) 索引已建立")
+
+
+_migrations[22] = _migrate_v22
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
