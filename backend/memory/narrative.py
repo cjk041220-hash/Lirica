@@ -41,13 +41,13 @@ class NarrativeBuilder:
         """
         if self._manager is None:
             return ""
-        total = await self._manager.count()
-        if total == 0:
-            return ""
 
         # 画像优先注入（批次②）：固定 id 的「小汐眼里的冷冷」块单独
         # 渲染在最前——它是蒸馏过的动态认识，比单条记忆更值得先看。
         # 常规召回已排除该行（PROFILE_ROW_FILTER），这里不会重复。
+        # 查询必须放在 total==0 门卫之前（审查 I-1）：count() 同样
+        # 排除该行，画像独存时 total==0 会提前返回——先取画像才能在
+        # 该场景保住画像段。
         profile_text = ""
         cursor = await self._manager._db.execute(
             "SELECT content FROM memories WHERE id = ?",
@@ -56,6 +56,12 @@ class NarrativeBuilder:
         prow = await cursor.fetchone()
         if prow and prow[0]:
             profile_text = f"## 小汐眼里的冷冷\n- {prow[0]}"
+
+        total = await self._manager.count()
+        if total == 0:
+            # 仅画像独存（常规记忆为空）：把画像段带回去，不整段丢弃；
+            # 无画像且无记忆时为 ""（空库原语义）。
+            return profile_text
 
         # 情绪联动（schema v18）：查一次当前心情效价，传给 recall 的
         # mood-congruent 因子。未知 mood 词 / 无 life_state 行 → None，

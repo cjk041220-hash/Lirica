@@ -142,3 +142,35 @@ async def test_narrative_injects_profile_first(_profile_conn):
     assert text.index("## 小汐眼里的冷冷") < text.index("以下是小汐记住的")
     assert "她最近在赶论文" in text
     assert "爱吃芒果" in text  # 常规记忆仍注入（画像只多不少）
+
+
+async def test_narrative_profile_only_db_survives_gate(_profile_conn):
+    """画像独存（常规记忆为空）：total==0 门卫不吞画像段；空库返回 ""。
+
+    审查 I-1：count() 经 PROFILE_ROW_FILTER 排除画像行，画像独存时
+    total==0 会提前返回——画像查询必须放在门卫之前，门卫只放行
+    profile_text（或空库的 ""）。
+    """
+    from memory.narrative import NarrativeBuilder
+
+    # 只种画像行（无任何常规记忆）
+    await _profile_conn.execute(
+        """INSERT INTO memories (id, content, category, created_at, status,
+           last_used_at, access_count, updated_at)
+           VALUES (?, '她最近在赶论文', '小汐眼里的冷冷', '2026-08-11 10:00',
+                   'core', '2026-08-11 10:00', 0, '2026-08-11 10:00')""",
+        (PROFILE_MEMORY_ID,),
+    )
+    await _profile_conn.commit()
+
+    from memory.manager import MemoryManager
+    builder = NarrativeBuilder(MemoryManager(_profile_conn))
+    text = await builder.build(max_items=5)
+
+    assert "## 小汐眼里的冷冷" in text
+    assert "她最近在赶论文" in text
+
+    # 无画像且无记忆 → 空字符串（空库原语义不变）
+    await _profile_conn.execute("DELETE FROM memories")
+    await _profile_conn.commit()
+    assert await builder.build(max_items=5) == ""
