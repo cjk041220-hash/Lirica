@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## 2026-08-11 · 人格深度优化五批收官：重锚 / 画像 / 关系成长 / 情绪文风 / 人格评测
+
+调研与设计：`docs/PERSONA_DEEP_DIVE_2026-08-10.md`（三路研究：GitHub 17+ 项目 / 30+ 篇论文 / 军师卡流派审校）
+实施计划：`docs/superpowers/plans/2026-08-11-persona-deep-optimization.md`
+
+**批① 人格重锚（对抗 persona drift）**
+- `PERSONA_ANCHOR` 蒸馏常量 + `_PersonaAnchorMiddleware`：每 8 次模型调用经注入
+  通道重申人格锚（arXiv:2402.10962 八轮漂移定律 + SillyTavern Author's Note）；
+  锚与 BASE_PERSONA 同源，改人格须同步改锚；启动路径（server.py）与配置重建
+  路径（config.py）均已接线
+- 顺带修复生产回归：记忆叙事注入自 v2.2 迁移起未达模型——langchain 1.3.14
+  `llm_input_messages` 不是 state channel，注入统一改走 `awrap_model_call`
+  （request.override 就地改写、不进 checkpoint）
+
+**批② 动态画像蒸馏（越来越懂冷冷）**
+- 「小汐眼里的冷冷」固定行画像块（`memory/profile.py`）：dreaming-lite 周期蒸馏
+  （近 30 天对话 + 24h 节流，≤500 字；旧版走 superseded 链不删除——Graphiti
+  失效不删除范式）；叙事注入置顶；读面排除不进常规召回
+
+**批③ 关系成长（语气随相处演变）**
+- 「## 你们现在的相处」段：相识天数三档 × 近 7 天互动密度（Knapp 关系模型）；
+  人格恒定、态度可变（Coze 教训）——只加语气层不改人设
+
+**批④ 情绪→文风映射**
+- `mood_style_hint` 映射表（10 心情词）：今日状态段拼「说话的样子」一句
+  （arXiv:2504.14706：情绪显著改变用词/句长/风格）
+
+**批⑤ 访谈式人格评测（回归网）**
+- 剧本式探针 20 组（`tests/test_persona_eval.py`，InCharacter 访谈法）+ 实跑脚本
+  （`scripts/persona_eval/`，:8001 副本 + 规则断言）；2026-08-11 真 key 实跑
+  13/13 行为符合承诺、零真性偏差
+
+**验证**：pytest 全量 872 passed / 1 skip（+27 自 845 基线）；:8001 副本冒烟
+零污染（生产库 sha256 前后一致）——五批每批都过冒烟，最后收尾批次再做一次
+全量 + 零污染。
+
+**过渡说明（伦理红线，Replika 教训）**：本批是「升温而非换人」——人格重锚钉死
+既有自我定位（防漂移而非改人设），画像/关系/文风都是相处层增量（态度可变、
+人格恒定），评测网把行为承诺钉成回归门禁；五批全走提示词/注入层，零模型微调、
+零 schema 侵入性变更（仅 v22 加一个索引，迁移只建索引不碰数据语义）。
+
+**部署**：生产部署：git pull + compose up -d --build，硬刷新 ×2 后生效。
+
 ## 2026-08-11 · 人格深度优化：吃瓜起哄批 + 去说教/错误文案批 + JK 资料库启用
 
 调研与设计：`docs/PERSONA_DEEP_DIVE_2026-08-10.md`（三路研究：GitHub 17+ 项目 / 30+ 篇论文 / 军师卡流派审校）
