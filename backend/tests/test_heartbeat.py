@@ -1232,6 +1232,23 @@ async def test_heartbeat_triggers_global_db_connection(tmp_db, monkeypatch):
     from database import core
 
     core._db = None  # 隔离：本用例前不应有全局连接
+
+    # 蒸馏/整合并入后：真实库路径的 _create_llm 两处均打桩（审查 ⚠️2）——
+    # 本测试只钉「心跳触发全局连接」这一机制，不允许真实 LLM 调用。
+    # consolidate 给无合并提案（"[]"）；蒸馏给空文本（不写画像行，
+    # distill 走 updated=False 优雅降级）
+    class _FakeLLM:
+        def __init__(self, text):
+            self._text = text
+
+        async def ainvoke(self, messages):
+            return type("R", (), {"content": self._text})()
+
+    import memory.consolidate as _mc
+    import memory.profile as _mp
+    monkeypatch.setattr(_mc, "_create_llm", lambda: _FakeLLM("[]"))
+    monkeypatch.setattr(_mp, "_create_llm", lambda: _FakeLLM(""))
+
     now_dt = dt.datetime(2026, 8, 3, 16, 0, tzinfo=hb._HKT)
     await tmp_db.execute(
         "UPDATE life_state SET mood = '满足', mood_changed_at = '2026-08-03 08:00' "
