@@ -190,10 +190,15 @@ async def lifespan(app: FastAPI):
         log.warning("checkpoint: memory (sqlite 不可用: %s，对话重启后丢失)", e)
 
     # 创建 pre_model_hook（记忆注入 + 消息裁剪）
-    # 记忆通过 llm_input_messages 注入，不进入 checkpoint
+    # 实测（批① Task 2 Step 0）：langchain 1.3.14 的 create_agent 中
+    # llm_input_messages 不是 state channel——注入改经 awrap_model_call
+    # 就地改写 request.messages（纯内存、不进 checkpoint，与人格锚同路）
     pre_model_hook = make_pre_model_hook(narrative_builder)
 
-    agent = build_agent(model, tools, system_prompt, checkpointer, pre_model_hook)
+    agent = build_agent(
+        model, tools, system_prompt, checkpointer, pre_model_hook,
+        anchor_interval=8,  # 人格重锚（批①）：每 8 次模型调用重申人格锚，与 config.py 重建路径一致
+    )
     app.state.agent = agent
     app.state.checkpointer = checkpointer
 
