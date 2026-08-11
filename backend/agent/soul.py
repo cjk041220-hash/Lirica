@@ -7,7 +7,9 @@ v4 重构：从"早熟少女"升级为"温暖陪伴者"。
 - 更自然的口语，更像"一个在你身边坐着的人"
 """
 from database.core import get_db
-from heartbeat_moods import mood_style_hint  # 批④：单向无环（heartbeat_moods 只 import stdlib + utils.logger）
+from heartbeat_moods import (
+    mood_style_hint,  # 批④：单向无环（heartbeat_moods 只 import stdlib + utils.logger）
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)

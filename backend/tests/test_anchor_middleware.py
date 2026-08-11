@@ -5,10 +5,11 @@
 累积——单用户设计下这是特性（活跃用户上下文长得快、锚得更勤），不是
 缺陷。
 """
-from agent.graph import _PersonaAnchorMiddleware, _PreModelHookMiddleware
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+from agent.graph import _PersonaAnchorMiddleware, _PreModelHookMiddleware
 
 
 def _make_request(messages, state=None):

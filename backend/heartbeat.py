@@ -706,8 +706,8 @@ async def daily_morning_greeting(app=None):
     离线且 era 已开放 → 独处变体（不问候——问候只在窗口开头出现一次，
     否则冷冷离开三天回来看到三条「早安」）。
     """
-    from era import append_proactive_turn, resolve_proactive_target
     from config.settings import get_settings
+    from era import append_proactive_turn, resolve_proactive_target
 
     log.info("早安问候任务触发")
 
@@ -918,8 +918,8 @@ async def daily_evening_reminder(app=None):
     失败处理：外层整体 try 吞异常——提醒任务宁可静默，不可向调度器
     抛错，更不可在没日程时骚扰。
     """
-    from era import append_proactive_turn, resolve_proactive_target
     from config.settings import get_settings
+    from era import append_proactive_turn, resolve_proactive_target
     from utils import events as events_mgr
 
     try:

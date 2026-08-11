@@ -18,6 +18,7 @@ backend/data/
 
 # 测试产物
 backend/test_output.txt
+backend/out.txt
 backend/.pytest_cache/
 
 # 实跑日志（含会话 sid、绝对路径等运行细节，不入库）

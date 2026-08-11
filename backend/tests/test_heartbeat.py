@@ -1615,7 +1615,7 @@ async def test_morning_greeting_era_solo_variant(tmp_db, monkeypatch):
 async def test_morning_greeting_opener_uses_normal_prompt(tmp_db, monkeypatch):
     """离线开新窗 → 早安作为时间线开场：问候照旧（含天气素材段）。"""
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     import heartbeat as hb
 

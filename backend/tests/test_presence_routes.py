@@ -48,7 +48,6 @@ async def test_presence_reports_online(client, tmp_db):
 
 async def test_presence_leaving_marks_offline(client, tmp_db, monkeypatch):
     """leaving=True：last_seen 回填到超时窗口之前 → 立即判离线。"""
-    from config.settings import get_settings
     s = get_settings()
     monkeypatch.setattr(s, "presence_timeout_minutes", 45)
 

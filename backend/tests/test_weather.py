@@ -262,6 +262,7 @@ async def test_zero_degrees_gets_cold_hint(monkeypatch):
 async def test_weather_http_status_error_no_status_code(monkeypatch):
     """错误文案批（2026-08-11）：HTTPStatusError 不露状态码数字。"""
     import httpx
+
     import tools.weather as weather_module
     from tools.weather import get_weather
 
