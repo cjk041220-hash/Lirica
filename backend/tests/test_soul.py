@@ -668,3 +668,35 @@ async def test_relationship_section_between_days_and_rules(tmp_db):
          patch("utils.events.get_db", return_value=tmp_db):
         prompt = await build_system_prompt()
     assert "## 你们现在的相处" not in prompt
+
+
+# ── 情绪→文风映射（批次④，2026-08-11 计划）────────────────
+
+
+async def test_life_state_includes_style_hint(tmp_db):
+    """life_state 有 mood 时，文风提示拼进「今日状态」段（心情句之后、
+    安抚句之前）；无 mood 时不出现，行为与旧版一致。
+
+    镜像既有 life_state 测试的 mock 结构（tmp_db + patch get_db）。
+    断言用整句（"说话的样子：" 与 BASE_PERSONA 的「## 说话的样子」
+    段字面重合，断单句会被误命中）。"""
+    from unittest.mock import patch
+
+    await tmp_db.execute(
+        "UPDATE life_state SET mood = ?, daily_event = NULL WHERE id = 1",
+        ("开心",),
+    )
+    await tmp_db.commit()
+    with patch("agent.soul.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+
+    assert "说话的样子：今天心情亮，话可以多一点" in prompt
+    # 位置：拼在「今天我的心情：开心。」之后（安抚句之前）
+    assert prompt.index("说话的样子：今天心情亮") > prompt.index("今天我的心情：开心。")
+
+    # 无 mood → 文风句不出现
+    await tmp_db.execute("UPDATE life_state SET mood = NULL WHERE id = 1")
+    await tmp_db.commit()
+    with patch("agent.soul.get_db", return_value=tmp_db):
+        prompt = await build_system_prompt()
+    assert "今天心情亮，话可以多一点" not in prompt

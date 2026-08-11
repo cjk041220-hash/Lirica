@@ -7,6 +7,7 @@ v4 重构：从"早熟少女"升级为"温暖陪伴者"。
 - 更自然的口语，更像"一个在你身边坐着的人"
 """
 from database.core import get_db
+from heartbeat_moods import mood_style_hint  # 批④：单向无环（heartbeat_moods 只 import stdlib + utils.logger）
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -588,6 +589,11 @@ async def build_system_prompt() -> str:
                     lines.append(f"今天我的心情：{mood}。")
                 if daily_event:
                     lines.append(f"今天经历了：{daily_event}。")
+                # 情绪→文风映射（批次④）：此刻心情 → 一句说话的样子。
+                # 只在 mood 已知时拼（未知词 mood_style_hint 返回 None）。
+                style_hint = mood_style_hint(mood)
+                if style_hint:
+                    lines.append(f"说话的样子：{style_hint}")
                 lines.append("这是你此刻真实的心情和经历，是你自己的感受。平时可以自然提到，不必刻意强调；但如果冷冷问起你为什么是这种心情，就照实回答她——可以讲今天经历了什么、在惦记什么，别打太极、别装没事。")
                 life_state_text = "\n".join(lines)
     except Exception as e:
