@@ -5,7 +5,62 @@ test_heartbeat.py（模块自 heartbeat.py 拆出时未迁测试）；本文件�
 brief 新建，承接批次④新增的 mood_style_hint 测试——heartbeat_moods 的
 新功能测试归位到专用测试文件，不再堆回 heartbeat 大文件。
 """
-from heartbeat_moods import mood_style_hint
+import math
+
+from heartbeat_moods import MOOD_VECTORS, TIME_PERIODS, _MOOD_STYLE_HINTS, mood_style_hint
+
+# 批次一 P0-2 新增词（2026-08-12，用户拍板「4 词保底」）——几何/可达性
+# 测试的检查对象。未来再扩词时更新此清单（A/B 实测文风句无方向性影响，
+# 扩词的「细腻表达」动机已证伪，只余「减少重复」价值）。
+_BATCH1_NEW = {"平静", "安心", "轻松", "想念"}
+
+
+def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+
+
+def test_mood_vectors_and_style_hints_keys_aligned():
+    """永久纪律「新心情词双补」的守护：坐标键集 ≡ 文风句键集。
+
+    现状为承诺补实：路线图声称键集一致性有测试，实际 2026-08-11 前
+    不存在——漏坐标的新词会在 _gauss_weights 走兜底权重 1.0（伪均匀，
+    实测每个漏词 ~19.4% 概率成为常客），本测试钉死双补。
+    """
+    assert set(MOOD_VECTORS) == set(_MOOD_STYLE_HINTS)
+    assert len(MOOD_VECTORS) >= 14  # 防误删：10 原词 + 批次一 4 新词
+
+
+def test_batch1_new_moods_not_semantic_redundant():
+    """新增词与全表最小距离 ≥0.22（防语义冗余：<0.2 的词对高斯采样
+    权重几乎重叠，等于同一情绪）。原 10 词之间的近距离（好奇↔活泼
+    0.14）是既有设计，不在本测试检查域。"""
+    for new in _BATCH1_NEW:
+        for old, coord in MOOD_VECTORS.items():
+            if old != new:
+                assert _dist(MOOD_VECTORS[new], coord) >= 0.22, (
+                    f"{new} ↔ {old} 距离 <0.22，语义冗余"
+                )
+
+
+def test_new_moods_reachable_in_their_periods():
+    """新增词在其出现的每个时段池内都有 ≤0.65 近邻（防死词）。
+
+    _choose_mood 从 period["moods"] 高斯采样（σ=0.25）——距离 0.65 时
+    权重 exp(-0.65²/0.125)≈0.034，仍可被事件信号推近后采到；超阈值 =
+    除非目标点恰好落该词坐标附近否则永不采到。原 10 词例外：担心靠
+    care 事件信号驱动（夜晚池最近 0.85 是信号路径非几何路径），豁免。
+    """
+    for period_cfg in TIME_PERIODS.values():
+        for mood in period_cfg["moods"]:
+            if mood not in _BATCH1_NEW:
+                continue
+            nearest = min(
+                _dist(MOOD_VECTORS[mood], MOOD_VECTORS[other])
+                for other in period_cfg["moods"] if other != mood
+            )
+            assert nearest <= 0.65, (
+                f"{mood} 在时段池最近 {nearest:.2f} > 0.65，死词（采不到）"
+            )
 
 
 def test_mood_style_hint_known_moods():

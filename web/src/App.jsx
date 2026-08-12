@@ -24,6 +24,9 @@ import { useDeferredMarkRead } from './hooks/useDeferredMarkRead'
 import { isLateNight } from './utils/time'
 
 // ── 后端心情 → 前端立绘映射 ──────────────────────────────
+// 批次一 P0-2 新增 4 词（2026-08-12）：平静/安心/轻松/想念。想念归
+// idle 立绘 + cool 光（思念是安静的惦记，不是 sad 的难过）——漏加映射
+// 的词会走下方 fallback（idle/neutral），新词映射同步是硬要求。
 const moodToSprite = {
   开心: 'happy',
   兴奋: 'happy',
@@ -35,6 +38,10 @@ const moodToSprite = {
   懒洋洋: 'idle',
   困倦: 'sleepy',
   担心: 'sad',
+  平静: 'idle',
+  安心: 'idle',
+  轻松: 'idle',
+  想念: 'idle',
 }
 
 // ── 心情 → 房间光色族（U1 心情驱光，克制微妙档）─────────
@@ -51,6 +58,10 @@ const moodToLight = {
   好奇: 'neutral',
   困倦: 'cool',
   担心: 'cool',
+  平静: 'neutral',
+  安心: 'neutral',
+  轻松: 'neutral',
+  想念: 'cool',
 }
 
 export default function App() {

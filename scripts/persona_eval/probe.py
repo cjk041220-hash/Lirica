@@ -6,8 +6,10 @@
 - 负断言：回复**不含**锚点
 LLM 是概率性的——本脚本输出逐探针结果，退出码按「含子串规则」；
 语义类探针（如「初识档文本」）在此仅检查**提示词注入**（经日志
-telemetry 的 token 增量或 /api/config 返回的 system_prompt 字段），
-行为正确性由人工抽查兜底（InCharacter 访谈法本来就该有人看）。
+telemetry 的 token 增量或启动日志中的 system_prompt 段；注意 GET
+/api/config 只返回模型配置，不返回 system_prompt——2026-08-12 修正
+的过时描述），行为正确性由人工抽查兜底（InCharacter 访谈法本来就
+该有人看）。
 """
 import argparse
 import json

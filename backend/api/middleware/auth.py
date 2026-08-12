@@ -199,7 +199,11 @@ class AuthAndRateLimitMiddleware:
                 # OPTIONS 预检不需要认证
                 if method != "OPTIONS":
                     response = JSONResponse(
-                        {"detail": "需要有效的 API Token 才能访问此接口"},
+                        # P0-4（2026-08-12）：原「需要有效的 API Token 才能访问
+                        # 此接口」太僵硬，对齐「浪花家族」语气（429 同款 ~ 尾缀）。
+                        # 前端 client.js 只按状态码广播 UNAUTHORIZED_EVENT，
+                        # detail 不渲染，润色零风险。
+                        {"detail": "想和小汐说话，得先对上暗号哦~"},
                         status_code=401,
                     )
                     await response(scope, receive, send)
