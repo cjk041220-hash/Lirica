@@ -106,39 +106,47 @@ docker compose up -d
 
 ```
 小汐sonetto/
-├── start.bat                       # Windows 一键启动
+├── start.bat / start.sh            # 一键启动（Windows / macOS+Linux）
 ├── Dockerfile                      # Docker 构建（多阶段）
 ├── docker-compose.yml              # Docker Compose 编排
-├── docs/                           # 文档
-│   ├── PROJECT_SOURCE.md           # 完整技术文档（冻结于 v0.4.2，历史参考）
-│   ├── PRODUCT_REPORT_2026-08-02.md  # 产品报告（最新一轮）
-│   ├── MEMORY_GAPS_2026-08-03.md   # 记忆库诊断记录（schema v17/v18 落地回执）
-│   ├── MEMORY_ARCHITECTURE_REVIEW_2026-08-01.md  # 记忆架构评审（P0/P1 已落地）
-│   ├── CHECKUP_2026-07-31.md       # 第三轮体检（生理期闭环 + 记忆改造）
-│   ├── CHECKUP_2026-07-29.md       # 多维度全面体检报告（诊断 + 治疗回执）
-│   ├── CHECKUP_2026-07-29_round2.md  # 第二轮复查（5 视角独立取证，治疗 9/9 属实）
-│   ├── PRODUCT_REPORT_2026-07-27.md  # 产品报告
-│   ├── PRODUCT_REPORT_2026-07-26.md  # 产品报告（3 轮测试 + 5 路审查 + 修复方案）
-│   ├── PRODUCT_AUDIT_2026-07-25.md  # 全项目代码审计报告
-│   ├── RETROSPECTIVE_2026-07-27.md  # 复盘
-│   ├── CHANGELOG.md                # 变更摘要
-│   ├── PROMPT_GUIDE.md             # 提示词指南
+├── docs/                           # 文档（历史体检/审计报告已归档至 git 历史，见提交 c00fb11）
+│   ├── CHANGELOG.md                # 变更摘要（按批次倒序）
+│   ├── OPTIMIZATION_ROADMAP_2026-08-12.md  # 优化路线图（核验结论/永久纪律/P0-P3 批次）
+│   ├── PERSONA_DEEP_DIVE_2026-08-10.md  # 人格深度优化调研与实施规划
+│   ├── PROMPT_GUIDE.md             # 人格 Prompt 修改指南（含人格锚同步纪律）
 │   ├── PRIVACY.md                  # 数据与隐私说明
-│   ├── checkup-2026-07-29/         # 体检截图
-│   └── superpowers/                # specs/ 设计文档（日历 + 地图双引擎）+ plans/ 实施计划
+│   ├── PRODUCT_REPORT_2026-08-02.md  # 产品报告
+│   └── SERVER_ADMIN.md             # 服务器管理手册（域名/部署/备份/密钥轮换）
+│
+├── .superpowers/                   # SDD 工作流产物（批次 brief/report/HANDOFF/A-B 数据）
+│
+├── deploy/                         # 生产部署配置
+│   ├── Caddyfile.example           # Caddy 反代（禁 gzip 保 SSE + HSTS）
+│   ├── nginx.example.conf          # Nginx 反代（proxy_buffering off + XFF）
+│   └── README.md                   # 部署手册（含密钥轮换与备份策略）
 │
 ├── scripts/                        # 辅助脚本（一次性资源工具已归档 attic/）
 │   ├── cleanup_test_residue.py     # 清理测试残留数据
 │   ├── verify_tools.py             # 工具联通性实测
-│   └── e2e/
-│       ├── ui_test.cjs             # 浏览器级交互验证（headless Edge，29 交互点含日历剧本）
-│       ├── gps_test.cjs            # GPS 端到端实测（坐标注入 + 上传断言）
-│       └── pink_verify.cjs         # 粉色主题体检（面板扫掠/字体加载/reduced-motion）
+│   ├── check_sw_version.py         # Service Worker 版本核对
+│   ├── cloud_backup_server.sh      # 云端备份
+│   ├── upload_data_to_server.sh    # 数据上传
+│   ├── e2e/
+│   │   ├── ui_test.cjs             # 浏览器级交互验证（headless Edge）
+│   │   ├── gps_test.cjs            # GPS 端到端实测
+│   │   ├── pink_verify.cjs         # 粉色主题体检
+│   │   └── features_check.cjs      # 特性检查
+│   └── persona_eval/               # 人格探针实跑层（:8001 副本真 key 对话）
+│       ├── probe.py                # 剧本探针 + 回复级负断言
+│       ├── ab_mood_style.{py,sh}   # mood 文风 A/B 双副本盲测
+│       └── run_persona_eval.sh     # 一键探针回归
 │
 ├── backend/
-│   ├── main.py                     # 启动入口（uvicorn）
+│   ├── main.py                     # 启动入口（uvicorn，单 worker）
 │   ├── version.py                  # 版本号（唯一定义处）
-│   ├── heartbeat.py                # 心跳调度器（每 2h 更新生命状态+刷新 Agent+定期维护）
+│   ├── heartbeat.py                # 心跳调度器（2h 生命状态 + 主动消息 + 维护链 + 早安/前夜提醒/日记）
+│   ├── heartbeat_moods.py          # 情绪气候（Russell 情绪空间 + 五信号 + 高斯采样，纯逻辑）
+│   ├── era.py                      # era 独处时间线（presence 路由 + 三写一推）
 │   ├── pytest.ini                  # 测试配置
 │   ├── requirements.txt            # Python 依赖（生产，不含测试工具）
 │   ├── requirements-dev.txt        # 开发依赖（= requirements.txt + pytest）
@@ -149,27 +157,33 @@ docker compose up -d
 │   │   └── .env.example            # 配置模板
 │   │
 │   ├── database/
-│   │   ├── core.py                 # 数据库连接管理 + checkpoint 裁剪 + 自动备份
-│   │   └── migrations.py           # 轻量级 schema 迁移框架
+│   │   ├── core.py                 # 数据库连接管理 + checkpoint 裁剪 + 自动备份（含脱敏选项）
+│   │   └── migrations.py           # 轻量级 schema 迁移框架（v1→v22）
 │   │
 │   ├── api/
 │   │   ├── server.py               # FastAPI 应用工厂 + 生命周期管理
 │   │   ├── middleware/
 │   │   │   ├── auth.py             # 认证 + IP 限流中间件
+│   │   │   ├── body_limit.py       # 请求体 1MiB 上限
+│   │   │   ├── request_id.py       # X-Request-Id + 未捕获异常兜底
+│   │   │   ├── security_headers.py # 安全响应头（纯 ASGI，不缓冲 SSE）
 │   │   │   └── websocket_reject.py # WebSocket 拒绝中间件
 │   │   └── routes/
-│   │       ├── chat.py             # 对话路由（REST + SSE 流式 + 断开检测）+ 记忆管理
-│   │       ├── config.py           # 配置路由（模型/思考强度切换）
+│   │       ├── chat.py             # 对话路由（REST + SSE 流式 + 断开看门狗）+ 记忆管理
+│   │       ├── config.py           # 配置路由（模型/思考强度切换，原子重建+回滚）
+│   │       ├── events.py           # 日历路由（CRUD + 墓碑软删）
+│   │       ├── presence.py         # 在线上报（era 离线判定信号源）
 │   │       ├── push.py             # 推送路由（VAPID 公钥/订阅/未读主动消息）
 │   │       ├── sessions.py         # 对话档案路由（历史列表/回看/删除）
 │   │       └── status.py           # 状态路由（/api/status 生命状态 + /api/diaries 日记列表）
 │   │
 │   ├── agent/
-│   │   ├── graph.py                # LangGraph ReAct Agent 构建
-│   │   └── soul.py                 # 系统提示词组装（人格 + 生命状态，不含记忆叙事）
+│   │   ├── graph.py                # Agent 图（create_agent + 三中间件：工具兜底/记忆注入/人格锚）
+│   │   ├── soul.py                 # 系统提示词组装（人格/档案/关系成长/事件/铁律/示例）
+│   │   └── care.py                 # 异常感知关心（深夜/考试熬夜/回归 + 冷却台账）
 │   │
 │   ├── providers/
-│   │   └── deepseek.py             # DeepSeek V4 Flash/Pro 接入
+│   │   └── deepseek.py             # DeepSeek V4 Flash/Pro 工厂（元数据/回退/max_tokens 钳制）
 │   │
 │   ├── tools/                      # 23 个工具
 │   │   ├── weather.py              # 天气（Open-Meteo + 高德回退）
@@ -183,8 +197,11 @@ docker compose up -d
 │   │   └── tarot_deck.yaml         # 塔罗牌数据（牌义文案）
 │   │
 │   ├── memory/
-│   │   ├── manager.py              # 记忆管理器（SQLite, async CRUD）
-│   │   ├── narrative.py            # 叙事构建器（记忆 → 提示词注入）
+│   │   ├── manager.py              # 记忆管理器（六因子召回 + superseded 链 + 分层衰减）
+│   │   ├── narrative.py            # 叙事构建器（画像优先 + hybrid 检索注入）
+│   │   ├── extract.py              # 后台记忆提取（水位线 + 死信 + 健康检查）
+│   │   ├── consolidate.py          # dreaming-lite 周期整合（近义合并 + 24h 节流）
+│   │   ├── profile.py              # 动态画像蒸馏（「小汐眼里的冷冷」≤500 字）
 │   │   ├── chat_archive.py         # 对话档案（会话/消息持久化，永不回喂 LLM）
 │   │   └── location_store.py       # GPS 坐标会话级缓存
 │   │
@@ -192,40 +209,21 @@ docker compose up -d
 │   │   ├── logger.py               # GBK 安全的结构化日志
 │   │   ├── retry.py                # 异步重试装饰器（指数退避）
 │   │   ├── errors.py               # 错误脱敏（防 API Key 随异常文本泄漏）
-│   │   ├── events.py               # 事件管理器（登记/归档/提示词注入/检测器）
+│   │   ├── events.py               # 事件管理器（登记/归档/提示词注入/五类检测器）
 │   │   ├── cycle_tracker.py        # 生理期追踪器
 │   │   ├── web_push.py             # Web Push 发送器（VAPID 签名）
 │   │   ├── security.py             # 启动安全加固检查（fail closed）
-│   │   └── timezone.py             # 时区纪律（统一 HKT/UTC+8）
+│   │   ├── timezone.py             # 时区纪律（统一 HKT/UTC+8）
+│   │   ├── time_words.py           # 相对时间词→绝对日期归一化
+│   │   ├── geo.py                  # 坐标转换（WGS-84↔GCJ-02）
+│   │   ├── tokens.py               # token 计数（cl100k 近似）
+│   │   └── token_budget.py         # 本地 token 预算告警
 │   │
-│   ├── tests/                      # 测试套件（逐文件计数不在此维护，以 pytest --collect-only 为准）
-│   │   ├── conftest.py             # 共享 fixtures
-│   │   ├── test_auth_middleware.py # 认证 + IP 限流中间件
-│   │   ├── test_backup_permissions.py  # 备份权限收紧
-│   │   ├── test_chat_archive.py    # 对话档案（CRUD/边界/韧性/LLM 隔离自检）
-│   │   ├── test_checkpoint_prune.py    # Checkpoint 裁剪 + 僵尸 thread 清理
-│   │   ├── test_config_routes.py   # 运行时配置（默认值/思考强度/统一重建）
-│   │   ├── test_cycle_tracker.py   # 生理期追踪器
-│   │   ├── test_diary.py           # 日记工具（写入/去重/读取）
-│   │   ├── test_errors.py          # 错误脱敏（防 Key 泄漏回归）
-│   │   ├── test_event_tools.py     # 事件工具层（create_event/list_events）
-│   │   ├── test_events.py          # 事件管理器（登记/去重/归档/检测器）
-│   │   ├── test_heartbeat.py       # 心跳时段匹配
-│   │   ├── test_init_db_upgrade.py # 旧版数据库升级路径
-│   │   ├── test_integration.py     # 端到端集成测试
-│   │   ├── test_memory_manager.py  # 记忆管理器（CRUD/去重/相关性排序）
-│   │   ├── test_memory_tools.py    # 记忆工具层（remember/recall）
-│   │   ├── test_migrations.py      # 数据库迁移
-│   │   ├── test_narrative.py       # 叙事构建器
-│   │   ├── test_pre_model_hook.py  # 记忆注入 + 消息裁剪
-│   │   ├── test_proactive.py       # 主动消息系统
-│   │   ├── test_push_routes.py     # 推送路由
-│   │   ├── test_security.py        # 启动安全加固（fail closed）
-│   │   ├── test_soul.py            # 系统提示词组装
-│   │   ├── test_status_routes.py   # 状态路由（/api/status + /api/diaries）
-│   │   ├── test_tarot.py           # 塔罗工具（占卜 + 数据损坏降级）
-│   │   ├── test_weather.py         # 天气工具（坐标解析/WMO 码映射）
-│   │   └── test_web_push.py        # Web Push 发送器
+│   ├── tests/                      # 测试套件（74 文件 897 用例，以 pytest --collect-only 为准）
+│   │   ├── conftest.py             # 共享 fixtures（与生产共享 DDL 常量）
+│   │   ├── test_migrations_v9.py … test_migrations_v22.py  # 迁移逐版本独立测试
+│   │   ├── test_persona_eval.py    # 访谈式人格探针（锚点一致性元测试）
+│   │   └── …                       # 其余按模块一一对应（auth/care/era/heartbeat/memory/…）
 │   │
 │   └── data/                       # 运行时数据（不入 git）
 │       ├── userdata.db             # 业务数据库
@@ -234,8 +232,9 @@ docker compose up -d
 │
 └── web/                            # 前端（Vite 8 + React 19 + Tailwind v4，PWA）
     ├── src/
-    │   ├── components/             # RoomScene / CharacterSprite / ChatPanel / ConfigPanel / MemoriesPanel …
-    │   ├── hooks/                  # useChat（SSE 流式）/ useConfig / usePush
+    │   ├── components/             # CharacterSprite/SkyBackground/ChatPanel/四个面板/TarotCards …
+    │   ├── hooks/                  # useChat（SSE 流式）/ usePush / usePresence / useConfig / useStatus …
+    │   ├── api/                    # client（统一请求层）/ events / location
     │   └── assets/icons/           # 内联 SVG 图标组件
     ├── public/
     │   ├── sprites/                # 10 张角色立绘（WebP，含 halfawake 深夜状态；PNG→WebP 约 23MB→2MB）
@@ -261,7 +260,7 @@ docker compose up -d
 | 前端 | Vite 8 + React 19 + Tailwind CSS v4（PWA，Web Push） |
 | 动画 | CSS / Tailwind 自定义动画（呼吸 / 淡入 / 星空 / 浮云） |
 | 容器化 | Docker 多阶段构建 |
-| 测试 | pytest + pytest-asyncio（670+ 测试，以 `pytest --collect-only` 为准）+ 浏览器 E2E（ui_test 29 交互点） |
+| 测试 | pytest + pytest-asyncio（897 用例，以 `pytest --collect-only` 为准）+ 前端 vitest 58 用例 + 浏览器 E2E（ui_test 29 交互点） |
 
 ## 核心能力
 

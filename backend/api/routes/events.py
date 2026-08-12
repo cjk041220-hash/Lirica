@@ -18,8 +18,10 @@
 写操作后显式刷新缓存的系统提示词（与心跳同入口 rebuild_agent_for_app），
 否则小汐对日程的看法要滞留到下一次心跳（最长 ~2h）。
 
-方法注记：更新用 POST 而非 PATCH——CORS allow_methods 仅 GET/POST/DELETE
-（server.py），浏览器预检会拒 PATCH。
+方法注记：事件更新用 POST 而非 PATCH——与记忆编辑（PATCH）不同，
+事件路由沿用 POST 语义；server.py 的 CORS allow_methods 已含
+GET/POST/DELETE/PATCH（2026-08-13 审计修正：此处曾注明"仅
+GET/POST/DELETE"系过时注释，PATCH 早已因记忆编辑入列）。
 """
 import re
 

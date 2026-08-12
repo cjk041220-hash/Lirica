@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## 2026-08-13 · 审计批次：外部评估报告核实 + 前端测试补课
+
+背景：桌面报告《小汐sonetto人格化还原度与架构评估报告》（8.2/10）外部
+核实。审计结论：报告数字与结论属实（897 pytest / 58 vitest / ruff 0
+全部实跑复核），报告一处技术性错误（后端是 FastAPI + Python 3.12，
+非「aiohttp + 3.13」）。另发现四处报告未覆盖的问题，本批修复其中三处：
+
+**P1-1 README 死链清单修复**（审计发现：文档漂移最严重处）
+- README.md「项目结构」段列了 18 个 docs 文件，实际只有 7 个（c00fb11
+  清理归档后未同步）——新读者按图索骥全部扑空
+- 重写为真实目录：docs 7 文件、.superpowers/ SDD 产物、deploy/、
+  scripts/persona_eval/、backend 全模块（含 care/era/heartbeat_moods/
+  extract/consolidate/profile 等新文件）、tests 74 文件说明
+- 技术栈表「670+ 测试」→「897 用例 + vitest 58」对齐现状
+
+**P1-2 useChat 流式读取无字节超时兜底**（审计发现：代理掐断不发 FIN 时
+reader.read() 永久挂起，前端无自愈——client.js 15s 超时明确排除流式）
+- `STREAM_READ_TIMEOUT = 45s`：后端 ping 每 20s 一发，正常流无字节窗口
+  < 20s + 抖动，45s 留足裕度且远小于后端 300s 总闸
+- `Promise.race([reader.read(), armIdleTimer()])`：超时按早断语义跳出，
+  走既有「连接中断了，小汐的话没说完……」文案，立绘/气泡不再永久卡
+  streaming；ping 到达 reader 一并重置计时（与后端总闸语义对齐）
+- 新增 2 测试：45s 静默 → 早断文案；20s 间隔 ping 累计 60s 不误杀
+
+**P1-3 usePush 推送全链路回归网**（审计发现：推送是 CHANGELOG 三次强调
+「最容易静默断掉」的链路，却零单测——最大覆盖盲区）
+- 新建 `usePush.test.js` 16 用例：挂载恢复订阅 / checkUnread 引用
+  bail-out / 网络失败静默 / markRead 乐观更新+失败回传 / 订阅成功
+  全链路（vapid→subscribe→POST）/ 权限 denied 零触网 / VAPID 未配
+  显性文案 / 后端拒绝时本地清理 / NotAllowedError→permissionDenied /
+  Notification undefined（iOS<16.4 半支持）零触网 / SW ready 永久
+  pending 10s 超时显性文案 / 取消订阅 query 优先 / 60s 轮询 +
+  visibilitychange / PUSH_MESSAGE 事件触发重拉
+- 测试基建：按 URL 路由的 apiFetch mock（挂载首拉与用例内 subscribe
+  各消费各的路由，Once 队列会被首调吃掉）+ SW/PushManager/Notification
+  环境桩 + fake timers
+
+**P1-4 过时注释修正**（审计发现：代码正确、注释陈旧）
+- `api/routes/events.py` docstring「CORS allow_methods 仅 GET/POST/DELETE」
+  → 实际已含 PATCH（记忆编辑入列），修正并留审计日期注记
+
+**未修复（留观，记录在案）**：Dockerfile 直接 docker run 无 healthcheck
+（compose 有）；checkpoints.db 不在应用内备份范围（deploy README 已明示）；
+周期预测无离群排除（cycle_tracker 均值受单次极端间隔拉偏）；era as_node
+节点名归因是 langchain 版本脆弱点（升级时需重验）。
+
+**验证**：pytest **897 passed / 1 skip**（零后端改动，回归确认）；
+vitest **76 passed**（58+18 新）；oxlint 0；vite build 通过。
+
 ## 2026-08-13 · 批次二顺带：P2-6 provider 抽象层 + P1-2 只读 diff
 
 **P2-6 provider 抽象层**（评估报告 P2-3 铺路）

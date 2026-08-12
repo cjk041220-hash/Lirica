@@ -50,6 +50,13 @@ const getSessionId = () => {
   }
 }
 
+// SSE 读取无字节超时（审计 P1-2）：后端 ping 每 20s 一发（chat.py
+// _SSE_PING_INTERVAL），正常流的最长无字节窗口 < 20s + 网络抖动；
+// 45s 留足裕度，同时远小于后端 300s 空闲总闸——代理层掐断连接但
+// 未发 FIN 时（reader.read() 永久挂起的已知尾部风险），前端在 45s
+// 内自愈为「连接中断」文案，而不是立绘/气泡永久卡 streaming
+const STREAM_READ_TIMEOUT = 45_000
+
 // 工具调用 → 友好的状态提示文案（按后端工具名前缀匹配）
 const toolHints = [
   { match: /weather/i, text: '小汐去看了看天气……' },
@@ -500,11 +507,28 @@ export function useChat() {
         setCharacterState('talking')
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
+        // 无字节超时兜底（审计 P1-2）：每个数据块收到后重置计时。
+        // 后端 ping（: ping 注释行）不进 feed，但会到达 reader——
+        // 一并重置，与后端「ping 保活、真实静默才止损」的总闸语义对齐。
+        // 流式读取明确排除 client.js 的 15s 请求超时，此处是它的补位。
+        let idleTimer = null
+        const armIdleTimer = () =>
+          new Promise((resolve) => {
+            clearTimeout(idleTimer)
+            idleTimer = setTimeout(resolve, STREAM_READ_TIMEOUT)
+          })
         while (!streamDone) {
-          const { done, value } = await reader.read()
+          const readResult = await Promise.race([reader.read(), armIdleTimer()])
+          if (readResult === undefined) {
+            // 45s 无字节：按早断语义跳出，走下方「连接中断」文案
+            console.warn('[useChat] stream read timed out, treating as early break')
+            break
+          }
+          const { done, value } = readResult
           if (done) break
           feed(decoder.decode(value, { stream: true }))
         }
+        clearTimeout(idleTimer)
       }
       // 当流因异常断开（非 [DONE] 收尾）时，buffer 里可能残留最后一条
       // 完整的 data: 行（末尾缺换行符）。直接丢弃会导致该 chunk 的文本
@@ -523,9 +547,9 @@ export function useChat() {
         }
       }
       // 早断检测：流读完（done）却没收到 [DONE]、也没有 error 事件——
-      // 连接被中途切断（后端重启/代理掐断）。半截回复不能算聊成功，
-      // 且必须让用户知道话没说完，否则违背「只有流正常读完才算成功」
-      // 的 invariant（立绘还会对半句话演 6 秒开心）
+      // 连接被中途切断（后端重启/代理掐断/读取超时兜底）。半截回复不能
+      // 算聊成功，且必须让用户知道话没说完，否则违背「只有流正常读完
+      // 才算成功」的 invariant（立绘还会对半句话演 6 秒开心）
       if (!streamDone && !streamError) {
         streamError = true
         flush() // 先提交已到内容，再拼中断文案

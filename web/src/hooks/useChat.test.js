@@ -287,3 +287,83 @@ describe('useChat SSE 批量刷新（P1-14）', () => {
     expect(hint.output).toBeTruthy()
   })
 })
+
+describe('useChat 读取超时兜底（审计 P1-2）', () => {
+  beforeEach(() => {
+    gps.resolve = null
+    localStorage.clear()
+  })
+
+  it('读流 45s 无字节 → 按早断处理，附「连接中断」文案（代理掐断不发 FIN）', async () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => {
+      sendPromise = result.current.sendMessage('hi')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
+    await act(async () => {
+      s.emit('data: {"content":"半句"}\n')
+    })
+
+    // 此后流永久静默（reader.read() 永不 resolve）：
+    // 推进 45s 触发无字节兜底，而不是永久卡 streaming
+    await act(async () => {
+      vi.advanceTimersByTime(45_000)
+    })
+    await act(async () => {
+      await sendPromise
+    })
+
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
+    expect(assistant.content).toContain('半句')
+    expect(assistant.content).toContain('连接中断')
+    expect(assistant.streaming).toBe(false)
+    expect(result.current.isStreaming).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('后端 ping 心跳到达 → 重置超时计时，不误杀（45s 内持续有字节）', async () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useChat())
+    await act(async () => {})
+
+    const s = controllableStream()
+    apiFetchMock.mockResolvedValueOnce({ ok: true, status: 200, body: s.stream })
+    let sendPromise
+    act(() => {
+      sendPromise = result.current.sendMessage('hi')
+    })
+    await act(async () => {
+      gps.resolve(null)
+    })
+
+    // 模拟慢流：每 20s 来一个 ping（后端 _SSE_PING_INTERVAL 同款节奏），
+    // 累计远超 45s 也不该触发无字节兜底——ping 不进 feed，但到达 reader
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(20_000)
+        s.emit(': ping\n')
+      })
+    }
+    await act(async () => {
+      s.emit('data: {"content":"来了"}\n')
+      s.emit('data: [DONE]\n')
+      s.close()
+    })
+    await act(async () => {
+      await sendPromise
+    })
+
+    const assistant = result.current.messages.find((m) => m.role === 'assistant')
+    expect(assistant.content).toBe('来了')
+    expect(assistant.content).not.toContain('连接中断')
+    vi.useRealTimers()
+  })
+})
