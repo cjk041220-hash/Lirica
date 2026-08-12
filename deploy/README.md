@@ -28,7 +28,8 @@ docker compose logs -f xiaoxi     # 首次启动看入口打印的 token
 ## 4. 验证
 - `curl -I https://你的域名` → 见有效证书 + `Strict-Transport-Security`。
 - 浏览器打开能正常聊天；`/api/health` 返回 ok。
-- **SW 版本过渡人工复核**（现 v7，CACHE_NAME 见 web/public/sw.js）：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
+- **SW 版本过渡人工复核**（现 v8，CACHE_NAME 见 web/public/sw.js）：改一张立绘重新部署后，硬刷新页面两次，确认老缓存被 stale-while-revalidate 更新到位（此过渡难以全自动覆盖）。
+- **改 sw.js 本身必跑发版检查**：`python scripts/check_sw_version.py`（改了缓存策略/预缓存清单/推送逻辑但忘了 bump CACHE_NAME 会报错；旧缓存不退役、新策略不生效，漏 bump 不报错只静默潜伏）。
 
 ## 5. 数据与备份
 - 数据在 named volume `xiaoxi-data`（即 `userdata.db` + `checkpoints.db`）。可 `docker compose down` 不丢数据；要导出：`docker cp xiaoxi:/app/backend/data ./backup`。

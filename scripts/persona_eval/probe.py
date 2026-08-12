@@ -3,7 +3,8 @@
 用法：python scripts/persona_eval/probe.py --base http://127.0.0.1:8001 --token <token>
 每个探针 = 一场单轮对话（剧本第一句作 user 消息），断言：
 - 正断言：回复**包含**锚点（或子串，锚点取最短可判定的片段）
-- 负断言：回复**不含**锚点
+- 负断言：回复**不含**锚点；另有 REPLY_NEGATIVES（P2-2）——回复级负断言，
+  承载单元层因「禁令句含被禁词」而留空的违规检测（劝选/喊停仍追问/减肥说教）
 LLM 是概率性的——本脚本输出逐探针结果，退出码按「含子串规则」；
 语义类探针（如「初识档文本」）在此仅检查**提示词注入**（经日志
 telemetry 的 token 增量或启动日志中的 system_prompt 段；注意 GET
@@ -20,7 +21,7 @@ import urllib.request
 
 sys.path.insert(0, "backend")  # 探针 import agent.soul / heartbeat_moods 需要
 sys.path.insert(0, "backend/tests")
-from test_persona_eval import PROBES  # noqa: E402  （单一来源探针）
+from test_persona_eval import PROBES, REPLY_NEGATIVES  # noqa: E402  （单一来源探针 + 回复级负断言）
 
 # 聊天限流桶 10 次/分钟（auth.py _RATE_LIMITS，LLM 成本防线）：逐探针
 # 间隔 ≥7s 保 8 次/分钟余量；429 时按 Retry-After 退避重试一次
@@ -83,6 +84,9 @@ def main() -> int:
         reply = chat(args.base, args.token, script)
         bad = [a for a in positives if a not in reply]
         bad += [a for a in negatives if a in reply]
+        # 回复级负断言（P2-2）：单元层负断言因「禁令句含被禁词」留空，但回复
+        # 里出现这些子串即真违规（劝选/喊停仍追问/减肥说教），命中即问题。
+        bad += [a for a in REPLY_NEGATIVES.get(name, []) if a in reply]
         if bad:
             fails.append((name, bad, reply))
             # 回复展示（截断）供人工判断：逐字锚点对自然回复天然难命中，

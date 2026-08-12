@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## 2026-08-12 · 批次三：P2 工程债（TOKEN 预算告警 / 探针负断言 / CI 死配置 / 文档漂移）
+
+观察期空档清工程债（路线图批次三；零模型风险、不碰人格层、不污染观察基线）。
+
+**P2-1 TOKEN_COST_WARNING 账单告警落地**（SERVER_ADMIN §10/§11 此前三处点名零实现）
+- settings 加 `token_cost_warning`（近似输入 token/日阈值，0=关闭）+ 新模块
+  `utils/token_budget.py`：cl100k 近似累计（对 DeepSeek 偏高估 1.3–2×=预算监控要的
+  安全余量）、HKT 日归零、越阈值按倍数递增 WARNING、进程内累计重启清零
+- graph.py 遥测块放宽接线：DEBUG **或** 预算开启才跑 count_tokens，默认全关零成本
+  （保留 B8 省 CPU 守卫语义）；只累计 chat agent 输入（成本大头，含工具循环），
+  后台任务（主动消息/提取/蒸馏/日记）量小有界，本版不累计
+- 取舍：不复读 DeepSeek usage_metadata（streaming 要另开 stream_usage + agent/直连
+  两条调用链都要接），沿用现有近似计数；折算花费对照控制台单价，代码不写死价格
+
+**P2-2 探针实跑层回复级负断言补强**
+- test_persona_eval.py 加 `REPLY_NEGATIVES`：回复级负断言单独承载（不进
+  PROBES.negatives——禁令句含被禁词，会被单元层「规则文本不含」检查误杀），
+  覆盖 吃瓜劝选（你该选/你还是选）/ 不适即收（他是不是/他为什么/他怎么还）/
+  减肥拒答（你应该/你需要/少吃/多运动）3 场景高精准违规子串——命中即真违规
+- 新增「减肥拒答」探针（正断言=示例锚点，实跑靠回复级负断言+人工兜底）；
+  probe.py 接线 `.get(name, [])`；卫生测试钉键集，防场景名拼写漂移致静默漏检
+
+**P2-3 CI 死配置删除**：`.github/workflows/ci.yml` 在 Gitee 不跑（GitHub Actions
+不触发），用户拍板删除；check_sw_version.py 发版检查保留，改写为 deploy/README
+§4 的手动发版步骤（改 sw.js 必跑）。
+
+**P2-4/P2-5 文档漂移修正**：deploy/README §4「现 v7」→v8（sw.js 实 v8）；
+CHANGELOG 五批收官验证数 872→875（3 例差额 = 收尾批次迁移 v22 的
+test_migrations_v22.py）。
+
+**验证**：pytest **886 passed / 1 skip**（878 + 7 预算 + 1 卫生）；前端 lint 0 /
+vitest 58 / build ✓；生产库双 db mtime 未动、sha 零污染；api.server 导入健康；
+check_sw_version 通过。无迁移、无人格层改动。
+
 ## 2026-08-12 · 批次一：P0-1 A/B 实测 / P0-2 词表+事件池 / P0-4 文案
 
 **P0-1 A/B 验证 mood→文风映射遵循度（结论：文风句影响低于可测门槛）**
@@ -90,7 +124,8 @@
   （`scripts/persona_eval/`，:8001 副本 + 规则断言）；2026-08-11 真 key 实跑
   13/13 行为符合承诺、零真性偏差
 
-**验证**：pytest 全量 872 passed / 1 skip（+27 自 845 基线）；:8001 副本冒烟
+**验证**：pytest 全量 **875 passed / 1 skip**（+30 自 845 基线：五批 +27、收尾批次迁移
+v22 测试 +3 = `test_migrations_v22.py`）；:8001 副本冒烟
 零污染（生产库 sha256 前后一致）——五批每批都过冒烟，最后收尾批次再做一次
 全量 + 零污染。
 

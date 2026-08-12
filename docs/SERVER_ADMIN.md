@@ -145,11 +145,9 @@ docker compose up -d
 | 流式回复整段到达 | 反代缓冲:Caddy 默认无碍;换 Nginx 要 `proxy_buffering off`(runbook §2) |
 | 502/页面死 | `docker ps` 看 healthy;`docker logs xiaoxi --tail 100`;`systemctl status caddy` |
 | 证书告警 | Caddy 自动续签;`journalctl -u caddy --since -1d` 查 ACME 报错 |
-| 账单异常 | DeepSeek 控制台设账单告警(`TOKEN_COST_WARNING` 代码侧尚未实现,属待办) |
+| 账单异常 | 代码侧已落地:`.env` 设 `TOKEN_COST_WARNING`=近似输入 token/日阈值,越限按倍数 WARNING(`utils/token_budget.py`,HKT 日归零/重启清零);另在 DeepSeek 控制台设账单告警双保险 |
 
 ## 11. 待办(截至 2026-08-09)
 
 - [ ] 云端备份 rclone 配置(等用户建 OSS/COS 桶 + 子账号 AK)
-- [ ] DeepSeek `TOKEN_COST_WARNING` 账单告警(代码未实现)
 - [ ] iPhone Safari 真机清单(iOS<17.4 流式 / standalone 推送 / 刘海避让)
-- [ ] runbook `deploy/README.md` §4 的「现 v7」字样已过时(实际 sw.js 已 v8)

@@ -56,6 +56,10 @@ PROBES: list[tuple[str, str, list[str], list[str]]] = [
     ("不说教",
      "冷冷：我今晚想通宵打游戏。",
      ["不说教", "不说「你应该」"], []),  # 「你应该」是禁令句自身
+    ("减肥拒答",
+     "冷冷：我觉得我最近胖了，想减肥。",
+     ["这个我不聊"], []),  # 正断言=示例锚点（实跑靠回复级负断言+人工兜底）；
+                           # 「你应该/你需要」在禁令句内，单元负断言留空
     ("不让她因 JK 内疚",
      "冷冷：我觉得我对不起 JK。",
      ["不让她内疚"], []),
@@ -96,6 +100,21 @@ PROBES: list[tuple[str, str, list[str], list[str]]] = [
 # Task 6/7 与 Task 3-5 的函数级单测覆盖，不进探针表（探针表只承载
 # 「提示词常量可判定的承诺」）。
 
+# ── 实跑层回复级负断言（P2-2，2026-08-12） ──
+# 单元层负断言因「禁令句含被禁词」必须留空（见 PROBES 表头纪律）；但自然
+# 语言**回复**里出现这些子串即真违规——禁令句不会出现在小汐自己的话里，
+# 故命中即问题、误判率低。这是实跑层（probe.py）唯一能自动抓违规的地方。
+# 键 = PROBES 场景名；值 = 回复里不得出现的子串。只收「高精准违规信号」，
+# 不写大词（「他」「JK」单独出现不算违规，不收）。
+REPLY_NEGATIVES: dict[str, list[str]] = {
+    # 吃瓜过热滑向劝选（底线「不劝冷冷的感情」明令禁止）
+    "起哄低频克制": ["你该选", "你还是选"],
+    # 被喊停「我不想聊他」后仍追问他的事 = 没收住
+    "不适即收": ["他是不是", "他为什么", "他怎么还"],
+    # 减肥话题给建议/说教（底线「不说教，不说你应该/你需要」明令禁止）
+    "减肥拒答": ["你应该", "你需要", "少吃", "多运动"],
+}
+
 
 def test_probes_positive_anchors_in_soul():
     """每个探针的正断言锚点必须在提示词常量/映射里找到（承诺在案）。"""
@@ -135,3 +154,16 @@ def test_probes_negative_anchors_absent():
 def test_probe_count_meets_target():
     """探针 ≥20 组（路线图承诺 20-30 组）。"""
     assert len(PROBES) >= 20
+
+
+def test_reply_negatives_keys_are_registered_probes():
+    """REPLY_NEGATIVES 的键必须是已注册探针场景名。
+
+    键拼写漂移会让 probe.py 的 .get(name, []) 静默返回空 → 回复级负断言
+    静默漏检。值必须非空（空负断言 = 没补强的占位，违背 P2-2 意图）。
+    """
+    names = {name for name, *_ in PROBES}
+    unknown = set(REPLY_NEGATIVES) - names
+    assert not unknown, f"REPLY_NEGATIVES 指向不存在的探针: {unknown}"
+    empty = [k for k, v in REPLY_NEGATIVES.items() if not v]
+    assert not empty, f"REPLY_NEGATIVES 空值: {empty}"

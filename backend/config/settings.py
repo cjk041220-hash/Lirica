@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     # CORS 允许的前端来源（逗号分隔，开发默认 localhost:3000）
     cors_origins: str = "http://localhost:3000"
 
+    # TOKEN_COST_WARNING（P2-1）：本地 token 预算告警阈值，单位 = 近似输入
+    # token/日（cl100k 计数，对 DeepSeek 偏高估 1.3–2×，正是预算监控要的
+    # 安全余量）。0 = 关闭（默认）。只累计 chat agent 的输入（成本大头，
+    # graph.py 每次模型调用含工具循环），后台任务不累计。越过阈值按倍数
+    # 递增打 WARNING。折算花费请对照 DeepSeek 控制台当前单价——价格会变，
+    # 代码里不写死。实现见 utils/token_budget.py。
+    token_cost_warning: int = 0
+
     # 日志落盘/级别（utils/logger.py 消费）。必须作为 Settings 字段声明：
     # logger 读的是 os.environ，而 pydantic 对未声明的 .env 键只「extra: ignore」，
     # 不声明的话写在 .env 里的 LOG_FILE 会被静默吞掉（体检 9.13 发现）

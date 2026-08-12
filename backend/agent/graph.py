@@ -29,6 +29,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
+from utils import token_budget
 from utils.errors import log_tool_error
 from utils.logger import get_logger
 
@@ -135,17 +136,24 @@ def make_pre_model_hook(narrative_builder, max_conversation_msgs: int = 30):
         # 每用户轮的 session_tools 遥测（chat.py）保留 INFO，那是每轮一次。
         # isEnabledFor 守卫（评审 B8）：DEBUG 关闭时跳过整个 count_tokens
         # ——tiktoken 是同步 CPU 活，INFO 级别下也每轮全量跑纯属浪费。
-        if log.isEnabledFor(logging.DEBUG):
+        # P2-1 放宽：预算告警（token_budget.enabled）开启时也需要每次模型
+        # 调用的真实输入 token 数——此时 count_tokens 仍全量跑（用户已显式
+        #  opted in 预算监控），但 DEBUG 日志行仍只在 DEBUG 级打。默认全关
+        # 时零成本，B8 语义不变。
+        debug_on = log.isEnabledFor(logging.DEBUG)
+        if debug_on or token_budget.enabled():
             try:
                 from utils.tokens import count_tokens
                 total = sum(
                     count_tokens(m.content) for m in llm_input
                     if isinstance(getattr(m, "content", ""), str)
                 )
-                log.debug(
-                    "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
-                    count_tokens(memory_text), total,
-                )
+                token_budget.record_input(total)  # 预算累计（P2-1；关闭时内部 no-op）
+                if debug_on:
+                    log.debug(
+                        "telemetry: narrative approx_tokens=%d, total_input approx_tokens=%d",
+                        count_tokens(memory_text), total,
+                    )
             except Exception as e:
                 log.warning("token 遥测失败：%s", e)
 
