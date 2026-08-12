@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## 2026-08-13 · 批次二顺带：P2-6 provider 抽象层 + P1-2 只读 diff
+
+**P2-6 provider 抽象层**（评估报告 P2-3 铺路）
+- `providers/deepseek.py` 从「57 行单模型」升级为「工厂消费模型元数据」：
+  - `get_model_info()`：查询能力/限额（supports_thinking / max_output_tokens /
+    context_window），「关键场景升级 Pro」的决策入口
+  - `_MODEL_META` 索引：字典推导式自动跟随 AVAILABLE_MODELS（无独立维护面）
+  - 未知模型名 → 回退默认（不静默透传给 API 层）；max_tokens 越界 → 钳制到
+    max_output_tokens（当前两模型均 8192，钳制为恒等——为将来上限不同的模型兜底）
+- **纪律**：工厂行为零变化（默认 flash / temperature 0.8 / max_tokens 8192 /
+  timeout 120 / retries 2 一律不动）；thinking 参数**未**新增——DeepSeek
+  V4 Pro 的深度推理由模型内部控制（config.py 注释已定），不发明未验证的
+  API 参数
+- 新建 5 测试（test_deepseek_provider.py，钉「元数据可查 + 钳制/回退边界 +
+  默认零变化」，不发起真实网络）
+
+**P1-2 只读 diff**（观察收口前置，本批顺带产出结论，不动代码）
+- 报告：`.superpowers/sdd/2026-08-13-batch2/P1-2-diff-report.md`
+- 结论：**无必须补的缺口**——「情绪反应模式/对话深度」已被「态度」段 +
+  「生气的时候」整段 + 22 组示例覆盖；唯一可能是「她在哭/崩溃」极端难过
+  场景示例缺失（补 1 组即可，示例段不进 PERSONA_ANCHOR，零锚改动）
+
+**验证**：pytest **897 passed / 1 skip**（892+5 新）；ruff 0。
+
 ## 2026-08-13 · 批次二：P1-1 跨会话情绪基调延续 + P1-3 工具时机（不碰锚、不动观察基线）
 
 安全主线提前动工（用户拍板：P1-1/1-3/1-4 不碰人格锚、不影响观察基线，

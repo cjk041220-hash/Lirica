@@ -25,10 +25,30 @@ AVAILABLE_MODELS = [
     },
 ]
 
+# 模型 → 元数据索引（防每次调用线性扫描；AVAILABLE_MODELS 增删模型
+# 时此索引自动跟随——字典推导式，无独立维护面）
+_MODEL_META = {m["id"]: m for m in AVAILABLE_MODELS}
+
+# 请求超时 / 重试（与历史值保持一致，零行为变化）
+_REQUEST_TIMEOUT = 120
+_MAX_RETRIES = 2
+
 
 def get_available_models() -> list[dict]:
     """返回可用模型列表。"""
     return AVAILABLE_MODELS
+
+
+def get_model_info(model: str | None) -> dict | None:
+    """查询模型元数据（能力/限额），未知模型返回 None。
+
+    为「关键场景升级 Pro」铺路（评估报告 P2-3）：调用方可用
+    ``supports_thinking``（是否支持深度推理）/ ``max_output_tokens``
+    （输出上限）/ ``context_window`` 做场景决策，不再各自硬编码。
+    """
+    if not model:
+        return None
+    return _MODEL_META.get(model)
 
 
 def create_deepseek_llm(
@@ -39,18 +59,32 @@ def create_deepseek_llm(
     """创建 DeepSeek Chat 模型实例。
 
     Args:
-        model: 模型名称，不传则使用默认配置
+        model: 模型名称（须在 AVAILABLE_MODELS 内；未传/未知 → 默认配置）。
         temperature: 温度参数（控制输出随机性）
-        max_tokens: 最大输出 token 数
+        max_tokens: 最大输出 token 数；超过模型上限（max_output_tokens）
+                    时钳制到上限（防配错越界，当前两模型均为 8192，
+                    钳制为恒等——行为零变化，为将来上限不同的模型兜底）
     """
     s = get_settings()
+    resolved = model or s.deepseek_model
+    meta = _MODEL_META.get(resolved)
+    if meta is None:
+        # 未知模型名（配置漂移/手误）：回退默认模型，不静默透传——
+        # 透传会让 OpenAI 兼容层报「未知模型」且无本地日志可查
+        resolved = s.deepseek_model
+        meta = _MODEL_META.get(resolved) or {}
+
+    if max_tokens is not None:
+        cap = meta.get("max_output_tokens")
+        if cap and max_tokens > cap:
+            max_tokens = cap
 
     return ChatOpenAI(
-        model=model or s.deepseek_model,
+        model=resolved,
         api_key=s.deepseek_api_key,
         base_url=s.deepseek_base_url,
         temperature=temperature if temperature is not None else 0.8,
         max_tokens=max_tokens or 8192,
-        timeout=120,
-        max_retries=2,
+        timeout=_REQUEST_TIMEOUT,
+        max_retries=_MAX_RETRIES,
     )

@@ -111,9 +111,15 @@
 - [x] **P2-4. deploy/README.md「现 v7」→v8 修正** ✅（2026-08-12，批次三）。
 - [x] **P2-5. CHANGELOG 数字修正** ✅（2026-08-12，批次三）：872→875，注明 3 例差额
       来源 = 收尾批次迁移 v22 的 test_migrations_v22.py（3 测试）。
-- [ ] **P2-6. provider 抽象层**（低优先，本轮缓）：providers/deepseek.py 57 行单模型，
-      AVAILABLE_MODELS 有 flash+pro 但工厂不消费 pro 元数据；为「关键场景升级 Pro」
-      铺路（评估报告 P2-3 依赖此）。
+- [x] **P2-6. provider 抽象层** ✅（2026-08-13，批次二顺带）：
+      - `providers/deepseek.py` 工厂消费模型元数据：`get_model_info()`（能力
+        查询 supports_thinking / max_output_tokens / context_window，为「关键
+        场景升级 Pro」铺路）+ `_MODEL_META` 索引（字典推导式自动跟随
+        AVAILABLE_MODELS）+ 未知模型名回退默认 + max_tokens 越界钳制
+      - **纪律**：零行为变化——默认 flash / temperature 0.8 / max_tokens 8192 /
+        timeout 120 / retries 2 一律不动；thinking 参数**未**新增（DeepSeek
+        深度推理由模型内部控制，config.py 注释已定，不发明未验证的 API 参数）
+      - 新建 5 测试（test_deepseek_provider.py）；全量 pytest 897 passed
 
 ## P3 运营（多数等外部条件）
 
@@ -150,9 +156,10 @@
 | 批次 | 内容 | 时机 |
 |---|---|---|
 | 一 | P0-1 A/B → P0-2 词表/事件池（含前端映射）→ P0-4 文案 | ✅ 2026-08-12 已入库（b6c07f3） |
-| 二 | P1-1 跨会话情绪基调（carryover 信号）→ P1-3 工具时机段 | ✅ 2026-08-13 已入库（P1-2 改锚与 P1-4 节流留观察收口后） |
-| 三 | P2-1..P2-5 工程债（P2-6 provider 抽象缓） | ✅ 2026-08-12 批次三 |
-| 四 | 0a-0c 观察收口（08-18/08-22）→ P1-2 diff → P1-4 → P3 运营 | 条件触发 |
+| 二 | P1-1 跨会话情绪基调（carryover 信号）→ P1-3 工具时机段 | ✅ 2026-08-13 已入库（15d2c38，P1-2 改锚与 P1-4 节流留收口后） |
+| 二附 | P2-6 provider 抽象层（顺带）+ P1-2 只读 diff 结论 | ✅ 2026-08-13 已入库（P2-6 零行为变化；P1-2 产出报告不落码） |
+| 三 | P2-1..P2-5 工程债 | ✅ 2026-08-12 已入库（236a5d0） |
+| 四 | 0a-0c 观察收口（若恢复观察期）→ P1-2 补难过示例（可选）→ P1-4 → P3 运营 | 条件触发 |
 
 ## 验证方式
 
