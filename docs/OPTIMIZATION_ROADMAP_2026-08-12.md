@@ -63,22 +63,35 @@
 
 ## P1 人格化主线（观察收口后动工，污染面已标注）
 
-- [ ] **P1-1. 跨会话情绪基调延续**（评估报告 P0-1）：
-      - `heartbeat_moods.py` _SIGNAL_OFFSETS(L234-239) 加第五信号 carryover
-      - 定位上一段会话：chat_sessions + life_state.active_session_id（v21）；素材：chat_messages 尾部
-      - **设计约束**：情绪倾向必须**确定性可算**（静态词表/规则，禁 LLM 判定）；
-        `_apply_signal_offsets` 四参数签名被测试钉死（test_heartbeat.py L738-752），
-        第五信号默认 False 保测试绿；失败语义沿用「保持当前词」（_choose_mood L304-305）
-      - **措辞纪律**：「惦记」不「复盘」
+- [x] **P1-1. 跨会话情绪基调延续** ✅（2026-08-13，批次二）：
+      - `heartbeat_moods.py` `_SIGNAL_OFFSETS` 加第五信号 `carryover`（-0.12,
+        +0.04——幅度刻意小于 care 的 -0.15：惦记是「还没散去的」不是
+        「正在发生的」）+ `_CARRYOVER_SAD_LEXICON`（12 个高精准负面词）/
+        `_CARRYOVER_WINDOW_HOURS`（24h）/ `_CARRYOVER_TAIL_LIMIT`（6 条）
+      - `MemoryManager.has_sad_carryover()`：排除当前活跃会话与 era（独处
+        时间线只有小汐自己说话），扫上一段非 era 会话尾部 user 消息，
+        命中词表且 24h 内 → True；任何失败 → False 不推偏（同 talked
+        降级纪律）
+      - **设计约束**：情绪倾向**确定性可算**（静态词表，禁 LLM 判定）✅；
+        `_apply_signal_offsets` 四参数签名测试钉死，第五信号默认 False
+        保测试绿 ✅；失败语义沿用「保持当前词」✅
+      - 新增 6 测试（has_sad_carryover 命中/未命中/超窗/era 排除/无
+        life_state 降级 + _choose_mood 接线钉值）；全量 pytest 892 passed
 - [ ] **P1-2. 补 BASE_PERSONA 真缺口**（前置现状 diff！）：PROMPT_GUIDE:236-239 的
       「情绪反应模式/对话深度」已被「态度」段 + 22 组示例解决，大概率只剩
       「更多示例（尤其难过时）」真缺。连锁：改锚同步 + 探针锚点措辞被钉死
       + CHANGELOG 过渡说明 + 污染吃瓜观察基线（放 0a 收口后）。
-- [ ] **P1-3. TOOL_GUIDELINES 补「什么时候不要用工具」**（PROMPT_GUIDE 🟢-6）：
-      倾诉时别查天气搜周边。
+- [x] **P1-3. TOOL_GUIDELINES 补「什么时候不要用工具」** ✅（2026-08-13，批次二）：
+      - soul.py TOOL_GUIDELINES 加「什么时候不要用工具」段（倾诉时别查工具 /
+        她没问别主动查 / 情绪话题不套工具模板 / 记住的分寸不变）——
+        纯提示词层，PERSONA_ANCHOR 零改动（锚是压缩版不承载工具指引）
+      - 新增 2 探针（倾诉不查工具 / 没问不主动查）钉承诺锚点；
+        :8001 副本冒烟实测「我最近好难过……」→ 陪伴路径无工具调用 ✓
 - [ ] **P1-4. 画像节流调整**（挪到画像现网质量评估之后）：拆独立 _PROFILE_THROTTLE_HOURS 或
       24h→12h。成本：LLM 调用翻倍（每次 40 条摘录）+ 测试改造（test_consolidate.py L205-233
       钉死同窗口语义 + conftest 复核）——非迁移 v23 必需（memory_extract_state 表支持多行）。
+      **批次二裁决（2026-08-13）**：评估未做 + 12h 会翻倍 LLM 调用并改变 0a-0c 观察基线，
+      本批不动，放观察收口后与 0a 结论一起排。
 
 ## P2 工程债（择机，各独立）
 
@@ -137,9 +150,9 @@
 | 批次 | 内容 | 时机 |
 |---|---|---|
 | 一 | P0-1 A/B → P0-2 词表/事件池（含前端映射）→ P0-4 文案 | ✅ 2026-08-12 已入库（b6c07f3） |
-| 二 | 0a-0c 观察收口 + 5 场景实测 → P1 主线（P1-1 → P1-2 diff → P1-3）→ P1-4 | 08-18/08-22 收口后 |
+| 二 | P1-1 跨会话情绪基调（carryover 信号）→ P1-3 工具时机段 | ✅ 2026-08-13 已入库（P1-2 改锚与 P1-4 节流留观察收口后） |
 | 三 | P2-1..P2-5 工程债（P2-6 provider 抽象缓） | ✅ 2026-08-12 批次三 |
-| 四 | P3 运营 / 远期 / 纪律 | 条件触发 |
+| 四 | 0a-0c 观察收口（08-18/08-22）→ P1-2 diff → P1-4 → P3 运营 | 条件触发 |
 
 ## 验证方式
 

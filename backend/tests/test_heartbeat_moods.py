@@ -7,7 +7,7 @@ brief 新建，承接批次④新增的 mood_style_hint 测试——heartbeat_mo
 """
 import math
 
-from heartbeat_moods import MOOD_VECTORS, TIME_PERIODS, _MOOD_STYLE_HINTS, mood_style_hint
+from heartbeat_moods import _MOOD_STYLE_HINTS, MOOD_VECTORS, TIME_PERIODS, mood_style_hint
 
 # 批次一 P0-2 新增词（2026-08-12，用户拍板「4 词保底」）——几何/可达性
 # 测试的检查对象。未来再扩词时更新此清单（A/B 实测文风句无方向性影响，

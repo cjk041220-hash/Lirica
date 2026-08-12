@@ -835,6 +835,52 @@ class MemoryManager:
         )
         return await cursor.fetchone() is not None
 
+    async def has_sad_carryover(self, now: datetime.datetime | None = None) -> bool:
+        """上一段会话是否有「还没散去的难过」（P1-1 carryover 信号）。
+
+        读上一段对话的尾部 user 消息，命中难过词表（确定性可算，禁
+        LLM 判定——路线图纪律）且落在 24h 窗口内 → True。作为
+        _choose_mood 的第五信号，把 mood 向低效价方向轻推。
+
+        定位上一段会话：life_state.active_session_id（presence 上报的
+        当前活跃会话）排除后，取 updated_at 最近的一个**非 era** 会话
+        （era=小汐的独处时间线，那里只有小汐自己在说话，没有冷冷的
+        情绪）。任何读取失败 / 无上一段会话 → False（失败语义：信号
+        缺失不推偏，同 talked 的降级纪律）。
+        """
+        from heartbeat_moods import (
+            _CARRYOVER_SAD_LEXICON,
+            _CARRYOVER_TAIL_LIMIT,
+            _CARRYOVER_WINDOW_HOURS,
+        )
+
+        now = now or datetime.datetime.now(_HKT)
+        cutoff = (now - datetime.timedelta(hours=_CARRYOVER_WINDOW_HOURS)).strftime(
+            _TIME_FMT
+        )
+        try:
+            cursor = await self._db.execute(
+                "SELECT active_session_id FROM life_state WHERE id = 1"
+            )
+            row = await cursor.fetchone()
+            active_sid = row[0] if row else None
+            cursor = await self._db.execute(
+                """SELECT m.content FROM chat_messages m
+                   JOIN chat_sessions s ON s.id = m.session_id
+                   WHERE m.role = 'user'
+                     AND m.created_at >= ?
+                     AND s.is_era = 0
+                     AND m.session_id != ?
+                   ORDER BY m.id DESC LIMIT ?""",
+                (cutoff, active_sid or "", _CARRYOVER_TAIL_LIMIT),
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            log.exception("跨会话情绪基调检测失败，信号缺失（不推偏）")
+            return False
+        text = "\n".join(r[0] or "" for r in rows)
+        return any(word in text for word in _CARRYOVER_SAD_LEXICON)
+
     async def get_mood_valence(self) -> float | None:
         """当前心情效价（schema v18 情绪联动的调制信号源）。
 

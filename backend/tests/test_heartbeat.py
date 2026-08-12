@@ -748,8 +748,14 @@ def test_apply_signal_offsets_directions():
     assert talked[1] < 0  # talked → 向「满足/期待」（arousal 减）
     weekend = _apply_signal_offsets(base, care=False, joy=False, talked=False, is_weekend=True)
     assert weekend[1] < 0  # weekend → 向「懒洋洋」（arousal 减）
+    # P1-1（2026-08-13）：carryover 压低 valence（惦记把 mood 往低效价推），
+    # 且幅度弱于 care（惦记不该盖过正在发生的事）
+    carried = _apply_signal_offsets(base, care=False, joy=False, talked=False,
+                                    is_weekend=False, carryover=True)
+    assert carried[0] < 0 and carried[0] > cared[0]
     # 钳制：叠加后仍在 [-1, 1]
-    far = _apply_signal_offsets((1.0, 1.0), care=True, joy=True, talked=True, is_weekend=True)
+    far = _apply_signal_offsets((1.0, 1.0), care=True, joy=True, talked=True, is_weekend=True,
+                                carryover=True)
     assert all(-1.0 <= x <= 1.0 for x in far)
 
 
@@ -900,7 +906,10 @@ async def test_choose_mood_chat_query_failure_graceful(tmp_db):
     import heartbeat
     from utils.timezone import HKT
 
-    broken_mgr = SimpleNamespace(has_recent_chat=AsyncMock(side_effect=RuntimeError("db lost")))
+    broken_mgr = SimpleNamespace(
+        has_recent_chat=AsyncMock(side_effect=RuntimeError("db lost")),
+        has_sad_carryover=AsyncMock(side_effect=RuntimeError("db lost")),
+    )
     app = SimpleNamespace(state=SimpleNamespace(memory_manager=broken_mgr))
     with patch("utils.events.get_active_events", return_value=[]):
         mood = await heartbeat._choose_mood(
@@ -930,6 +939,161 @@ async def test_choose_mood_calls_has_recent_chat(tmp_db):
             app=app, now_dt=dt.datetime.now(HKT),
         )
     assert mgr.has_recent_chat.await_count == 1
+
+
+# ── 跨会话情绪基调延续（P1-1，2026-08-13）──────────────────────
+
+
+async def test_has_sad_carryover_hits_sad_tail(tmp_db):
+    """上一段会话尾部有难过词（24h 内、非 era、非当前活跃）→ True。"""
+    import datetime as dt
+
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    now = dt.datetime.now(HKT)
+    ts = now.strftime("%Y-%m-%d %H:%M")
+    # 当前活跃会话：里面的难过不算 carryover（正在聊，talked 信号已覆盖）
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('active', '', ?, ?, 0)",
+        (ts, ts),
+    )
+    # 上一段会话：22 小时前，结尾冷冷说「我哭了」→ 命中
+    old = (now - dt.timedelta(hours=22)).strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('prev', '', ?, ?, 0)",
+        (old, old),
+    )
+    for i, content in enumerate(["今天天气不错", "我有点难过", "我哭了"]):
+        await tmp_db.execute(
+            "INSERT INTO chat_messages (session_id, role, content, created_at) "
+            "VALUES ('prev', 'user', ?, ?)",
+            (content, old),
+        )
+    await tmp_db.execute(
+        "UPDATE life_state SET active_session_id = 'active' WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    mgr = MemoryManager(tmp_db)
+    assert await mgr.has_sad_carryover(now=now) is True
+
+
+async def test_has_sad_carryover_misses_when_fresh(tmp_db):
+    """上一段会话尾部没有难过词 → False（不推偏）。"""
+    import datetime as dt
+
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    now = dt.datetime.now(HKT)
+    old = (now - dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('prev', '', ?, ?, 0)",
+        (old, old),
+    )
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at) "
+        "VALUES ('prev', 'user', '今天吃了好吃的火锅', ?)",
+        (old,),
+    )
+    await tmp_db.commit()
+
+    mgr = MemoryManager(tmp_db)
+    assert await mgr.has_sad_carryover(now=now) is False
+
+
+async def test_has_sad_carryover_expired_window(tmp_db):
+    """难过发生在 24h 窗口之外 → False（该收的情绪早该收了）。"""
+    import datetime as dt
+
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    now = dt.datetime.now(HKT)
+    old = (now - dt.timedelta(hours=30)).strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('prev', '', ?, ?, 0)",
+        (old, old),
+    )
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at) "
+        "VALUES ('prev', 'user', '我难过得哭了', ?)",
+        (old,),
+    )
+    await tmp_db.commit()
+
+    mgr = MemoryManager(tmp_db)
+    assert await mgr.has_sad_carryover(now=now) is False
+
+
+async def test_has_sad_carryover_skips_era_session(tmp_db):
+    """era（独处时间线）会话不计入——那里只有小汐自己说话。"""
+    import datetime as dt
+
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    now = dt.datetime.now(HKT)
+    ts = now.strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+        "VALUES ('era-1', '', ?, ?, 1)",
+        (ts, ts),
+    )
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
+        "VALUES ('era-1', 'assistant', '想起她昨天说难过的事，有点心疼', ?, 'solo')",
+        (ts,),
+    )
+    await tmp_db.commit()
+
+    mgr = MemoryManager(tmp_db)
+    assert await mgr.has_sad_carryover(now=now) is False
+
+
+async def test_has_sad_carryover_graceful_on_missing_state(tmp_db):
+    """life_state 无行 / 无上一段会话 → False 不抛（失败语义降级）。"""
+    import datetime as dt
+
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    await tmp_db.execute("DELETE FROM life_state WHERE id = 1")
+    await tmp_db.commit()
+
+    mgr = MemoryManager(tmp_db)
+    assert await mgr.has_sad_carryover(now=dt.datetime.now(HKT)) is False
+
+
+async def test_choose_mood_wires_carryover_signal(tmp_db):
+    """P1-1 接线：_choose_mood 调用 has_sad_carryover，偏移经第五信号生效。"""
+    import datetime as dt
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    import heartbeat
+    from heartbeat_moods import _SIGNAL_OFFSETS
+    from memory.manager import MemoryManager
+    from utils.timezone import HKT
+
+    mgr = MemoryManager(tmp_db)
+    mgr.has_recent_chat = AsyncMock(return_value=False)
+    mgr.has_sad_carryover = AsyncMock(return_value=True)
+    app = SimpleNamespace(state=SimpleNamespace(memory_manager=mgr))
+    with patch("utils.events.get_active_events", return_value=[]):
+        mood = await heartbeat._choose_mood(
+            heartbeat.TIME_PERIODS[heartbeat.DAYTIME],
+            app=app, now_dt=dt.datetime.now(HKT),
+        )
+    assert mgr.has_sad_carryover.await_count == 1
+    assert mood in heartbeat.TIME_PERIODS[heartbeat.DAYTIME]["moods"]
+    # 信号值钉死在 -0.12（弱于 care 的 -0.15——惦记不该盖过正在发生的事）
+    assert _SIGNAL_OFFSETS["carryover"][0] == -0.12
 
 
 # ── 心情节奏（v2 多时间尺度，2026-08-03 系统性优化）────────────

@@ -281,11 +281,30 @@ _SIGMA = 0.25
 # arousal 减）。偏移是叠加的，且只推动目标点、不直接改词——词由高斯
 # 采样决定，信号影响的是「往哪个方向走」。
 _SIGNAL_OFFSETS = {
-    "care":    (-0.15, 0.05),
-    "joy":     (0.15, 0.00),
-    "talked":  (0.10, -0.05),
-    "weekend": (0.05, -0.10),
+    "care":      (-0.15, 0.05),
+    "joy":       (0.15, 0.00),
+    "talked":    (0.10, -0.05),
+    "weekend":   (0.05, -0.10),
+    "carryover": (-0.12, 0.04),
 }
+
+# ── 跨会话情绪基调延续（P1-1，2026-08-13）────────────────────
+# 评估报告 P0-1：「上一段对话的情绪基调不会被延续」——小汐不会记得
+# 「上次冷冷走的时候在哭，我现在还惦记着」。方案：心跳刷新 mood 时读
+# 上一段会话尾部消息，若含明确的难过信号（静态词表，确定性可算——
+# 路线图纪律：情绪倾向禁 LLM 判定），第五信号 carryover 把 mood 向
+# 低效价方向轻推（复用 _apply_signal_offsets 通道，同事件偏移）。
+# 幅度刻意小于 care（考试/台风）：那是「正在发生的事」，carryover 是
+# 「还没散去的惦记」，不该喧宾夺主；词表只收高精准负面词——「难受/
+# 压力大」这类口语有歧义（可以是「今天吃了顿好的，撑得难受」），
+# 误判会把 mood 长期压向担心，宁缺毋滥。间隔窗口 24h：超过一天该
+# 收的情绪早该收了，惦记太长就成了心结。
+_CARRYOVER_SAD_LEXICON = (
+    "哭", "难过", "伤心", "委屈", "崩溃", "绝望", "想死", "失眠",
+    "睡不着", "噩梦", "撑不住", "受不了",
+)
+_CARRYOVER_WINDOW_HOURS = 24
+_CARRYOVER_TAIL_LIMIT = 6   # 只扫上一段会话尾部 6 条 user 消息
 
 # 事件类型 → 信号（与 v1 的 MOOD_AFFINITY 同源，仅改传递方式）
 _CARE_EVENT_TYPES = {"exam", "interview", "typhoon", "gale", "thunderstorm", "rainstorm"}
@@ -316,8 +335,15 @@ def _gauss_weights(target: tuple[float, float], mood_words: list[str]) -> list[f
 
 
 def _apply_signal_offsets(target: tuple[float, float], *, care: bool, joy: bool,
-                          talked: bool, is_weekend: bool) -> tuple[float, float]:
-    """纯函数：把有信号的事件偏移叠加到目标点（钳制到 [-1,1]）。"""
+                          talked: bool, is_weekend: bool,
+                          carryover: bool = False) -> tuple[float, float]:
+    """纯函数：把有信号的事件偏移叠加到目标点（钳制到 [-1,1]）。
+
+    carryover（P1-1，2026-08-13）：跨会话情绪基调延续信号——上一段
+    会话尾部含明确的难过信号时生效，把 mood 向低效价方向轻推（幅度
+    刻意小于 care，见模块头 _CARRYOVER_SAD_LEXICON 注释）。默认 False
+    保持原四参数调用方语义不变（测试钉死四参数签名，第五参数可选）。
+    """
     v, a = target
     if care:
         v += _SIGNAL_OFFSETS["care"][0]
@@ -331,6 +357,9 @@ def _apply_signal_offsets(target: tuple[float, float], *, care: bool, joy: bool,
     if is_weekend:
         v += _SIGNAL_OFFSETS["weekend"][0]
         a += _SIGNAL_OFFSETS["weekend"][1]
+    if carryover:
+        v += _SIGNAL_OFFSETS["carryover"][0]
+        a += _SIGNAL_OFFSETS["carryover"][1]
     return _clamp01(v), _clamp01(a)
 
 
@@ -349,18 +378,23 @@ async def _choose_mood(period: dict, *, app=None,
     - 近 24h 冷冷说过话 → 向满足/期待偏移
     - 活跃事件：台风/考试类 → 向担心偏移；生日/周年类 → 向开心偏移
     - 周末 → 向懒洋洋/满足偏移
+    - 上一段会话尾部有难过信号（P1-1 carryover，24h 窗口）→ 向低效价偏移
 
     失败语义（v2 变更）：任何信号获取失败 → **保持当前词**（原 v1 退回
     均匀随机）。mood 是弥漫背景，不该因 DB 抖动而跳变。
     """
     try:
-        care = joy = talked = False
+        care = joy = talked = carryover = False
         mgr = getattr(app.state, "memory_manager", None) if app is not None else None
         if mgr is not None:
             # O2（2026-08-03）：talked 读真实对话（chat_messages 近 24h
             # 有 user 消息），不再读 recent(10) 记忆——纯闲聊（不产生
             # 记忆）也算说过话
             talked = await mgr.has_recent_chat(24, now=now_dt)
+            # P1-1（2026-08-13）：跨会话情绪基调延续——上一段会话尾部
+            # 有难过信号（静态词表，确定性可算）。失败返回 False，
+            # 不推偏（降级纪律同 talked）
+            carryover = await mgr.has_sad_carryover(now=now_dt)
         from utils import events as events_mgr
         active = await events_mgr.get_active_events(limit=5)
         types = {e.get("event_type") for e in active}
@@ -386,6 +420,7 @@ async def _choose_mood(period: dict, *, app=None,
         v, a = _apply_signal_offsets(
             (v, a), care=care, joy=joy, talked=talked,
             is_weekend=weekend_label(now_dt) is not None,
+            carryover=carryover,
         )
 
         # 高斯采样：目标点附近的词胜出，远词（跨对径）概率趋零
