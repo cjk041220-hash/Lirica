@@ -1143,6 +1143,12 @@ async def _run_heartbeat_at(tmp_db, monkeypatch, now_dt, fake_mood):
     monkeypatch.setattr(_core, "backup_database", _noop)
     monkeypatch.setattr(_core, "prune_checkpoints", _noop)
     monkeypatch.setattr(_extract, "extract_new_memories", _noop)
+    # 会话摘要段（P1-a）同样 noop：summarize_closed_sessions(conn=None)
+    # 走 database.core.get_db() 真实全局库且无节流——真实库含合格会话时
+    # 会对真实会话调真实 LLM 并写 session_summaries（测试污染）。noop
+    # 对齐 extract_new_memories 的处理（由 test_summarize.py 带 mock 覆盖）
+    import memory.summarize as _msum
+    monkeypatch.setattr(_msum, "summarize_closed_sessions", _noop)
     await hb.check_and_proactive_message(now_dt=now_dt)
     cursor = await tmp_db.execute(
         "SELECT mood, daily_event, mood_changed_at FROM life_state WHERE id = 1"
@@ -1817,3 +1823,41 @@ async def test_morning_greeting_opener_uses_normal_prompt(tmp_db, monkeypatch):
     assert "早安问候" in captured["human"]          # 开场问候照旧
     assert appended[0][0] == "e-new"
     assert appended[0][2] == "new_era"
+
+
+# ── session summary 段接线（P1-a）────────────────────────────
+
+
+async def test_periodic_maintenance_runs_summarize_segment(tmp_db, monkeypatch):
+    """机制钉死：_periodic_maintenance 触发 summarize_closed_sessions。
+
+    其余重段全部 no-op（隔离本用例只管接线），summarize 用 spy 记录
+    调用；lazy import 使 monkeypatch `memory.summarize` 模块属性即可。
+    """
+    import heartbeat as hb
+    from database import core as _core
+    from memory import consolidate as _mc
+    from memory import extract as _extract
+    from memory import manager as _mm
+    from memory import summarize as _msum
+
+    async def _noop(*a, **kw):
+        pass
+
+    monkeypatch.setattr(_core, "backup_database", _noop)
+    monkeypatch.setattr(_core, "prune_checkpoints", _noop)
+    monkeypatch.setattr(_extract, "extract_new_memories", _noop)
+    monkeypatch.setattr(_extract, "check_and_report_memory_health", _noop)
+    monkeypatch.setattr(_mm, "run_status_decay", _noop)
+    monkeypatch.setattr(_mc, "consolidate_memories", _noop)
+
+    calls = []
+    async def fake_summarize(conn=None):
+        calls.append(conn)
+        return {"summarized": 0, "skipped": 0}
+    monkeypatch.setattr(_msum, "summarize_closed_sessions", fake_summarize)
+
+    await hb._periodic_maintenance()
+
+    assert len(calls) == 1
+

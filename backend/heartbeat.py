@@ -289,6 +289,14 @@ async def _periodic_maintenance():
     except Exception as e:
         log.error("记忆周期整合失败：%s", e)
 
+    # 会话脉络摘要（P1-a）：对"已结束且够长"的普通会话生成一句话
+    # 摘要，供叙事注入（ZifaMem L2 补齐）。独立段，失败隔离
+    try:
+        from memory.summarize import summarize_closed_sessions
+        await summarize_closed_sessions()
+    except Exception as e:
+        log.error("会话摘要生成失败：%s", e)
+
 
 # ── 主动消息系统 ──────────────────────────────────────────────
 
