@@ -88,7 +88,7 @@ log = get_logger(__name__)
 #     （agent/soul.py 近7天互动密度）与批②画像蒸馏查询（memory/profile.py
 #     近30天画像素材）都按 (role='user', created_at) 谓词扫 chat_messages，
 #     无索引时全表扫。组合索引一次覆盖两处；纯索引迁移，无数据语义变更。
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -1034,6 +1034,33 @@ async def _migrate_v22(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[22] = _migrate_v22
+
+
+# ── 迁移 v23：session_summaries（P1-a session summary 层）────────
+
+# 会话脉络摘要（P1-a，2026-08-13）：长对话的一句话语义压缩。
+# session_id 对应 chat_sessions.id；ended_at 是会话最后消息时间快照
+# （叙事按谈话新鲜度排序，非摘要生成时间）；独立表 → 天然不落
+# memories 任何读面（面板/recall/健康检查），零 _READ_EXCLUSIONS 改动。
+SESSION_SUMMARIES_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS session_summaries (
+    session_id  TEXT PRIMARY KEY,
+    summary     TEXT NOT NULL,
+    msg_count   INTEGER NOT NULL,
+    ended_at    TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+"""
+
+
+async def _migrate_v23(conn: aiosqlite.Connection) -> None:
+    """v23: session_summaries 表 — session summary 层（P1-a）的存储。"""
+    await conn.execute(SESSION_SUMMARIES_SCHEMA_SQL)
+    await conn.commit()
+    log.info("迁移 v23 完成：session_summaries 表已建立")
+
+
+_migrations[23] = _migrate_v23
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────
