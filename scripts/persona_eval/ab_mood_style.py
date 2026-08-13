@@ -147,6 +147,8 @@ def main() -> int:
     ap.add_argument("--base-b", default="http://127.0.0.1:8002")  # 不注入组
     ap.add_argument("--token", default="")
     ap.add_argument("--report", default=".", help="报告落盘目录")
+    ap.add_argument("--mood-label", default="开心",
+                    help="报告头标注的 mood（P2-b 多情绪复用，默认开心保 P0-1 兼容）")
     args = ap.parse_args()
 
     # 交错发：同剧本先 A 后 B，端口间 3.5s（每端口实得 7s 间隔）
@@ -186,11 +188,11 @@ def main() -> int:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     head = (
-        "小汐 A/B 盲评（批次一 P0-1，2026-08-12，mood=开心）\n"
+        "小汐 A/B 盲评（批次 P0-1/P2-b，2026-08-13，mood=%s）\n"
         "X/Y 中恰一个是「带文风句」组。请逐对回答：① 分辨得出哪个带文风句吗？"
         "（能/不能）② 带文风句的那个自然吗？（自然/刻意）\n"
         "判定门槛：4 项量化指标过 ≥3 项 + 盲评可分辨且自然 → 显著。\n"
-    )
+    ) % args.mood_label
     with open(f"{args.report}/ab_blind.txt", "w", encoding="utf-8") as f:
         f.write(head + "\n".join(blind_lines) + "\n")
     with open(f"{args.report}/ab_blind_key.txt", "w", encoding="utf-8") as f:
