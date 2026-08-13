@@ -230,3 +230,69 @@ async def test_build_unknown_mood_degrades_gracefully(memory_mgr, tmp_db, monkey
     await NarrativeBuilder(memory_mgr).build(max_items=5)
 
     assert calls and calls[0]["mood_valence"] is None
+
+
+# ── session summary 注入（P1-a）───────────────────────────────
+
+
+async def _seed_summary(conn, session_id, summary, ended_at):
+    await conn.execute(
+        "INSERT INTO session_summaries "
+        "(session_id, summary, msg_count, ended_at, created_at) "
+        "VALUES (?, ?, 15, ?, ?)",
+        (session_id, summary, ended_at, ended_at),
+    )
+
+
+async def test_build_injects_summaries_after_profile_before_memory(tmp_db, memory_mgr):
+    """摘要块位于画像之后、常规记忆之前；按谈话新鲜度倒序。"""
+    from memory.profile import PROFILE_MEMORY_ID
+    await tmp_db.execute(
+        """INSERT INTO memories (id, content, category, created_at, status,
+           last_used_at, access_count, updated_at)
+           VALUES (?, '她最近在赶论文', '小汐眼里的冷冷', '2026-08-11 10:00',
+                   'core', '2026-08-11 10:00', 0, '2026-08-11 10:00')""",
+        (PROFILE_MEMORY_ID,),
+    )
+    await memory_mgr.add("喜好", "爱吃芒果")
+    await _seed_summary(tmp_db, "s-1", "从考试焦虑聊到家庭压力，她哭了一场。",
+                        "2026-08-11 22:00")
+    await _seed_summary(tmp_db, "s-2", "她拿到了 offer，高兴得连夜分享。",
+                        "2026-08-09 20:00")
+    await tmp_db.commit()
+
+    text = await NarrativeBuilder(memory_mgr).build(max_items=5)
+
+    assert "## 最近的谈话" in text
+    assert text.index("## 小汐眼里的冷冷") < text.index("## 最近的谈话")
+    assert text.index("## 最近的谈话") < text.index("以下是小汐记住的")
+    assert "从考试焦虑聊到家庭压力" in text
+    assert "8月11日晚上" in text                      # 2026-08-11 22:00 → 晚上
+    assert text.index("从考试焦虑") < text.index("拿到了 offer")  # 新在前
+
+
+async def test_build_no_summaries_omits_block(tmp_db, memory_mgr):
+    """无摘要时不渲染"最近的谈话"块，原语义不变。"""
+    await memory_mgr.add("喜好", "爱吃芒果")
+    text = await NarrativeBuilder(memory_mgr).build(max_items=5)
+    assert "## 最近的谈话" not in text
+    assert "以下是小汐记住的" in text
+
+
+async def test_build_summary_only_db_survives_gate(tmp_db, memory_mgr):
+    """无画像无常规记忆但只有摘要：早退路径不丢摘要块。"""
+    await _seed_summary(tmp_db, "s-1", "只聊了摘要。", "2026-08-11 22:00")
+    await tmp_db.commit()
+    text = await NarrativeBuilder(memory_mgr).build(max_items=5)
+    assert "## 最近的谈话" in text
+    assert "只聊了摘要" in text
+
+
+async def test_build_truncates_overlong_summary(tmp_db, memory_mgr):
+    """超长摘要截断（控制注入 token + 防伪造结构）。"""
+    from memory.narrative import _SUMMARY_LINE_MAX
+    await _seed_summary(tmp_db, "s-1", "长" * 500, "2026-08-11 22:00")
+    await tmp_db.commit()
+    text = await NarrativeBuilder(memory_mgr).build(max_items=5)
+    assert "长" * (_SUMMARY_LINE_MAX + 1) not in text
+    assert "……" in text

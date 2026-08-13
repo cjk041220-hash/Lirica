@@ -12,6 +12,34 @@ from memory.manager import MemoryManager
 # - 收敛 prompt injection 的攻击面（纵深防御第二层）
 _MAX_ITEM_LEN = 200
 
+# 摘要单行截断上限（P1-a）：摘要块每行独立截断，防伪造结构与超长。
+_SUMMARY_LINE_MAX = 160
+
+
+def _time_anchor(ended_at: str) -> str:
+    """'2026-08-11 22:00' → '8月11日晚上'。时段按 HKT 小时粗分。"""
+    if len(ended_at) < 13:
+        return ""
+    m, d, h = int(ended_at[5:7]), int(ended_at[8:10]), int(ended_at[11:13])
+    if h < 5:
+        period = "凌晨"
+    elif h < 12:
+        period = "早上"
+    elif h < 14:
+        period = "中午"
+    elif h < 18:
+        period = "下午"
+    elif h < 23:
+        period = "晚上"
+    else:
+        period = "深夜"
+    return f"{m}月{d}日{period}"
+
+
+def _join_blocks(a: str, b: str) -> str:
+    """空块省略：两个叙事块拼一块，全空返回空串。"""
+    return "\n\n".join(p for p in (a, b) if p)
+
 
 class NarrativeBuilder:
     """将记忆列表构建为适合注入系统提示词的叙述文本。
@@ -25,6 +53,31 @@ class NarrativeBuilder:
 
     def __init__(self, manager: MemoryManager | None = None):
         self._manager = manager
+
+    async def _summaries_block(self, limit: int = 3) -> str:
+        """最近 limit 条会话摘要（按谈话新鲜度倒序），渲染为叙事块。
+
+        P1-a：session summary 层。独立块、不占 max_items 记忆席位。
+        无摘要返回 ""（原语义零影响）。每行压平换行 + 截断（同
+        profile 纪律）；时间锚由代码从 ended_at 渲染，LLM 不写日期。
+        """
+        if self._manager is None:
+            return ""
+        cursor = await self._manager._db.execute(
+            "SELECT session_id, summary, ended_at FROM session_summaries "
+            "ORDER BY ended_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return ""
+        lines = ["## 最近的谈话", ""]
+        for _sid, summary, ended_at in rows:
+            content = " ".join(summary.split())
+            if len(content) > _SUMMARY_LINE_MAX:
+                content = content[:_SUMMARY_LINE_MAX] + "……"
+            lines.append(f"- {_time_anchor(ended_at)}：{content}")
+        return "\n".join(lines)
 
     async def build(self, max_items: int = 30, query: str = "") -> str:
         """从 MemoryManager 读取记忆，构建叙事文本。
@@ -61,11 +114,15 @@ class NarrativeBuilder:
                 content = content[:_MAX_ITEM_LEN] + "……"
             profile_text = f"## 小汐眼里的冷冷\n- {content}"
 
+        # 会话脉络摘要（P1-a）：取最近摘要块，排在画像之后、常规记忆
+        # 之前。查询放在 total==0 门卫之前——摘要独存时同样不整段丢弃。
+        summaries_text = await self._summaries_block()
+
         total = await self._manager.count()
         if total == 0:
-            # 仅画像独存（常规记忆为空）：把画像段带回去，不整段丢弃；
-            # 无画像且无记忆时为 ""（空库原语义）。
-            return profile_text
+            # 仅画像/摘要独存（常规记忆为空）：把已有段带回去，不整段
+            # 丢弃；无画像无摘要无记忆时为 ""（空库原语义）。
+            return _join_blocks(profile_text, summaries_text)
 
         # 情绪联动（schema v18）：查一次当前心情效价，传给 recall 的
         # mood-congruent 因子。未知 mood 词 / 无 life_state 行 → None，
@@ -107,9 +164,9 @@ class NarrativeBuilder:
         memories = sorted(picked, key=lambda m: m.get("created_at") or "")
 
         if not memories:
-            # 常规记忆为空但画像存在：仍把画像段带回去，不整段丢弃。
-            # （无画像时 profile_text 为 ""，两种情况合一行。）
-            return profile_text
+            # 常规记忆为空但画像/摘要存在：仍把已有段带回去，不整段丢弃。
+            # （无画像无摘要时两者均为 ""，两种情况合一行。）
+            return _join_blocks(profile_text, summaries_text)
 
         # 按类别分组（memories 已由 recent() 按时间正序排列）
         # 每条内容压平换行（防止伪造叙事结构）并截断超长内容
@@ -126,6 +183,9 @@ class NarrativeBuilder:
         lines: list[str] = []
         if profile_text:
             lines.append(profile_text)
+            lines.append("")
+        if summaries_text:
+            lines.append(summaries_text)
             lines.append("")
         lines.append("以下是小汐记住的关于冷冷的事情：")
         lines.append("")
