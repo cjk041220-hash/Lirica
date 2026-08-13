@@ -365,3 +365,23 @@ async def test_delete_session_cascades_proactive_rows(archive_db):
         "SELECT COUNT(*) FROM proactive_messages WHERE session_id = 'e-del'"
     )
     assert (await cursor.fetchone())[0] == 0
+
+
+async def test_delete_session_removes_summary(archive_db):
+    """级联：删除会话同时删除其 session_summaries 行（P1-a）。"""
+    await chat_archive.record_user_message("s-casc", "第一条")
+    await chat_archive.record_assistant_message("s-casc", "回你~")
+    await archive_db.execute(
+        "INSERT INTO session_summaries "
+        "(session_id, summary, msg_count, ended_at, created_at) "
+        "VALUES ('s-casc', '摘要', 2, '2026-08-11 22:00', '2026-08-11 22:00')"
+    )
+    await archive_db.commit()
+
+    deleted = await chat_archive.delete_session("s-casc")
+
+    assert deleted is True
+    cursor = await archive_db.execute(
+        "SELECT COUNT(*) FROM session_summaries WHERE session_id = 's-casc'"
+    )
+    assert (await cursor.fetchone())[0] == 0

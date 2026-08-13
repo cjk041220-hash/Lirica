@@ -176,15 +176,20 @@ async def delete_session(session_id: str) -> bool:
     返回是否删到了会话行。删除正在进行中的会话是安全的：下一轮
     record_* 的 upsert 会让会话行自愈重建。
 
-    级联范围含 proactive_messages：主动消息行带 session_id 归属，会话
-    被删后这些行若不清理会永远停在 delivered/stored 未读，占住
-    /api/push/unread 的 LIMIT 10 槽位（era 会话被删时尤其明显）。
+    级联范围含 proactive_messages 与 session_summaries：主动消息行带
+    session_id 归属，会话被删后这些行若不清理会永远停在 delivered/stored
+    未读，占住 /api/push/unread 的 LIMIT 10 槽位（era 会话被删时尤其
+    明显）；session_summaries 同理，残留会让叙事继续注入已删除会话的
+    脉络（P1-a）。
     """
     conn = await get_db()
     async with get_write_lock():
         await conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
         await conn.execute(
             "DELETE FROM proactive_messages WHERE session_id = ?", (session_id,)
+        )
+        await conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,)
         )
         cursor = await conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
         await conn.commit()
