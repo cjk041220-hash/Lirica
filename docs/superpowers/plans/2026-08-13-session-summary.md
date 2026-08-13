@@ -618,12 +618,19 @@ Expected: FAIL — `assert 0 == 1`（未接线，spy 没被调用）
         log.error("会话摘要生成失败：%s", e)
 ```
 
+同时，在 `backend/tests/test_heartbeat.py` 的 `_run_heartbeat_at` 助手（约第 1145 行，`extract_new_memories` noop 之后）追加 `summarize` noop——**本任务的关键防污染**：`_run_heartbeat_at` 是几乎所有心跳测试的共用路径，它触发 `_periodic_maintenance`（heartbeat.py:207），而 `summarize_closed_sessions(conn=None)` 走 `database.core.get_db()` **真实全局库、且无节流**——真实生产库一旦含合格会话（≥15 条 + 空闲 6h）会对真实会话调真实 LLM 并写 `session_summaries`（测试污染，违背 sha256 零污染纪律）。noop 对齐 `extract_new_memories` 的既有处理（由 test_summarize.py 带 mock 覆盖）：
+
+```python
+    import memory.summarize as _msum
+    monkeypatch.setattr(_msum, "summarize_closed_sessions", _noop)
+```
+
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd /e/小汐sonetto/backend && .venv/Scripts/python.exe -m pytest tests/test_heartbeat.py -k periodic_maintenance_runs_summarize -v`
 Expected: PASS
 
-**注意**：既有 `test_heartbeat_triggers_global_db_connection`（test_heartbeat.py:1387）不用改——它用 `tmp_db`（Task 1 后含 `session_summaries` 表但无任何 chat_sessions 种子），`summarize_closed_sessions` 走 `_find_eligible` 返回空，不触发真实 LLM。
+**注意**：`test_heartbeat_triggers_global_db_connection`（test_heartbeat.py:1387）同样走 `_run_heartbeat_at` 助手 → 摘要段已被上述 noop 盖住，不碰真实库（其自身对 consolidate/profile 的 `_create_llm` 打桩保持不变）。若漏加助手 noop，该测试会因真实库存在合格会话而触发真实 LLM 调用 + 写库，污染生产数据。
 
 - [ ] **Step 5: Commit**
 
