@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 2026-08-13 · session summary 层（P1-a）
+
+- 新增 `session_summaries` 表（迁移 v23）：长对话的一句话脉络摘要，独立表不落
+  memories 读面。
+- 心跳维护周期新段 `summarize_closed_sessions`：合格会话（≥15 条、空闲 ≥6h、
+  非活跃、无既有摘要）由 DeepSeek 摘一句话，单轮 ≤3，失败跳过下轮重试。
+- 叙事注入「最近的谈话」块（画像后、常规记忆前，近 3 段），时间锚由代码补，
+  LLM 禁编造/禁写日期。
+- 隔离零改动：`memory/summarize.py` 直接 SQL 读 `chat_messages`（extract.py 先例），
+  不 import `chat_archive`，隔离自检未动。
+- `delete_session` 级联补删 `session_summaries` 行。
+- 设计文档：`docs/superpowers/specs/2026-08-13-session-summary-design.md`。
+- 过渡说明：摘要注入改变每轮 LLM 上下文，轻微扰动吃瓜/初识档观察基线
+  （0a-0c 收口评估时注意此变量）。
+
 ## 2026-08-13 · 审计批次：外部评估报告核实 + 前端测试补课
 
 背景：桌面报告《小汐sonetto人格化还原度与架构评估报告》（8.2/10）外部

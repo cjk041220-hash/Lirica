@@ -92,6 +92,13 @@
       钉死同窗口语义 + conftest 复核）——非迁移 v23 必需（memory_extract_state 表支持多行）。
       **批次二裁决（2026-08-13）**：评估未做 + 12h 会翻倍 LLM 调用并改变 0a-0c 观察基线，
       本批不动，放观察收口后与 0a 结论一起排。
+- [x] **P1-a. session summary 层** ✅（2026-08-13，设计 `docs/superpowers/specs/2026-08-13-session-summary-design.md`）：
+      - `session_summaries` 表（迁移 v23）+ `memory/summarize.py`（心跳维护段，
+        合格判定：is_era=0 + ≥15 条 + 空闲 ≥6h + 非活跃 + 无既有摘要，单轮 ≤3）
+      - 叙事注入「最近的谈话」块（画像后、常规记忆前，近 3 段，代码补时间锚）
+      - 隔离零改动：直接 SQL 读 chat_messages（extract.py 先例），不 import chat_archive
+      - 已知扰动：摘要注入改变每轮 LLM 上下文，轻微扰动吃瓜/初识档观察基线
+        （0a-0c 收口评估时注意此变量）
 
 ## P2 工程债（择机，各独立）
 
