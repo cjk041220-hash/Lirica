@@ -13,11 +13,16 @@ v2.1 修复：
   并发订阅同一 endpoint 不再触发 IntegrityError（旧版先查后插存在竞态）。
 """
 import asyncio
+import base64
 import json
+import time
 import uuid
 from datetime import datetime
 from urllib.parse import urlparse
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
+from py_vapid.utils import b64urldecode
 from pywebpush import WebPushException, webpush_async
 
 from config.settings import get_settings
@@ -31,10 +36,15 @@ log = get_logger(__name__)
 _PUSH_TIMEOUT = 10.0
 
 # Apple Web Push 端点 host（与 push.py 的 _PUSH_HOST_SUFFIXES 同源约定）。
-# Apple 对 VAPID JWT 的 aud 校验与 RFC 8292 的默认行为不同：要求 aud 等于
-# 订阅网站自身的 origin，而 pywebpush 缺省取 endpoint 的 origin（对 Apple
-# 端点就是 https://web.push.apple.com）→ 每次推送都被 Apple 以
-# BadJwtToken (403) 拒绝（2026-08-15 iOS 订阅两连拒实锤）。见 _get_vapid_claims。
+# Apple 对 VAPID JWT 的要求与 RFC 8292 默认行为有两处不同，pywebpush/py_vapid
+# 都无法满足（2026-08-15 iOS 订阅两连拒实锤，逐步定位到这两条）：
+#   1. JWT header 必须带 kid（base64url 公钥）——py_vapid 只把它放进
+#      Crypto-Key 头，JWT header 恒为 {"typ","alg"} → Apple 报 BadJwtToken；
+#   2. claims.aud 必须等于订阅网站自身的 origin（pywebpush 缺省取 endpoint
+#      origin，对 Apple 端点即 https://web.push.apple.com → 同样 BadJwtToken）。
+# 故对 Apple 端点完全绕开 pywebpush 的 VAPID 生成，自己签 JWT 经 headers
+# 传入（不传 vapid_claims/vapid_private_key，pywebpush 便不会覆盖 headers）。
+# 见 _build_apple_jwt。其他推送服务（FCM/Mozilla/WNS）不由此路径。
 _APPLE_HOSTS = ("web.push.apple.com",)
 
 
@@ -47,25 +57,45 @@ def _is_apple_endpoint(endpoint: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _APPLE_HOSTS)
 
 
-def _get_vapid_claims(endpoint: str | None = None) -> dict:
-    """构建 VAPID 声明。
+def _base64url(data: bytes) -> str:
+    """base64url 编码（无填充），与 VAPID JWT 一致。"""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _build_apple_jwt(s) -> str:
+    """构造 Apple Web Push 的 `vapid <JWT>` 头（见 _APPLE_HOSTS 的说明）。
+
+    header: {"typ","alg","kid"}，kid = VAPID 公钥（base64url）；
+    claims: aud = 网站 origin（PUSH_SITE_ORIGIN）、exp、sub。
+    ECDSA P-256 (ES256) 签名，r||s 各 32 字节。
+    """
+    key = serialization.load_der_private_key(
+        b64urldecode(s.vapid_private_key.encode()), password=None
+    )
+    header = {"typ": "JWT", "alg": "ES256", "kid": s.vapid_public_key}
+    claims = {
+        "aud": s.push_site_origin,
+        "exp": int(time.time()) + 12 * 3600,
+        "sub": s.vapid_claim_mailto,
+    }
+    head = _base64url(json.dumps(header, separators=(",", ":")).encode())
+    body = _base64url(
+        json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
+    )
+    token = f"{head}.{body}".encode()
+    der_sig = key.sign(token, ec.ECDSA(hashes.SHA256()))
+    r, ss = ec_utils.decode_dss_signature(der_sig)
+    sig = _base64url(r.to_bytes(32, "big") + ss.to_bytes(32, "big"))
+    return "vapid " + head + "." + body + "." + sig
+
+
+def _get_vapid_claims() -> dict:
+    """构建 VAPID 声明（非 Apple 端点用，Apple 走 _build_apple_jwt）。
 
     注意：webpush_async 会原地修改传入的 claims 字典（填充 aud/exp），
     因此每次调用都必须传入一个全新的字典，不能在多个订阅间共享。
-
-    Apple 特例：对 web.push.apple.com 端点，若配置了 PUSH_SITE_ORIGIN
-    （网站自身 origin，如 https://selena0603.xyz），显式写入 aud——
-    Apple 校验 aud 必须等于网站 origin；pywebpush 缺省用 endpoint origin，
-    对 Apple 恒 403 BadJwtToken。其他推送服务（FCM/Mozilla/WNS）按
-    RFC 8292 继续用 endpoint origin（pywebpush 缺省行为），不覆盖。
     """
-    s = get_settings()
-    claims = {"sub": s.vapid_claim_mailto}
-    if endpoint and _is_apple_endpoint(endpoint):
-        origin = s.push_site_origin
-        if origin:
-            claims["aud"] = origin
-    return claims
+    return {"sub": get_settings().vapid_claim_mailto}
 
 
 def _is_stale_subscription(exc: WebPushException) -> bool:
@@ -135,19 +165,43 @@ async def send_push(title: str, body: str, url: str = "/") -> int:
             },
         }
         try:
-            await webpush_async(
-                subscription_info=subscription_info,
-                data=payload,
-                vapid_private_key=s.vapid_private_key,
-                vapid_claims=_get_vapid_claims(endpoint),  # 每次全新字典，见函数说明
-                timeout=_PUSH_TIMEOUT,
-                # TTL 必须显式给非零值：pywebpush 默认 ttl=0，
-                # 而 WNS（Windows 推送服务）在默认 cache-policy 下
-                # 收到 TTL: 0 会返回 400 "Ttl value conflicts with
-                # X-WNS-Cache-Policy"，导致所有 Windows 设备收不到推送。
-                # 86400s = 设备离线时通知最多保留一天。
-                ttl=86400,
-            )
+            if _is_apple_endpoint(endpoint):
+                # Apple 端点：自己签带 kid 的 JWT，经 headers 传入
+                # （见 _APPLE_HOSTS 说明）；不传 vapid_claims 以免 pywebpush
+                # 覆盖 headers。缺 PUSH_SITE_ORIGIN 时无法构造合法 aud，失败。
+                origin = s.push_site_origin
+                if not origin:
+                    log.warning(
+                        "Apple 端点但未配置 PUSH_SITE_ORIGIN，推送无法通过校验: %s",
+                        endpoint[:50],
+                    )
+                    return (
+                        "failed",
+                        sub_id,
+                        endpoint,
+                        WebPushException("Apple endpoint requires PUSH_SITE_ORIGIN"),
+                    )
+                await webpush_async(
+                    subscription_info=subscription_info,
+                    data=payload,
+                    headers={"Authorization": _build_apple_jwt(s)},
+                    timeout=_PUSH_TIMEOUT,
+                    ttl=86400,
+                )
+            else:
+                await webpush_async(
+                    subscription_info=subscription_info,
+                    data=payload,
+                    vapid_private_key=s.vapid_private_key,
+                    vapid_claims=_get_vapid_claims(),  # 每次全新字典，见函数说明
+                    timeout=_PUSH_TIMEOUT,
+                    # TTL 必须显式给非零值：pywebpush 默认 ttl=0，
+                    # 而 WNS（Windows 推送服务）在默认 cache-policy 下
+                    # 收到 TTL: 0 会返回 400 "Ttl value conflicts with
+                    # X-WNS-Cache-Policy"，导致所有 Windows 设备收不到推送。
+                    # 86400s = 设备离线时通知最多保留一天。
+                    ttl=86400,
+                )
             return ("ok", sub_id, endpoint, None)
         except WebPushException as e:
             return ("failed", sub_id, endpoint, e)

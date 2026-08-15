@@ -188,6 +188,35 @@ describe('usePush（Web Push 全链路回归网）', () => {
     })
   })
 
+  it('iOS 安全：applicationServerKey 传 Uint8Array 而非裸 base64url 字符串', async () => {
+    // 2026-08-15 实锤：iOS Safari 把字符串当原始字节存成错公钥 →
+    // 每次推送 BadVapidPublicKey。回归：订阅时 key 必须转成 Uint8Array。
+    const { pushManager } = stubServiceWorker()
+    stubNotification('default', 'granted')
+    route({
+      '/api/push/unread': unreadResponse([]),
+      '/api/push/vapid-key': { ok: true, json: async () => ({ key: 'BPvIuGAZ', enabled: true }) },
+      '/api/push/subscribe': { ok: true },
+    })
+
+    const { result } = renderHook(() => usePush())
+    await act(async () => {})
+    await act(async () => {
+      await result.current.subscribe()
+    })
+
+    const options = pushManager.subscribe.mock.calls[0][0]
+    expect(options.applicationServerKey).toBeInstanceOf(Uint8Array)
+    expect(typeof options.applicationServerKey).not.toBe('string')
+    // 字节反推回 base64url 应与服务器下发的 key 一致（说明解码正确）
+    let raw = ''
+    for (let i = 0; i < options.applicationServerKey.length; i += 1) {
+      raw += String.fromCharCode(options.applicationServerKey[i])
+    }
+    const back = btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    expect(back).toBe('BPvIuGAZ')
+  })
+
   it('权限 denied → permissionDenied=true，零网络调用', async () => {
     stubServiceWorker()
     stubNotification('denied')

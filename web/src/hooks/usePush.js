@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../api/client'
 
+// base64url 字符串 → Uint8Array。applicationServerKey 规范要求 BufferSource；
+// 字符串形式只是 Chrome 系的便利扩展，iOS Safari 会把它当原始 UTF-8 字节存成
+// 公钥（2026-08-15 实锤：iPhone 上订阅能成功、但每次推送都被 Apple 以
+// BadVapidPublicKey 拒绝）。所有浏览器对 Uint8Array 都正确处理。
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = window.atob(base64)
+  const bytes = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i)
+  return bytes
+}
+
 export function usePush() {
   const [subscribed, setSubscribed] = useState(false)
   const [unread, setUnread] = useState([])
@@ -95,7 +108,8 @@ export function usePush() {
       ])
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: key,
+        // iOS Safari 只正确接受 Uint8Array（字符串会存错公钥 → BadVapidPublicKey）
+        applicationServerKey: urlBase64ToUint8Array(key),
       })
 
       const res = await apiFetch('/api/push/subscribe', {
