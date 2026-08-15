@@ -160,6 +160,72 @@ async def test_send_push_non_410_failure_keeps_subscription(
     assert (await cursor.fetchone())[0] == 2  # 两个订阅都保留
 
 
+# ── Apple VAPID aud 覆盖（2026-08-15 iOS 403 BadJwtToken 回归）──
+
+
+async def test_apple_endpoint_gets_site_origin_aud(vapid_enabled, monkeypatch):
+    """Apple 端点 + 配置了 PUSH_SITE_ORIGIN：claims 显式写 aud=网站 origin。
+
+    回归：pywebpush 缺省用 endpoint origin（https://web.push.apple.com）做
+    aud，Apple 校验失败恒 403 BadJwtToken（08-15 iOS 订阅两连拒实锤）。
+    """
+    from utils import web_push
+
+    s = web_push.get_settings()
+    monkeypatch.setattr(s, "push_site_origin", "https://selena0603.xyz")
+
+    claims = web_push._get_vapid_claims(
+        "https://web.push.apple.com/QAWlO8NvG1xEx7_bpbKA6PwfJj48K8O8E"
+    )
+    assert claims["aud"] == "https://selena0603.xyz"
+    assert claims["sub"] == s.vapid_claim_mailto
+
+
+async def test_apple_endpoint_without_origin_keeps_pywebpush_default(vapid_enabled):
+    """Apple 端点但未配置 PUSH_SITE_ORIGIN：不写 aud（交给 pywebpush 缺省）。"""
+    from utils import web_push
+
+    claims = web_push._get_vapid_claims("https://web.push.apple.com/xxx")
+    assert "aud" not in claims
+
+
+async def test_non_apple_endpoint_never_overrides_aud(vapid_enabled, monkeypatch):
+    """非 Apple 端点即使配置了 PUSH_SITE_ORIGIN 也不覆盖 aud（FCM/Mozilla/WNS 按 RFC）。"""
+    from utils import web_push
+
+    s = web_push.get_settings()
+    monkeypatch.setattr(s, "push_site_origin", "https://selena0603.xyz")
+
+    for endpoint in (
+        "https://fcm.googleapis.com/fcm/send/abc",
+        "https://push.services.mozilla.com/def",
+        "https://notify.windows.com/ghi",
+    ):
+        claims = web_push._get_vapid_claims(endpoint)
+        assert "aud" not in claims, endpoint
+
+
+async def test_send_push_passes_site_origin_aud_for_apple(
+    patch_db, vapid_enabled, monkeypatch
+):
+    """端到端：Apple 订阅推送时，webpush_async 收到的 claims 里 aud=网站 origin。"""
+    from utils import web_push
+
+    s = web_push.get_settings()
+    monkeypatch.setattr(s, "push_site_origin", "https://selena0603.xyz")
+
+    await web_push.save_subscription(
+        "https://web.push.apple.com/QAWlO8NvG1xEx7_bpbKA6PwfJj48K8O8E", "p1", "a1"
+    )
+
+    calls = []
+    monkeypatch.setattr(web_push, "webpush_async", _fake_webpush_recorder(calls))
+
+    sent = await web_push.send_push("标题", "正文")
+    assert sent == 1
+    assert calls[0]["vapid_claims"]["aud"] == "https://selena0603.xyz"
+
+
 async def test_send_push_timeout_error_does_not_crash(
     patch_db, vapid_enabled, monkeypatch
 ):

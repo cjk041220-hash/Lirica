@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_claim_mailto: str = "mailto:xiaoxi@yinghai.local"
 
+    # Web Push：Apple 端点 VAPID JWT 的 aud 覆盖为网站自身 origin
+    # （如 https://selena0603.xyz）。Apple Web Push 校验 aud 必须等于订阅
+    # 网站的 origin，而非推送服务 origin；pywebpush 缺省用 endpoint origin
+    # （对 Apple 端点即 https://web.push.apple.com），每次推送都被 Apple 以
+    # BadJwtToken 403 拒绝（2026-08-15 iOS 实锤）。留空则不对 Apple 覆盖。
+    push_site_origin: str = ""
+
     # presence 离线判定阈值（分钟，2026-08-09 用户裁定「关页面即离线 +
     # 45 分钟兜底」）：前端 pagehide 上报 leaving 立即可判定离线；手机
     # 杀进程 / 页面静默等没有信号源的场景，按距最后一次在线上报超过
