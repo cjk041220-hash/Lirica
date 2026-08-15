@@ -2,6 +2,16 @@
 
 用于向 PWA 客户端（iOS Safari / Chrome）推送主动消息通知。
 
+v2.2 修复（2026-08-15，iOS 推送 BadJwtToken 根因实锤）：
+- 之前误以为 Apple 需要「JWT header 带 kid + aud=网站 origin」，加了自签 JWT
+  覆盖，实测全错：Apple 与 RFC 8292 一致，aud = endpoint 的 origin
+  （https://web.push.apple.com），pywebpush 缺省即正确。
+- **真正根因是 VAPID_CLAIM_MAILTO 用了 `.local` 域名**（mailto:xiaoxi@yinghai.local）
+  ——Apple 拒绝非公网域名的 subject → 恒 BadJwtToken。web-push 库源码也明确
+  警告 localhost/本地域名 subject 会 BadJwtToken。修：subject 必须用真实公网域名。
+- 新增 `_validate_subject` 守卫：subject host 是 localhost/.local 等非公网
+  域名时启动即 WARNING，防止复发。
+
 v2.1 修复：
 - webpush（requests 同步实现）→ webpush_async（aiohttp 异步实现）+ 显式 timeout。
   旧版在 async 函数里直接调用同步 HTTP 请求，阻塞整个事件循环，且默认
@@ -13,16 +23,10 @@ v2.1 修复：
   并发订阅同一 endpoint 不再触发 IntegrityError（旧版先查后插存在竞态）。
 """
 import asyncio
-import base64
 import json
-import time
 import uuid
 from datetime import datetime
-from urllib.parse import urlparse
 
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, utils as ec_utils
-from py_vapid.utils import b64urldecode
 from pywebpush import WebPushException, webpush_async
 
 from config.settings import get_settings
@@ -35,67 +39,37 @@ log = get_logger(__name__)
 # 半死端点不会无限占用事件循环。
 _PUSH_TIMEOUT = 10.0
 
-# Apple Web Push 端点 host（与 push.py 的 _PUSH_HOST_SUFFIXES 同源约定）。
-# Apple 对 VAPID JWT 的要求与 RFC 8292 默认行为有两处不同，pywebpush/py_vapid
-# 都无法满足（2026-08-15 iOS 订阅两连拒实锤，逐步定位到这两条）：
-#   1. JWT header 必须带 kid（base64url 公钥）——py_vapid 只把它放进
-#      Crypto-Key 头，JWT header 恒为 {"typ","alg"} → Apple 报 BadJwtToken；
-#   2. claims.aud 必须等于订阅网站自身的 origin（pywebpush 缺省取 endpoint
-#      origin，对 Apple 端点即 https://web.push.apple.com → 同样 BadJwtToken）。
-# 故对 Apple 端点完全绕开 pywebpush 的 VAPID 生成，自己签 JWT 经 headers
-# 传入（不传 vapid_claims/vapid_private_key，pywebpush 便不会覆盖 headers）。
-# 见 _build_apple_jwt。其他推送服务（FCM/Mozilla/WNS）不由此路径。
-_APPLE_HOSTS = ("web.push.apple.com",)
+# Apple 拒绝 subject 为 localhost 或 mDNS (.local) 等非公网域名（2026-08-15
+# 实锤：VAPID_CLAIM_MAILTO=mailto:xiaoxi@yinghai.local → 恒 BadJwtToken，
+# 改真实域名 mailto:admin@selena0603.xyz → 201）。此处做启动守卫。
+_NON_PUBLIC_HOST_HINTS = ("localhost", ".local", ".lan", ".internal")
 
 
-def _is_apple_endpoint(endpoint: str) -> bool:
-    """判断订阅端点是否属于 Apple Web Push。"""
-    try:
-        host = (urlparse(endpoint).hostname or "").lower()
-    except Exception:
-        return False
-    return any(host == h or host.endswith("." + h) for h in _APPLE_HOSTS)
-
-
-def _base64url(data: bytes) -> str:
-    """base64url 编码（无填充），与 VAPID JWT 一致。"""
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _build_apple_jwt(s) -> str:
-    """构造 Apple Web Push 的 `vapid <JWT>` 头（见 _APPLE_HOSTS 的说明）。
-
-    header: {"typ","alg","kid"}，kid = VAPID 公钥（base64url）；
-    claims: aud = 网站 origin（PUSH_SITE_ORIGIN）、exp、sub。
-    ECDSA P-256 (ES256) 签名，r||s 各 32 字节。
-    """
-    key = serialization.load_der_private_key(
-        b64urldecode(s.vapid_private_key.encode()), password=None
-    )
-    header = {"typ": "JWT", "alg": "ES256", "kid": s.vapid_public_key}
-    claims = {
-        "aud": s.push_site_origin,
-        "exp": int(time.time()) + 12 * 3600,
-        "sub": s.vapid_claim_mailto,
-    }
-    head = _base64url(json.dumps(header, separators=(",", ":")).encode())
-    body = _base64url(
-        json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
-    )
-    token = f"{head}.{body}".encode()
-    der_sig = key.sign(token, ec.ECDSA(hashes.SHA256()))
-    r, ss = ec_utils.decode_dss_signature(der_sig)
-    sig = _base64url(r.to_bytes(32, "big") + ss.to_bytes(32, "big"))
-    return "vapid " + head + "." + body + "." + sig
+def _validate_subject(subject: str) -> None:
+    """校验 VAPID subject host 是否会被 Apple 拒绝，违规只告警不阻断。"""
+    if not subject or "://" not in subject and not subject.startswith("mailto:"):
+        return
+    host = subject.split(":", 2)[-1]
+    host = host.split("/", 1)[0]
+    host = host.rsplit("@", 1)[-1].lower() if "@" in host else host.lower()
+    for hint in _NON_PUBLIC_HOST_HINTS:
+        if host == hint.lstrip(".") or host.endswith(hint):
+            log.warning(
+                "VAPID subject host '%s' 非公网域名，Apple 会以 BadJwtToken "
+                "拒绝推送。请将 VAPID_CLAIM_MAILTO 改为真实域名。", host,
+            )
+            return
 
 
 def _get_vapid_claims() -> dict:
-    """构建 VAPID 声明（非 Apple 端点用，Apple 走 _build_apple_jwt）。
+    """构建 VAPID 声明。
 
     注意：webpush_async 会原地修改传入的 claims 字典（填充 aud/exp），
     因此每次调用都必须传入一个全新的字典，不能在多个订阅间共享。
     """
-    return {"sub": get_settings().vapid_claim_mailto}
+    claims = {"sub": get_settings().vapid_claim_mailto}
+    _validate_subject(claims["sub"])
+    return claims
 
 
 def _is_stale_subscription(exc: WebPushException) -> bool:
@@ -165,43 +139,19 @@ async def send_push(title: str, body: str, url: str = "/") -> int:
             },
         }
         try:
-            if _is_apple_endpoint(endpoint):
-                # Apple 端点：自己签带 kid 的 JWT，经 headers 传入
-                # （见 _APPLE_HOSTS 说明）；不传 vapid_claims 以免 pywebpush
-                # 覆盖 headers。缺 PUSH_SITE_ORIGIN 时无法构造合法 aud，失败。
-                origin = s.push_site_origin
-                if not origin:
-                    log.warning(
-                        "Apple 端点但未配置 PUSH_SITE_ORIGIN，推送无法通过校验: %s",
-                        endpoint[:50],
-                    )
-                    return (
-                        "failed",
-                        sub_id,
-                        endpoint,
-                        WebPushException("Apple endpoint requires PUSH_SITE_ORIGIN"),
-                    )
-                await webpush_async(
-                    subscription_info=subscription_info,
-                    data=payload,
-                    headers={"Authorization": _build_apple_jwt(s)},
-                    timeout=_PUSH_TIMEOUT,
-                    ttl=86400,
-                )
-            else:
-                await webpush_async(
-                    subscription_info=subscription_info,
-                    data=payload,
-                    vapid_private_key=s.vapid_private_key,
-                    vapid_claims=_get_vapid_claims(),  # 每次全新字典，见函数说明
-                    timeout=_PUSH_TIMEOUT,
-                    # TTL 必须显式给非零值：pywebpush 默认 ttl=0，
-                    # 而 WNS（Windows 推送服务）在默认 cache-policy 下
-                    # 收到 TTL: 0 会返回 400 "Ttl value conflicts with
-                    # X-WNS-Cache-Policy"，导致所有 Windows 设备收不到推送。
-                    # 86400s = 设备离线时通知最多保留一天。
-                    ttl=86400,
-                )
+            await webpush_async(
+                subscription_info=subscription_info,
+                data=payload,
+                vapid_private_key=s.vapid_private_key,
+                vapid_claims=_get_vapid_claims(),  # 每次全新字典，见函数说明
+                timeout=_PUSH_TIMEOUT,
+                # TTL 必须显式给非零值：pywebpush 默认 ttl=0，
+                # 而 WNS（Windows 推送服务）在默认 cache-policy 下
+                # 收到 TTL: 0 会返回 400 "Ttl value conflicts with
+                # X-WNS-Cache-Policy"，导致所有 Windows 设备收不到推送。
+                # 86400s = 设备离线时通知最多保留一天。
+                ttl=86400,
+            )
             return ("ok", sub_id, endpoint, None)
         except WebPushException as e:
             return ("failed", sub_id, endpoint, e)

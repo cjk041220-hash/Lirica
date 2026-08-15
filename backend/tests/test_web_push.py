@@ -6,7 +6,6 @@
 - save_subscription 先查后插，并发订阅同一 endpoint 会触发 IntegrityError。
 """
 import asyncio
-import time
 
 import pytest
 from pywebpush import WebPushException
@@ -161,119 +160,64 @@ async def test_send_push_non_410_failure_keeps_subscription(
     assert (await cursor.fetchone())[0] == 2  # 两个订阅都保留
 
 
-# ── Apple VAPID 自定义 JWT（2026-08-15 iOS 403 回归）────────────
-# Apple 要求 JWT header 带 kid + aud=网站 origin，pywebpush/py_vapid 都做不了，
-# 所以对 Apple 端点走 _build_apple_jwt 自签 JWT，经 headers 传入（不走
-# vapid_claims/vapid_private_key）。以下测试用真实生成的 P-256 密钥验证。
-
-import base64
-import json
-
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+# ── VAPID subject 域名守卫（2026-08-15 iOS BadJwtToken 根因回归）──
+# 真正根因：VAPID_CLAIM_MAILTO 用 `.local` 域名，Apple 拒绝非公网域名
+# subject → 恒 BadJwtToken（改真实域名 mailto:admin@selena0603.xyz → 201）。
+# 修复即：subject 用真实域名 + _validate_subject 启动守卫。aud 由 pywebpush
+# 按 RFC 8292 从 endpoint 取 origin（对 Apple 即 https://web.push.apple.com），
+# 无需任何自定义 JWT——v2.1 的「kid + 网站 origin aud」覆盖是错误方向，已回滚。
 
 
-def _decode_b64url(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+def test_subject_guard_warns_on_local_domain(caplog):
+    """subject host 为 .local / localhost 等非公网域名 → 告警（防复发）。"""
+    from utils.web_push import _validate_subject
+
+    with caplog.at_level("WARNING", logger="utils.web_push"):
+        _validate_subject("mailto:xiaoxi@yinghai.local")
+        _validate_subject("mailto:test@localhost")
+    assert "非公网域名" in caplog.text
+    assert "BadJwtToken" in caplog.text
 
 
-def _gen_vapid_keys():
-    """生成一对真实可用的 VAPID 密钥（私钥 DER base64url + 公钥点 base64url）。"""
-    key = ec.generate_private_key(ec.SECP256R1())
-    priv_der = key.private_bytes(
-        serialization.Encoding.DER,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    )
-    priv_b64 = base64.urlsafe_b64encode(priv_der).decode()
-    pub = key.public_key().public_bytes(
-        serialization.Encoding.X962,
-        serialization.PublicFormat.UncompressedPoint,
-    )
-    pub_b64 = base64.urlsafe_b64encode(pub).decode()
-    return priv_b64, pub_b64
+def test_subject_guard_passes_public_domain(caplog):
+    """真实公网域名 subject → 不告警。"""
+    from utils.web_push import _validate_subject
+
+    with caplog.at_level("WARNING", logger="utils.web_push"):
+        _validate_subject("mailto:admin@selena0603.xyz")
+        _validate_subject("https://selena0603.xyz")
+    assert "非公网域名" not in caplog.text
 
 
-async def test_build_apple_jwt_has_kid_and_site_origin_aud(vapid_enabled, monkeypatch):
-    """Apple JWT：header 带 kid（=公钥 base64url）+ alg ES256，claims.aud=网站 origin。"""
-    from utils import web_push
-
-    priv, pub = _gen_vapid_keys()
-    s = web_push.get_settings()
-    monkeypatch.setattr(s, "vapid_private_key", priv)
-    monkeypatch.setattr(s, "vapid_public_key", pub)
-    monkeypatch.setattr(s, "push_site_origin", "https://selena0603.xyz")
-
-    auth = web_push._build_apple_jwt(s)
-    assert auth.startswith("vapid ")
-    head, body, _ = auth.split()[1].split(".")
-
-    header = json.loads(_decode_b64url(head))
-    assert header["alg"] == "ES256"
-    assert header["kid"] == pub  # Apple 靠 header 里的 kid 找订阅公钥
-
-    claims = json.loads(_decode_b64url(body))
-    assert claims["aud"] == "https://selena0603.xyz"  # 不是 web.push.apple.com
-    assert claims["sub"] == s.vapid_claim_mailto
-    assert claims["exp"] > int(time.time())
-
-
-async def test_send_push_apple_uses_headers_path(patch_db, vapid_enabled, monkeypatch):
-    """Apple 订阅：走自定义 JWT headers，不传 vapid_claims/private_key（pywebpush 不覆盖）。"""
-    from utils import web_push
-
-    priv, pub = _gen_vapid_keys()
-    s = web_push.get_settings()
-    monkeypatch.setattr(s, "vapid_private_key", priv)
-    monkeypatch.setattr(s, "vapid_public_key", pub)
-    monkeypatch.setattr(s, "push_site_origin", "https://selena0603.xyz")
-
-    await web_push.save_subscription("https://web.push.apple.com/QAWlO8", "p1", "a1")
-
-    calls = []
-    monkeypatch.setattr(web_push, "webpush_async", _fake_webpush_recorder(calls))
-
-    sent = await web_push.send_push("标题", "正文")
-    assert sent == 1
-    kw = calls[0]
-    assert kw["headers"]["Authorization"].startswith("vapid ")
-    assert "vapid_claims" not in kw  # 不触发 pywebpush 的 VAPID 生成
-    assert "vapid_private_key" not in kw
-    assert kw["timeout"] == web_push._PUSH_TIMEOUT
-
-
-async def test_send_push_apple_without_origin_reports_failure(
+async def test_send_push_uses_configured_subject_for_all_endpoints(
     patch_db, vapid_enabled, monkeypatch
 ):
-    """Apple 端点但未配置 PUSH_SITE_ORIGIN：明确失败返回 0，不崩溃、不发请求。"""
+    """任何端点（含 Apple）都走 pywebpush vapid_claims 路径，sub=配置值。
+
+    回归：v2.1 曾对 Apple 端点改走自定义 headers/JWT，实测方向错误——
+    Apple 与 RFC 8292 一致（aud=endpoint origin），pywebpush 默认即正确，
+    只需 sub 用真实域名。此测试钉死「不搞特殊化」。
+    """
     from utils import web_push
 
-    await web_push.save_subscription("https://web.push.apple.com/ABC", "p1", "a1")
+    s = web_push.get_settings()
+    monkeypatch.setattr(s, "vapid_claim_mailto", "mailto:admin@selena0603.xyz")
+
+    for ep in (
+        "https://web.push.apple.com/ABC",
+        "https://fcm.googleapis.com/fcm/send/x",
+    ):
+        await web_push.save_subscription(ep, "p1", "a1")
 
     calls = []
     monkeypatch.setattr(web_push, "webpush_async", _fake_webpush_recorder(calls))
 
     sent = await web_push.send_push("标题", "正文")
-    assert sent == 0
-    assert calls == []
-
-
-async def test_send_push_non_apple_keeps_pywebpush_vapid_path(
-    patch_db, vapid_enabled, monkeypatch
-):
-    """非 Apple 端点：仍走 pywebpush 的 vapid_claims 路径（FCM/Mozilla/WNS 不受影响）。"""
-    from utils import web_push
-
-    await web_push.save_subscription("https://fcm.googleapis.com/fcm/send/x", "p1", "a1")
-
-    calls = []
-    monkeypatch.setattr(web_push, "webpush_async", _fake_webpush_recorder(calls))
-
-    sent = await web_push.send_push("标题", "正文")
-    assert sent == 1
-    kw = calls[0]
-    assert kw["vapid_claims"] == {"sub": web_push.get_settings().vapid_claim_mailto}
-    assert "headers" not in kw or "Authorization" not in kw.get("headers", {})
+    assert sent == 2
+    for kw in calls:
+        assert kw["vapid_claims"] == {"sub": "mailto:admin@selena0603.xyz"}
+        assert kw["vapid_private_key"] == "test-private-key"
+        assert "headers" not in kw or "Authorization" not in kw.get("headers", {})
 
 
 async def test_send_push_timeout_error_does_not_crash(
