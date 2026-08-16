@@ -205,6 +205,66 @@ async def test_resolve_returns_sid_for_new_era(monkeypatch, tmp_db):
     assert sid.startswith("e-")
 
 
+async def test_resolve_new_era_preinserts_session_row(tmp_db):
+    """C-1：new_era 分支预插会话行——第二个竞态方命中它而非再开新 era。
+
+    竞态场景：早安 cron 与启动对齐的心跳（或任何两条主动消息任务）同
+    分钟并发 resolve，都看到「无开放 era」。修复前各自生成新 era id 且
+    都允许开场问候 → 双开两条「小汐的日记」；修复后第一个 resolve 立即
+    预插 chat_sessions 行（is_era=1、无消息），第二个 resolve 的
+    get_open_era_id 命中它 → 降级为追加（era, sid），双开窗口关闭。
+    """
+    await tmp_db.execute(
+        "UPDATE life_state SET last_seen_at = '2026-08-09 08:00' WHERE id = 1"
+    )
+    await tmp_db.commit()
+
+    from era import resolve_proactive_target
+
+    # 第一个竞态方：new_era → 预插行
+    kind1, sid1, opener1 = await resolve_proactive_target(tmp_db, NOW, 45)
+    assert (kind1, opener1) == ("new_era", True)
+
+    # 预插行已落库：is_era=1、标题日记式、无消息 → 对第二个竞态方可见
+    cursor = await tmp_db.execute(
+        "SELECT id, is_era, title FROM chat_sessions WHERE id = ?",
+        (sid1,),
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row[1] == 1
+    assert row[2].startswith("小汐的日记 · ")
+
+    # 第二个竞态方：命中第一个预插的 era → 追加而非再开
+    kind2, sid2, opener2 = await resolve_proactive_target(tmp_db, NOW, 45)
+    assert (kind2, sid2, opener2) == ("era", sid1, False)
+
+    # 库里仍只有一条 era 会话行（无双开）
+    cursor = await tmp_db.execute(
+        "SELECT COUNT(*) FROM chat_sessions WHERE is_era = 1"
+    )
+    assert (await cursor.fetchone())[0] == 1
+
+
+async def test_resolve_new_era_preinsert_failure_still_returns_sid(monkeypatch, tmp_db):
+    """C-1 降级：预插写失败（如并发锁异常）不得吞掉 new_era 结果——
+    宁可回到修复前行为（可能双开），也不让主动消息整体失败。"""
+    async def fake_target(conn, now_dt, timeout_minutes):
+        return ("new_era", None, True)
+
+    monkeypatch.setattr("era.get_proactive_target", fake_target)
+
+    def boom():
+        raise RuntimeError("锁已损坏")
+
+    monkeypatch.setattr("database.core.get_write_lock", boom)
+
+    from era import resolve_proactive_target
+    kind, sid, opener = await resolve_proactive_target(tmp_db, NOW, 45)
+    assert (kind, opener) == ("new_era", True)
+    assert sid.startswith("e-")
+
+
 # ── append_proactive_turn：三写一推 ───────────────────────────
 
 class _FakeAgent:

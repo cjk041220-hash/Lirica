@@ -1,5 +1,76 @@
 # CHANGELOG
 
+## 2026-08-14 · 前端交互与无障碍批次（Web Interface Guidelines 审查）
+
+背景：按 Vercel Web Interface Guidelines 全面审查前端，整体基线很高
+（焦点圈定 / reduced-motion / 骨架屏 / 双击确认 / 安全区 / overscroll
+均已到位），本批修复审查发现的缺口。另：意外拉起的调试实例曾覆盖
+life_state（详见审计报告），已重置回 seed 基线（mood_changed_at 置空，
+下次心跳自由选新心情）。
+
+- **把手键盘可达性**（ChatPanel）：拖拽把手此前纯指针手势——补
+  `role="slider"` + `tabIndex` + aria-valuemin/max/now/text，方向键
+  ±5vh 步进（夹 10–85），Enter/Space 触发与双击同款三档快切
+  （cycleHeight 抽公用）。新增 ChatPanel.test.jsx 6 用例钉住。
+- **长文本断行**（MessageBubble）：用户气泡 / 独处消息 / 工具结果
+  补 `break-words`——whitespace-pre-wrap 只在空格处折行，连续长串
+  （长链接、无空格粘贴）会横向撑破气泡。
+- **表单可及性**（CalendarPanel）：什么事/日期/回来的日子/备注四个
+  label 补 htmlFor/id 关联（点击 label 聚焦、读屏可关联）；toast 补
+  `role="status"` + aria-live（保存/删除结果对读屏可闻）。
+- **日历新建表单日期显示**：原始 ISO（2026-08-14）→ 中文「8月14日」，
+  与详情 sheet 标题口径一致。
+- **日历保存 in-flight 态**：saving 期间禁用提交 + 文案「记着呢……」，
+  防双击重复提交（新建有 409 去重兜底，编辑路径此前无防护）。
+- **transition-all 清零**（6 处 → 显式属性列表）：ChatInput 容器/
+  发送钮、ConfigPanel 模型卡/风格档/两枚开关滑块；滑块动画 left →
+  transform（合成器友好）。
+- **聊天输入框**（ChatInput）：补 aria-label（placeholder 不作 label）
+  + autoComplete="off"；令牌输入（ConfigPanel）补 autoComplete="off"
+  + spellCheck={false}（防密码管理器弹窗劫持与拼写纠正 UI）。
+
+回归：vitest 82 passed（+6）/ oxlint 0 / vite build 通过。
+
+## 2026-08-14 · 实战可靠性审计修复批（A-1 / C-1 / D-1）
+
+背景：`docs/AUDIT_FINDINGS_2026-08-13.md`（fresh-eyes 窗口）四维度猎杀
+报告 2 个 P2 + 4 个 Info。本批修复其中 3 项，其余按报告维持留观。
+
+**A-1（P2）session summary 不追更——续聊内容永不进摘要**
+- 位置：`memory/chat_archive.py` `_record_message` + `memory/summarize.py`
+- 根因：summarize 的 `NOT EXISTS` 守卫只摘「无既有摘要」的会话；会话被
+  摘过之后用户用同一 session_id 续聊，摘要永不更新，叙事「最近的谈话」
+  块永远只覆盖第一个关闭窗口的尾部。
+- 修法：`_record_message` 内、`role='user'` 的新消息落库时执行
+  `DELETE FROM session_summaries WHERE session_id=?`（写锁内，单行成本
+  可忽略）。语义即「摘要只代表上一个已关闭窗口，会话有新消息就作废，
+  下次关闭重摘」。era 独处追加（role='assistant'）不触发作废。
+- 测试：新增 `test_new_user_message_invalidates_summary` /
+  `test_assistant_message_keeps_summary`（反向钉死不误伤）。
+
+**C-1（P2）早安 cron 与启动对齐心跳竞态新开双 era（双问候）**
+- 位置：`era.py` `resolve_proactive_target`
+- 根因：两条主动消息任务同分钟并发 resolve 都看到「无开放 era」→ 各开
+  一个 era 且都允许开场问候；旧 era 永久保持开放，SessionsPanel 出现
+  两条同日「小汐的日记」。
+- 修法：`resolve_proactive_target` 判定 `new_era` 时在写锁内立即预插
+  `chat_sessions` 行（is_era=1、标题与 record_solo_message 同款日记式、
+  无消息）。`get_open_era_id` 只要求「is_era 且无 user 消息」，第二个
+  竞态方 resolve 时命中它 → 降级为追加，双开窗口关闭。预插失败只记日志
+  仍返回 new_era（回到修复前行为，不吞消息）。
+- 测试：新增 `test_resolve_new_era_preinserts_session_row`（模拟双竞态
+  方：第二方命中第一方预插行、库中仅一条 era 行）/
+  `test_resolve_new_era_preinsert_failure_still_returns_sid`（降级不吞）。
+
+**D-1（Info）页面可见时主动消息仍弹系统通知（双份呈现）**
+- 位置：`web/public/sw.js` push handler
+- 修法：`clients.matchAll({type:'window'})` 存在 `visibilityState==='visible'`
+  的窗口则跳过 `showNotification`（postMessage 照发，页面端拉未读注入
+  对话流）；后台标签页 / 完全离线仍弹通知。SW 版本 v8→v9 退役旧缓存。
+
+**全量回归**：后端 920 passed / 1 skipped；前端 vitest 76 passed；ruff 0
+问题；oxlint 0 问题；vite build 通过。
+
 ## 2026-08-13 · session summary 层（P1-a）
 
 - 新增 `session_summaries` 表（迁移 v23）：长对话的一句话脉络摘要，独立表不落

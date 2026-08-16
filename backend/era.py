@@ -152,6 +152,31 @@ async def resolve_proactive_target(conn, now_dt: datetime.datetime,
         kind, sid, opener = await get_proactive_target(conn, now_dt, timeout_minutes)
         if kind == "new_era":
             sid = new_era_id()
+            # C-1（2026-08-14）：预插会话行，关闭双 era 竞态窗口。
+            # 竞态场景：早安 cron 与启动对齐的心跳（或任何两条主动消息
+            # 任务）同分钟并发 resolve，都看到「无开放 era」→ 各开一个
+            # era 且都允许开场问候（双份「小汐的日记」）。此处立即在写
+            # 锁内预插 chat_sessions 行（is_era=1、日记式标题、无消息）：
+            # get_open_era_id 只要求「is_era 且无 user 消息」，第二个
+            # 竞态方 resolve 时命中它 → 降级为追加，双开窗口关闭。
+            # 标题与 record_solo_message 同款（chat_archive._diary_title），
+            # 保证 SessionsPanel 呈现一致。预插失败（罕见）只记日志、
+            # 仍返回 new_era——回到修复前行为（宁可可能双开，不吞消息）。
+            try:
+                from database.core import get_write_lock
+                from memory.chat_archive import _diary_title
+
+                now_str = now_dt.strftime(_TIME_FMT)
+                async with get_write_lock():
+                    await conn.execute(
+                        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
+                        "VALUES (?, ?, ?, ?, 1)",
+                        (sid, _diary_title(now_str), now_str, now_str),
+                    )
+                    await conn.commit()
+            except Exception as e:
+                log.warning("era 预插会话行失败（sid=%s，继续按 new_era 处理）: %s",
+                            sid, e)
         return kind, sid, opener
     except Exception as e:
         log.warning("era 路由判定失败，回退为离线开新 era: %s", e)

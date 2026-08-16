@@ -367,6 +367,49 @@ async def test_delete_session_cascades_proactive_rows(archive_db):
     assert (await cursor.fetchone())[0] == 0
 
 
+async def test_new_user_message_invalidates_summary(archive_db):
+    """A-1：会话有新用户消息 → 既有摘要作废（摘要只代表上一个已关闭窗口）。
+
+    语义：summarize 的 NOT EXISTS 守卫使已摘会话永不重摘；若续聊后的
+    新消息不删除摘要，叙事「最近的谈话」块永远只覆盖第一个关闭窗口
+    的尾部。新消息落库时删行，下次空闲关闭时重摘。
+    """
+    await chat_archive.record_user_message("s-re", "第一条")
+    await chat_archive.record_assistant_message("s-re", "回你~")
+    await archive_db.execute(
+        "INSERT INTO session_summaries "
+        "(session_id, summary, msg_count, ended_at, created_at) "
+        "VALUES ('s-re', '旧摘要', 2, '2026-08-11 22:00', '2026-08-11 22:00')"
+    )
+    await archive_db.commit()
+
+    # 用户续聊新消息 → 摘要被作废
+    await chat_archive.record_user_message("s-re", "我又回来了")
+    cursor = await archive_db.execute(
+        "SELECT COUNT(*) FROM session_summaries WHERE session_id = 's-re'"
+    )
+    assert (await cursor.fetchone())[0] == 0
+
+
+async def test_assistant_message_keeps_summary(archive_db):
+    """A-1 反向：助手消息（独处追加等）不触发作废——只有用户新消息
+    才意味着「窗口重开」，era 主动消息追加不该让摘要过期。"""
+    await chat_archive.record_user_message("s-keep", "第一条")
+    await chat_archive.record_assistant_message("s-keep", "回你~")
+    await archive_db.execute(
+        "INSERT INTO session_summaries "
+        "(session_id, summary, msg_count, ended_at, created_at) "
+        "VALUES ('s-keep', '摘要', 2, '2026-08-11 22:00', '2026-08-11 22:00')"
+    )
+    await archive_db.commit()
+
+    await chat_archive.record_assistant_message("s-keep", "追加回复")
+    cursor = await archive_db.execute(
+        "SELECT COUNT(*) FROM session_summaries WHERE session_id = 's-keep'"
+    )
+    assert (await cursor.fetchone())[0] == 1
+
+
 async def test_delete_session_removes_summary(archive_db):
     """级联：删除会话同时删除其 session_summaries 行（P1-a）。"""
     await chat_archive.record_user_message("s-casc", "第一条")

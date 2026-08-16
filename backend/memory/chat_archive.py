@@ -76,6 +76,16 @@ async def _record_message(session_id: str, text: str, role: str, msg_type: str,
                 "VALUES (?, ?, ?, ?, ?)",
                 (session_id, role, text, now, msg_type),
             )
+            # A-1（2026-08-14）：用户新消息到达 = 上一个关闭窗口结束、新窗口
+            # 开启 → 既有摘要作废。摘要只代表「上一次已关闭窗口」，重开就
+            # 重摘；否则 summarize 的 NOT EXISTS 守卫会让续聊内容永不进摘要，
+            # 叙事「最近的谈话」块越聊越旧。只对 role='user' 生效——era 主动
+            # 消息追加（role='assistant'）不触发作废。
+            if role == "user":
+                await conn.execute(
+                    "DELETE FROM session_summaries WHERE session_id = ?",
+                    (session_id,),
+                )
             await conn.commit()
     except Exception:
         log.exception("对话档案写入失败（%s, sid=%s）", role, session_id)

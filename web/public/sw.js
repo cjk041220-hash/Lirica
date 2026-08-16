@@ -1,7 +1,6 @@
-// v8（评审 F6）：'/' 纳入 install 预缓存——v7 的导航回退 caches.match('/')
-// 只在「成功导航过之后」才有 HTML 可回退，弱网/离线首访完成 SW 安装后
-// navigate 会落空白屏。预缓存 '/' 后首装即有保障。bump 版本退役旧缓存。
-const CACHE_NAME = 'xiaoxi-room-v8'
+// v9（2026-08-14 D-1）：push handler 增加「窗口可见则不弹系统通知」。
+// bump 版本退役旧缓存。
+const CACHE_NAME = 'xiaoxi-room-v9'
 
 // install 预缓存清单：'/'（离线首访兜底 HTML）+ 立绘（弱网首访闪图的
 // 主要来源）+ PWA 图标 + 清单。
@@ -135,17 +134,21 @@ self.addEventListener('push', (event) => {
 
   // 合并到单个 waitUntil 链：先通知所有窗口，再展示通知，避免 SW 提前终止丢失 postMessage
   event.waitUntil(
-    Promise.all([
-      clients.matchAll({ type: 'window' }).then(list =>
-        list.forEach(client => client.postMessage({ type: 'PUSH_MESSAGE', data }))
-      ),
-      self.registration.showNotification(title, {
+    clients.matchAll({ type: 'window' }).then(list => {
+      list.forEach(client => client.postMessage({ type: 'PUSH_MESSAGE', data }))
+      // D-1（2026-08-14）：有窗口处于「可见」状态时不再弹系统通知——
+      // 在线路由（kind='session'）消息已实时进对话流，再弹一次是双份
+      // 呈现；后台标签页 / 完全离线时弹通知反而正确。postMessage 照发，
+      // 页面端（usePush 监听）会拉取未读并注入对话流。
+      const anyVisible = list.some(c => c.visibilityState === 'visible')
+      if (anyVisible) return undefined
+      return self.registration.showNotification(title, {
         body,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         vibrate: [100, 50, 100],
-      }),
-    ])
+      })
+    })
   )
 })
 
