@@ -67,6 +67,10 @@ async def _find_eligible(conn, now: datetime.datetime) -> list[tuple[str, str, i
     合格：is_era=0 + 消息数 ≥ _MIN_MESSAGES + 无既有摘要 + 非当前活跃
     会话（life_state.active_session_id 离线即清空，:active 判参数自身）+
     空闲 ≥ _IDLE_HOURS（updated_at ≤ now − _IDLE_HOURS）。LIMIT 上限。
+
+    消息数只算真实对话（msg_type != 'solo'）：solo 是小汐的自言自语，
+    不该把会话顶上合格线，也不该进摘要（与 extract._fetch_pending
+    同纪律，2026-08-17）。
     """
     active = None
     cursor = await conn.execute(
@@ -79,7 +83,8 @@ async def _find_eligible(conn, now: datetime.datetime) -> list[tuple[str, str, i
     cursor = await conn.execute(
         """SELECT s.id, s.updated_at, COUNT(m.id) AS n
            FROM chat_sessions s
-           JOIN chat_messages m ON m.session_id = s.id
+           JOIN chat_messages m
+             ON m.session_id = s.id AND m.msg_type != 'solo'
            WHERE s.is_era = 0
              AND (:active IS NULL OR s.id != :active)
              AND NOT EXISTS (
@@ -97,10 +102,15 @@ async def _find_eligible(conn, now: datetime.datetime) -> list[tuple[str, str, i
 
 
 async def _fetch_session_messages(conn, session_id: str) -> list[tuple[str, str]]:
-    """读会话尾部 ≤ _SUMMARY_MESSAGE_CAP 条消息（时间升序）。"""
+    """读会话尾部 ≤ _SUMMARY_MESSAGE_CAP 条消息（时间升序）。
+
+    排除 solo 自言自语：摘要描的是「这段聊了什么、冷冷的状态」，小汐
+    自己搭话/独白的句子不是冷冷的话，进了摘要就是自言自语污染叙事
+    （与 extract._fetch_pending 同纪律，2026-08-17）。
+    """
     cursor = await conn.execute(
         "SELECT role, content FROM chat_messages "
-        "WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        "WHERE session_id = ? AND msg_type != 'solo' ORDER BY id DESC LIMIT ?",
         (session_id, _SUMMARY_MESSAGE_CAP),
     )
     return list(reversed(await cursor.fetchall()))

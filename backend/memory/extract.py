@@ -75,20 +75,21 @@ _EXTRACT_SYSTEM = """你是小汐的记忆管家。从对话中提炼「值得�
 
 规则：
 1. 只提取确定的事实与变化；猜测、闲聊、寒暄、情绪化的临时说法不要记（noop 最常见）。
-2. content 用一句话写完，具体、可独立理解（用「冷冷」而不是「她」）。
-3. 身份类事实（姓名、生日、学校、家庭住址、身体固定状况）如果已写在冷冷档案里，不要重复提取。
-4. category 优先从现有记忆的类别里选；没有合适的才用：「冷冷喜欢的」「冷冷的信息」「去过的地方」「重要的事」「其他」。
-5. action 语义：
+2. 事实必须出自冷冷本人：只提取冷冷亲口说出（「冷冷：」开头的行）或她明确肯定了的内容。「小汐：」开头的行是小汐自己的话——她的猜测、关心、提醒、推断、自言自语，绝不能提取为关于冷冷的事实。
+3. content 用一句话写完，具体、可独立理解（用「冷冷」而不是「她」）。
+4. 身份类事实（姓名、生日、学校、家庭住址、身体固定状况）如果已写在冷冷档案里，不要重复提取。
+5. category 优先从现有记忆的类别里选；没有合适的才用：「冷冷喜欢的」「冷冷的信息」「去过的地方」「重要的事」「其他」。
+6. action 语义：
    - add：新事实；
    - update：与某条现有记忆矛盾或需合并——填该记忆的 memory_id，content 写新内容（变化就合并成「以前……最近……」一句话）；
    - noop：没有值得长期记住的。
-6. 最多 5 条 add、3 条 update；宁缺毋滥。
-7. importance 只对 add 生效：1-10 打分（1=日常流水一句，5=一般，10=人生大事/重大变化）。update 与 noop 不填。
-8. valence / arousal 只对 add 生效，给这条事实打一个情绪坐标：
+7. 最多 5 条 add、3 条 update；宁缺毋滥。
+8. importance 只对 add 生效：1-10 打分（1=日常流水一句，5=一般，10=人生大事/重大变化）。update 与 noop 不填。
+9. valence / arousal 只对 add 生效，给这条事实打一个情绪坐标：
    - valence 是这件事对冷冷而言的情绪效价：-1=明确的坏事/痛苦（生病、失去、吵架），0=中性事实（日程、信息、偏好陈述），1=明确的好事/快乐（实现愿望、好消息、被爱）；
    - arousal 是这件事的唤醒度：-1=平静低能量（习惯、常态、淡淡的），0=一般，1=激动高能量（惊喜、崩溃、急切）；
    - 中性事实两个都填 0；拿不准就往 0 靠。update 与 noop 不填。
-9. content 里的日期一律写绝对日期（如「8月5日」），禁止写「今天/明天/后天/下周」这类相对时间词——日子会过去，下次读就过期弄混（对话原文里的相对说法，按对话当天的日子换算成绝对日期再写）。"""
+10. content 里的日期一律写绝对日期（如「8月5日」），禁止写「今天/明天/后天/下周」这类相对时间词——日子会过去，下次读就过期弄混（对话原文里的相对说法，按对话当天的日子换算成绝对日期再写）。"""
 
 
 def _create_llm():
@@ -168,6 +169,13 @@ async def _fetch_pending(
     超长预算从旧消息端丢弃：提取价值随对话变旧衰减，批次尾部（最新）
     永远保留；无新消息返回 ([], watermark, None, "")。
 
+    **只取真实对话（msg_type != 'solo'）**：solo 是小汐的自言自语
+    （era 独处日记 / 在线主动搭话），不是冷冷说的话——喂给提取 LLM
+    会把她的猜测、关心、提醒蒸馏成「关于冷冷的事实」（2026-08-17
+    实盘：雷雨天关心的自言自语变成了「冷冷雷雨天容易身体不舒服」
+    的幻觉记忆，冷冷从未说过）。水位线以下的 solo 行因此被永久跳过——
+    与预算超限旧端丢弃同语义，是有意设计。
+
     超量游标语义（体检 S2 修复批次跳跃）：
     - 首跑（watermark == 0）超量 → 跳尾：只消费最新一批，更早历史永久
       跳过（不追历史是有意设计，见模块 docstring）；
@@ -179,7 +187,8 @@ async def _fetch_pending(
       防逐批追账烧 LLM 账单。
     """
     cursor = await conn.execute(
-        "SELECT COUNT(*) FROM chat_messages WHERE id > ?", (watermark,)
+        "SELECT COUNT(*) FROM chat_messages WHERE id > ? AND msg_type != 'solo'",
+        (watermark,),
     )
     pending = (await cursor.fetchone())[0]
     if pending == 0:
@@ -194,7 +203,7 @@ async def _fetch_pending(
     order = "ASC" if drain_oldest else "DESC"
     cursor = await conn.execute(
         f"""SELECT id, session_id, role, content FROM chat_messages
-           WHERE id > ? ORDER BY id {order} LIMIT ?""",
+           WHERE id > ? AND msg_type != 'solo' ORDER BY id {order} LIMIT ?""",
         (watermark, _MAX_EXTRACT_MESSAGES),
     )
     rows = rows_to_dicts(cursor, await cursor.fetchall())

@@ -1107,8 +1107,14 @@ class MemoryManager:
         # 归档占比是存量而非窗口差：SQLite 无归档时间戳（apply_status_decay
         # 不刷 updated_at），占比反映「库是否在膨胀/积压」的慢信号。
         cutoff = (now - datetime.timedelta(days=_HEALTH_WINDOW_DAYS)).strftime(_TIME_FMT)
+        # 与提取口径一致（extract._fetch_pending）：solo 是小汐的自言自语，
+        # 不是与冷冷的对话——既不进提取，也不该计为「有对话」。否则
+        # 冷冷缺席期间 solo 独白会撑起 chats_7d，把「写路径停摆/停滞」
+        # 两条告警变成误报（2026-08-17 solo 不进提取的姐妹修复）
         cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM chat_messages WHERE created_at >= ?", (cutoff,)
+            "SELECT COUNT(*) FROM chat_messages "
+            "WHERE created_at >= ? AND msg_type != 'solo'",
+            (cutoff,),
         )
         chats_7d = (await cursor.fetchone())[0]
         cursor = await self._db.execute(
@@ -1126,8 +1132,12 @@ class MemoryManager:
 
         chats = 0
         if count == 0:
-            # 只在零记忆时才查全历史对话量（兼容旧返回体语义）
-            cursor = await self._db.execute("SELECT COUNT(*) FROM chat_messages")
+            # 只在零记忆时才查全历史对话量（兼容旧返回体语义）。
+            # 同窗口口径排除 solo——只有 solo 独白（冷冷从未来过）不算
+            # 「有对话」，否则「从未写入」告警误报
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE msg_type != 'solo'"
+            )
             chats = (await cursor.fetchone())[0]
 
         abnormal = (

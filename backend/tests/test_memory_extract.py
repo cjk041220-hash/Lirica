@@ -481,6 +481,80 @@ async def test_extract_backlog_safety_valve_jumps_tail(tmp_db, fake_llm):
     assert await extract.get_watermark(tmp_db) == 561
 
 
+# ── solo 自言自语排除（2026-08-17：自言自语误报成冷冷的记忆）──
+#
+# solo 消息（era 独处日记 / 在线主动搭话）是小汐自己的话，不是冷冷说的。
+# 修复前它们被喂给提取 LLM，把小汐的猜测与关心蒸馏成「关于冷冷的事实」
+# ——实盘出现「冷冷在雷雨天容易身体不舒服」的幻觉记忆（冷冷从未说过）。
+
+
+async def _seed_solo(tmp_db, text, session_id="e-test"):
+    """种一条 solo 消息（小汐的自言自语，role 受 CHECK 约束走 assistant）。"""
+    now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
+        "VALUES (?, 'assistant', ?, ?, 'solo')",
+        (session_id, text, now),
+    )
+    await tmp_db.commit()
+
+
+async def test_extract_excludes_solo_from_prompt(tmp_db, fake_llm):
+    """solo 自言自语不进提取提示词；水位线照常推过它的 id。"""
+    await _seed_solo(tmp_db, "雷雨天担心冷冷身体不舒服，想提醒她喝热的")  # id=1
+    await _seed_messages(tmp_db, ["冷冷说她喜欢喝椰子水"])                # id=2
+    fake = fake_llm(text='[{"action": "add", "category": "冷冷喜欢的", "content": "冷冷喜欢喝椰子水"}]')
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["processed"] == 1  # solo 不计入
+    prompt_text = fake.captured[1].content
+    assert "椰子水" in prompt_text
+    assert "雷雨天" not in prompt_text, "自言自语被喂进了提取 LLM"
+    # 水位线推过 solo 的 id（它被永久跳过，同预算超限旧端丢弃语义）
+    assert await extract.get_watermark(tmp_db) == 2
+
+
+async def test_extract_only_solo_batch_is_noop(tmp_db, fake_llm):
+    """水位线后只有 solo（冷冷缺席期的 era 日记窗）：视为无待处理，
+    不调 LLM、不推进水位线。"""
+    await _seed_solo(tmp_db, "第一条自言自语")
+    await _seed_solo(tmp_db, "第二条自言自语")
+    fake_llm(exc=AssertionError("不应调用 LLM"))
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["processed"] == 0
+    assert result["llm_error"] is False
+    assert await extract.get_watermark(tmp_db) == 0
+
+
+async def test_extract_user_reply_after_solo(tmp_db, fake_llm):
+    """冷冷回到 era 时间线接话：只有真实对话进提取，之前的独白不进。"""
+    await _seed_solo(tmp_db, "不知道冷冷最近睡得好不好")     # id=1
+    await _seed_solo(tmp_db, "映海今天也很安静")             # id=2
+    await _seed_messages(tmp_db, ["睡得很好呀，昨天十点就睡了"])  # id=3
+    fake = fake_llm(text="[]")
+
+    result = await extract.extract_new_memories(tmp_db)
+
+    assert result["processed"] == 1
+    prompt_text = fake.captured[1].content
+    assert "十点就睡" in prompt_text
+    assert "不知道" not in prompt_text and "映海" not in prompt_text
+    assert await extract.get_watermark(tmp_db) == 3
+
+
+def test_extract_system_grounds_facts_in_leng_cold_words():
+    """提取提示词规则 2：事实必须出自冷冷本人；小汐的话不得提取为事实。"""
+    from memory.extract import _EXTRACT_SYSTEM
+
+    assert "事实必须出自冷冷本人" in _EXTRACT_SYSTEM
+    assert "小汐：" in _EXTRACT_SYSTEM
+    assert "自言自语" in _EXTRACT_SYSTEM
+    assert "绝不能提取为关于冷冷的事实" in _EXTRACT_SYSTEM
+
+
 # ── 内容长度上限（D4）─────────────────────────────────────────
 
 
@@ -586,6 +660,26 @@ async def test_health_abnormal_stopped_after_prior_memories(tmp_db):
     assert health["added_7d"] == 0
     assert health["chats_7d"] == 10
     assert health["abnormal"] is True
+
+
+async def test_health_solo_not_counted_as_chats(tmp_db):
+    """solo 自言自语不算「有对话」：冷冷缺席期只有 era 独白时，
+    「记忆停滞」告警不误报（提取不消费 solo，口径必须一致）。"""
+    mgr = MemoryManager(tmp_db)
+    await mgr.add("其他", "旧记忆")
+    old = (datetime.datetime.now(_HKT) - datetime.timedelta(days=10)).strftime(_TIME_FMT)
+    await tmp_db.execute(
+        "UPDATE memories SET created_at = ?, updated_at = ?",
+        (old, old),
+    )
+    await tmp_db.commit()
+    # 窗口内只有 solo 独白，没有真实对话
+    await _seed_solo(tmp_db, "想冷冷了")
+    await _seed_solo(tmp_db, "映海今天也很安静")
+
+    health = await mgr.check_memory_health()
+    assert health["chats_7d"] == 0
+    assert health["abnormal"] is False  # 停滞条件被「窗口有对话」挡住
 
 
 async def test_health_window_metrics_and_rates(tmp_db):

@@ -594,7 +594,10 @@ async def health(request: Request):
         # chat_archive.get_db 的 patch 姿势接到 tmp_db，不碰生产库
         conn = await get_db()
         extract_watermark = await get_watermark(conn)
-        cursor = await conn.execute("SELECT MAX(id) FROM chat_messages")
+        # 与提取口径一致：solo 自言自语不在提取范围，不计入积压
+        cursor = await conn.execute(
+            "SELECT MAX(id) FROM chat_messages WHERE msg_type != 'solo'"
+        )
         row = await cursor.fetchone()
         latest_id = (row[0] or 0) if row else 0
         extract_lag = max(0, latest_id - extract_watermark)
