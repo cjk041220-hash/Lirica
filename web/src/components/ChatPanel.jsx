@@ -152,6 +152,12 @@ export default function ChatPanel({ chat, status, displayState }) {
     })
   }, [])
 
+  // 三档快切（双击把手 / 键盘 Enter 空格共用）：默认 38 → 展开 70 →
+  // 收起 10 → 回到默认。抽出来防两处判定逻辑漂移
+  const cycleHeight = useCallback(() => {
+    setHeightVh((h) => (h >= 60 ? 10 : h >= 20 ? 70 : DEFAULT_HEIGHT))
+  }, [])
+
   const onPointerUp = useCallback(() => {
     setIsDragging(false)
     if (dragData.current.raf) {
@@ -168,14 +174,14 @@ export default function ChatPanel({ chat, status, displayState }) {
       // 回读会把面板误缩（2026-08-09 Playwright 实测：双击把手后面板
       // 从 38vh 缩成 ~22vh 即此 bug）
       if (panelRef.current) panelRef.current.style.height = ''
-      // 双击把手三档快切（商业级 1.5）：350ms 内第二击 → 默认 38 →
-      // 展开 70 → 收起 10 → 回到默认。自做手势判定而非 onDoubleClick——
+      // 双击把手三档快切（商业级 1.5）：350ms 内第二击 → 与键盘
+      // Enter/Space 共用 cycleHeight。自做手势判定而非 onDoubleClick——
       // pointerdown 的 preventDefault 在 Chromium 会抑制 dblclick 事件，
       // 且触屏双击本就不可靠。拖拽仍是主路径，双击是「快点到位」的捷径
       const now = Date.now()
       if (now - lastHandleTapRef.current < 350) {
         lastHandleTapRef.current = 0
-        setHeightVh((h) => (h >= 60 ? 10 : h >= 20 ? 70 : DEFAULT_HEIGHT))
+        cycleHeight()
       } else {
         lastHandleTapRef.current = now
       }
@@ -189,7 +195,7 @@ export default function ChatPanel({ chat, status, displayState }) {
       setHeightVh(vh)
       panelRef.current.style.height = '' // 清除内联，交回 state 控制
     }
-  }, [])
+  }, [cycleHeight])
 
   // 手势取消（系统抢走指针等）：只清理现场，不参与双击判定
   const onPointerCancel = useCallback(() => {
@@ -203,6 +209,25 @@ export default function ChatPanel({ chat, status, displayState }) {
     if (panelRef.current) panelRef.current.style.height = ''
   }, [])
 
+  // 键盘可达性：把手是滑块语义——方向键 ±5vh 步进（夹在上下限），
+  // Enter/Space 触发与双击同款的三档快切。此前的拖拽/双击纯指针手势，
+  // 键盘用户既不能调高度也用不了快切
+  const onHandleKeyDown = useCallback(
+    (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        setHeightVh((h) => Math.min(MAX_VH, Math.round(h + 5)))
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+        e.preventDefault()
+        setHeightVh((h) => Math.max(MIN_VH, Math.round(h - 5)))
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        cycleHeight()
+      }
+    },
+    [cycleHeight]
+  )
+
   const collapsed = heightVh < 14
 
   return (
@@ -214,14 +239,23 @@ export default function ChatPanel({ chat, status, displayState }) {
       }`}
       style={{ height: isDragging ? undefined : `${heightVh}dvh` }}
     >
-      {/* 拖拽把手 */}
+      {/* 拖拽把手（slider 语义：方向键调高度，Enter/Space 三档快切） */}
       <div
         data-testid="chat-handle"
+        role="slider"
+        tabIndex={0}
+        aria-label="调整聊天面板高度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_VH}
+        aria-valuemax={MAX_VH}
+        aria-valuenow={Math.round(heightVh)}
+        aria-valuetext={heightVh < 14 ? '已收起' : `约占屏幕 ${Math.round(heightVh)}%`}
         className="flex items-center justify-center pt-3 pb-1.5 cursor-grab active:cursor-grabbing touch-none shrink-0"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
+        onKeyDown={onHandleKeyDown}
       >
         <div
           className={`w-10 h-1 rounded-full transition-colors ${isDragging ? 'bg-strawberry/60' : 'bg-blush'}`}

@@ -138,6 +138,10 @@ export default function ConfigPanel({ config, push, onClose }) {
               placeholder="本机使用可留空；部署后填 XIAOXI_API_TOKEN"
               className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-plum/3 text-[16px] text-plum/80 placeholder:text-plum/25 outline-none focus:bg-plum/5"
               aria-label="访问令牌"
+              /* off：令牌不是登录密码，别让密码管理器弹窗劫持；关拼写检查：
+                 随机串会被标红且部分浏览器弹纠正 UI */
+              autoComplete="off"
+              spellCheck={false}
             />
             <button
               onClick={saveToken}
@@ -160,7 +164,7 @@ export default function ConfigPanel({ config, push, onClose }) {
               <button
                 key={m.id}
                 onClick={() => updateSetting('model', m.id)}
-                className={`flex-1 py-3 px-4 rounded-2xl text-left transition-all duration-250 ${
+                className={`flex-1 py-3 px-4 rounded-2xl text-left transition-[background-color,border-color,box-shadow] duration-250 ${
                   settings.model === m.id
                     ? 'bg-strawberry/12 border-[1.5px] border-strawberry/40 shadow-[0_2px_8px_rgba(242,120,159,0.12)]'
                     : 'bg-plum/3 border-[1.5px] border-transparent'
@@ -192,7 +196,7 @@ export default function ConfigPanel({ config, push, onClose }) {
               <button
                 key={level.value}
                 onClick={() => updateSetting('thinking_intensity', level.value)}
-                className={`flex-1 py-2 rounded-lg text-[12px] transition-all duration-200 ${
+                className={`flex-1 py-2 rounded-lg text-[12px] transition-[background-color,color,box-shadow] duration-200 ${
                   settings.thinking_intensity === level.value
                     ? 'bg-white text-strawberry shadow-sm font-medium'
                     : 'text-plum/40'
@@ -252,8 +256,8 @@ export default function ConfigPanel({ config, push, onClose }) {
               style={{ width: 44, height: 26 }}
             >
               <span
-                className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-200"
-                style={{ left: push.subscribed ? 21 : 3 }}
+                className="absolute top-[3px] left-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200"
+                style={{ transform: push.subscribed ? 'translateX(18px)' : 'translateX(0)' }}
               />
             </button>
           </div>
@@ -300,8 +304,8 @@ export default function ConfigPanel({ config, push, onClose }) {
               style={{ width: 44, height: 26 }}
             >
               <span
-                className="absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-all duration-200"
-                style={{ left: gpsOn ? 21 : 3 }}
+                className="absolute top-[3px] left-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200"
+                style={{ transform: gpsOn ? 'translateX(18px)' : 'translateX(0)' }}
               />
             </button>
           </div>

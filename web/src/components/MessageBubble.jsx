@@ -76,7 +76,7 @@ function MessageBubble({ message }) {
               <summary className="text-[10px] text-plum/55 cursor-pointer select-none hover:text-plum/75">
                 看看找到了什么
               </summary>
-              <p className="text-[10px] text-plum/60 leading-relaxed whitespace-pre-wrap mt-1 bg-plum/3 rounded-lg px-2 py-1.5 max-h-32 overflow-y-auto">
+              <p className="text-[10px] text-plum/60 leading-relaxed whitespace-pre-wrap break-words mt-1 bg-plum/3 rounded-lg px-2 py-1.5 max-h-32 overflow-y-auto">
                 {message.output}
               </p>
             </details>
@@ -99,7 +99,9 @@ function MessageBubble({ message }) {
             列表每滚一帧每个可见气泡的模糊都要对背后内容重采样——滚动路径上
             最贵的操作。面板底已是近不透明奶油色，微差的不透明度足够分层 */}
         <div className="max-w-[75%] bg-white/55 rounded-[18px] rounded-br-[6px] px-4 py-2.5 shadow-[0_1px_4px_rgba(110,74,86,0.05)]">
-          <p className="text-[15px] leading-[1.7] text-plum whitespace-pre-wrap">{content}</p>
+          {/* break-words：whitespace-pre-wrap 只在空格/换行处折行，连续
+              长串（长链接、无空格粘贴）会横向撑破气泡 */}
+          <p className="text-[15px] leading-[1.7] text-plum whitespace-pre-wrap break-words">{content}</p>
         </div>
       </div>
     )
@@ -122,11 +124,11 @@ function MessageBubble({ message }) {
           className={`w-[2.5px] rounded-full shrink-0 my-1 ${isProactive ? 'bg-strawberry/20' : 'bg-strawberry/45'}`}
         />
         <div
-          className={`text-[15px] leading-[1.75] py-0.5 ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}
+          className={`text-[15px] leading-[1.75] py-0.5 break-words ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}
         >
           {timeChip && <p className="text-[10px] text-plum/30 mb-0.5">{timeChip}</p>}
           {isProactive ? (
-            <p className="whitespace-pre-wrap">{content}</p>
+            <p className="whitespace-pre-wrap break-words">{content}</p>
           ) : (
             <Suspense fallback={null}>
               <Markdown components={mdComponents}>{content || ''}</Markdown>

@@ -51,7 +51,7 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
         </div>
       )}
       <div
-        className={`relative flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-300 ${
+        className={`relative flex items-center gap-2.5 rounded-full px-4 h-12 transition-[background-color,box-shadow] duration-300 ${
           focused ? 'bg-white/70 shadow-[0_2px_12px_rgba(242,120,159,0.14)]' : 'bg-white/40'
         } border border-white/50`}
       >
@@ -88,6 +88,8 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           placeholder="和小汐说说话……"
+          aria-label="和小汐说说话"
+          autoComplete="off"
           /* 16px 是 iOS 聚焦不自动缩放页面的阈值（15px 会触发整页放大）；
              enterkeyhint 让软键盘回车键显示「发送」而非通用换行 */
           enterKeyHint="send"
@@ -106,7 +108,7 @@ export default function ChatInput({ onSend, isStreaming, onStop }) {
           <button
             onClick={handleSend}
             disabled={!text.trim()}
-            className={`btn-press w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm transition-all duration-300 ${
+            className={`btn-press w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm transition-[background-color,color,box-shadow,opacity] duration-300 ${
               text.trim()
                 ? 'bg-gradient-to-br from-strawberry to-raspberry text-white shadow-[0_2px_10px_rgba(194,71,123,0.35)]'
                 : 'bg-plum/8 text-plum/20'

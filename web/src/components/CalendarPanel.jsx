@@ -115,6 +115,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   const [similar, setSimilar] = useState(null) // 409 相似提示
   const [confirmDelId, setConfirmDelId] = useState(null)
   const [toast, setToast] = useState(null)
+  const [saving, setSaving] = useState(false) // 表单提交 in-flight（防双击重复提交）
   const [reloadKey, setReloadKey] = useState(0)
   const dialogRef = useFocusTrap()
   // toast 与删除确认态的自动消失定时器：卸载时清理（体检杂项，hook 自洽）
@@ -211,6 +212,7 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   }
 
   const handleSave = async (confirm = false) => {
+    if (saving) return
     const title = form.title.trim()
     if (!title) {
       showToast('先告诉小汐是什么事呀')
@@ -227,26 +229,31 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
       end_date: form.end_date || '',
       event_date: date,
     }
-    if (editing) {
-      const { ok, data } = await updateEvent(editing.id, payload)
+    setSaving(true)
+    try {
+      if (editing) {
+        const { ok, data } = await updateEvent(editing.id, payload)
+        if (ok) {
+          showToast('小汐改好啦 ✏️')
+          setFormOpen(false)
+          setEditing(null)
+          refresh()
+        } else showToast((data && data.detail) || '呜，没改成……')
+        return
+      }
+      const { ok, status, data } = await createEvent({ ...payload, event_date: date, confirm })
       if (ok) {
-        showToast('小汐改好啦 ✏️')
+        showToast(data && data.created === false ? '这件小汐已经记过啦 ✦' : '小汐帮冷冷记下啦 ✨')
         setFormOpen(false)
-        setEditing(null)
+        setSimilar(null)
         refresh()
-      } else showToast((data && data.detail) || '呜，没改成……')
-      return
-    }
-    const { ok, status, data } = await createEvent({ ...payload, event_date: date, confirm })
-    if (ok) {
-      showToast(data && data.created === false ? '这件小汐已经记过啦 ✦' : '小汐帮冷冷记下啦 ✨')
-      setFormOpen(false)
-      setSimilar(null)
-      refresh()
-    } else if (status === 409 && data && data.detail && data.detail.similar) {
-      setSimilar(data.detail.similar) // 相似提示：冷冷点「还是要记」带 confirm 重提
-    } else {
-      showToast((data && ((data.detail && data.detail.message) || data.detail)) || '呜，没记上……')
+      } else if (status === 409 && data && data.detail && data.detail.similar) {
+        setSimilar(data.detail.similar) // 相似提示：冷冷点「还是要记」带 confirm 重提
+      } else {
+        showToast((data && ((data.detail && data.detail.message) || data.detail)) || '呜，没记上……')
+      }
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -604,10 +611,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 {editing ? '改给小汐，也改给自己' : '记给小汐 · 也记给自己'}
               </p>
 
-              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mb-1.5">
+              <label htmlFor="ev-title" className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mb-1.5">
                 什么事
               </label>
               <input
+                id="ev-title"
                 type="text"
                 value={form.title}
                 maxLength={60}
@@ -618,20 +626,24 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
               {!editing && (
                 <>
-                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
+                  <label htmlFor="ev-date" className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
                     日期
                   </label>
-                  <div className="rounded-xl bg-peach-light/25 border border-peach-light px-3.5 py-2.5 text-[13px] text-plum/70">
-                    {selectedDay}
+                  <div
+                    id="ev-date"
+                    className="rounded-xl bg-peach-light/25 border border-peach-light px-3.5 py-2.5 text-[13px] text-plum/70"
+                  >
+                    {selectedDay.slice(5, 7) * 1}月{selectedDay.slice(8, 10) * 1}日
                   </div>
                 </>
               )}
               {editing && (
                 <>
-                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
+                  <label htmlFor="ev-date-edit" className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
                     日期
                   </label>
                   <input
+                    id="ev-date-edit"
                     type="date"
                     value={form.event_date}
                     onChange={(e) => setForm((f) => ({ ...f, event_date: e.target.value }))}
@@ -661,10 +673,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
               {form.event_type === 'trip' && (
                 <>
-                  <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
+                  <label htmlFor="ev-end" className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
                     回来的日子（可选）
                   </label>
                   <input
+                    id="ev-end"
                     type="date"
                     value={form.end_date}
                     min={editing ? editing.event_date : selectedDay}
@@ -700,10 +713,11 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
                 </button>
               </div>
 
-              <label className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
+              <label htmlFor="ev-memo" className="block text-[10px] font-semibold text-plum/45 tracking-[0.24em] mt-4 mb-1.5">
                 备注（可选）
               </label>
               <textarea
+                id="ev-memo"
                 value={form.memo}
                 maxLength={300}
                 onChange={(e) => setForm((f) => ({ ...f, memo: e.target.value }))}
@@ -737,18 +751,21 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
 
               <button
                 onClick={() => handleSave(false)}
-                className="btn-press mt-4 w-full py-3 rounded-2xl font-display text-[13px] tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(194,71,123,0.32)]"
+                disabled={saving}
+                className="btn-press mt-4 w-full py-3 rounded-2xl font-display text-[13px] tracking-[0.12em] text-cream shadow-[0_6px_18px_rgba(194,71,123,0.32)] disabled:opacity-60"
                 style={{ background: 'linear-gradient(135deg,#F2789F,#C2477B)' }}
               >
-                {editing ? '改好啦 ✨' : '记好啦 ✨'}
+                {saving ? '记着呢……' : editing ? '改好啦 ✨' : '记好啦 ✨'}
               </button>
             </div>
           </div>
         )}
 
-        {/* toast */}
+        {/* toast（role=status：保存/删除等异步结果对屏幕阅读器可闻） */}
         {toast && (
           <div
+            role="status"
+            aria-live="polite"
             className="absolute left-1/2 bottom-24 z-[9] -translate-x-1/2 animate-fade-in-up whitespace-nowrap
             rounded-full bg-plum/90 text-peach-light px-5 py-2.5 text-[12px] tracking-wide shadow-[0_10px_30px_rgba(110,74,86,0.4)]"
           >
