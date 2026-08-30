@@ -256,9 +256,24 @@ async def test_real_chain_anchor_round_preserves_narrative():
     )
     captured = model._last_input
     sys_msgs = [m for m in captured if isinstance(m, SystemMessage)]
-    assert "人格锚" in sys_msgs[-1].content
+    assert any("人格锚" in m.content for m in sys_msgs)
     assert len(_anchors(captured)) == 1  # 锚唯一
+    assert "语气铁律" in sys_msgs[-1].content  # PHI 语气重锚在系统段最末尾（最贴近对话）
     assert "爱吃芒果" in "".join(m.content for m in sys_msgs)  # 记忆叙事必须保留
     # 不进 checkpoint：ainvoke 终态 messages 不得含锚（override 纯内存，
     # 结构性钉死——此前仅读码验证）
     assert not _anchors(result["messages"])
+    assert not any("语气铁律" in getattr(m, "content", "") for m in result["messages"])
+
+
+async def test_tone_anchor_middleware_injects_every_call():
+    """_ToneAnchorMiddleware 每轮模型调用均在系统段末尾注入 TONE_ANCHOR。"""
+    from agent.graph import _ToneAnchorMiddleware
+    from agent.soul import TONE_ANCHOR
+
+    mw = _ToneAnchorMiddleware()
+    captured = []
+    await mw.awrap_model_call(_make_request(_make_state()["messages"]), _capture_handler(captured))
+    sys_msgs = [m for m in captured[0] if isinstance(m, SystemMessage)]
+    assert len(sys_msgs) == 2
+    assert sys_msgs[-1].content == TONE_ANCHOR

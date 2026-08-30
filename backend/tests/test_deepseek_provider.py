@@ -93,3 +93,19 @@ def test_create_llm_defaults_unchanged(monkeypatch):
     assert captured["max_tokens"] == 8192
     assert captured["timeout"] == 120
     assert captured["max_retries"] == 2
+
+
+def test_create_llm_passes_presence_and_frequency_penalty(monkeypatch):
+    """支持透传 presence_penalty 与 frequency_penalty。"""
+    captured = {}
+
+    class _FakeLLM:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    import providers.deepseek as ds
+    monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
+
+    create_deepseek_llm(presence_penalty=0.2, frequency_penalty=0.1)
+    assert captured["presence_penalty"] == 0.2
+    assert captured["frequency_penalty"] == 0.1

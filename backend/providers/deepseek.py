@@ -55,6 +55,8 @@ def create_deepseek_llm(
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
 ) -> BaseChatModel:
     """创建 DeepSeek Chat 模型实例。
 
@@ -64,6 +66,8 @@ def create_deepseek_llm(
         max_tokens: 最大输出 token 数；超过模型上限（max_output_tokens）
                     时钳制到上限（防配错越界，当前两模型均为 8192，
                     钳制为恒等——行为零变化，为将来上限不同的模型兜底）
+        presence_penalty: 主题存在惩罚（>0 鼓励涉及新话题，抑制复读）
+        frequency_penalty: 词频惩罚（>0 抑制重复词汇）
     """
     s = get_settings()
     resolved = model or s.deepseek_model
@@ -79,12 +83,18 @@ def create_deepseek_llm(
         if cap and max_tokens > cap:
             max_tokens = cap
 
-    return ChatOpenAI(
-        model=resolved,
-        api_key=s.deepseek_api_key,
-        base_url=s.deepseek_base_url,
-        temperature=temperature if temperature is not None else 0.8,
-        max_tokens=max_tokens or 8192,
-        timeout=_REQUEST_TIMEOUT,
-        max_retries=_MAX_RETRIES,
-    )
+    kwargs = {
+        "model": resolved,
+        "api_key": s.deepseek_api_key,
+        "base_url": s.deepseek_base_url,
+        "temperature": temperature if temperature is not None else 0.8,
+        "max_tokens": max_tokens or 8192,
+        "timeout": _REQUEST_TIMEOUT,
+        "max_retries": _MAX_RETRIES,
+    }
+    if presence_penalty is not None:
+        kwargs["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        kwargs["frequency_penalty"] = frequency_penalty
+
+    return ChatOpenAI(**kwargs)

@@ -382,11 +382,11 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
             f"{weekend_line}"
             f"这是你这段独处时间的第一条消息——先说一句当天的问候开场"
             f"（按现在{period}自然地来，如「早安呀，冷冷」这类），"
-            f"然后接上此刻你心里的话。\n"
+            f"然后接上此刻你心里的话（自己当下的生活细节、真实心事或见闻）。\n"
             f"用一两句话。要自然、简短、符合你的性格。不要问客服式的套话。"
         )
     else:
-        # 独处变体（v21 根因修复）：旧文案永远以「现在是{早晨/下午/晚上}」
+        # 独处变体（v21 根因修复 + 批次 1 扩容）：旧文案永远以「现在是{早晨/下午/晚上}」
         # 开场且无问候约束，LLM 天然产出「早安/午安/晚上好，冷冷」——
         # 积压四五条全是问候就是它造成的。独处时刻写的是内心戏与生活
         # 信息。用户裁定（2026-08-10 修正）：不是完全禁止问好，是别
@@ -396,9 +396,10 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
             f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
             f"{weekend_line}"
             f"现在是你的独处时刻，冷冷不在身边。写此刻你心里的话："
-            f"自己的心理活动、对冷冷生活的惦记与回忆、或你观察到的日子"
-            f"（天气、歌、书、映海的动静）。\n"
+            f"自己正在过的日子（读的书、听的曲子、看番、体感、映海里的动静），"
+            f"或者偶尔对冷冷的真实惦记与回忆。\n"
             f"用一两句话。想她的时候说想她，惦记什么就说惦记什么；"
+            f"严厉禁止套用『偷偷看你那边 / 看着屋顶 / 猜你回屋没 / 有点想你』这类万能模板骨架；"
             f"偶尔想打招呼也可以自然带一句——但别拿「早安/午安/晚上好，"
             f"冷冷」这种固定句式当开场白，一天里也别反复问好。"
             f"你不是自动问候的机器，是在过自己的日子。不要问客服式的套话。"
@@ -410,22 +411,37 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
     # 的活跃事件列表一起注入（memo 里带完整的关心纪律），且自带
     # 24h 防复读——不再在这里硬编码第二路关心提示。
 
-    # 事件关心：有活跃事件时可以围绕它说话（不强制），并防复读——
-    # 把近 24 小时已发的主动消息给她看，同样的关心不许说第二遍
-    # （台风天连发三条「记得带伞」就把惦记变成骚扰了）
+    # 事件关心与防复读（批次 1 升级）：
+    # 1. 读侧收敛：同类天气只取最近 1 条（filter_events_for_prompt），非天气全额保留；
+    # 2. 天气关心冷却：若最近 48h 已发消息提过天气/带伞，天气事件自动冷却不注入；
+    # 3. 防复读升级：把最近 48h 消息喂回，不仅防字面、更硬禁句式与核心意象复用。
     try:
         from utils import events as events_mgr
+        recent = await events_mgr.get_recent_proactive_texts(hours=48, limit=4)
         active_events = await events_mgr.get_active_events(limit=5)
         if active_events:
-            user_prompt += (
-                "\n\n这些天有这些事（可以围绕其中一件关心冷冷，也可以不围绕）：\n"
-                + "\n".join(events_mgr.describe_events(active_events))
+            filtered_events = events_mgr.filter_events_for_prompt(active_events)
+            weather_keywords = ("雨", "伞", "雷", "风", "台风", "天气", "暴雨", "晒", "温")
+            recent_mentioned_weather = bool(recent) and any(
+                any(kw in t for kw in weather_keywords) for t in recent
             )
-        recent = await events_mgr.get_recent_proactive_texts(hours=24, limit=3)
+            if recent_mentioned_weather:
+                filtered_events = [
+                    ev for ev in filtered_events
+                    if ev.get("source") != "weather" and ev.get("event_type") not in ("typhoon", "gale", "thunderstorm", "rainstorm")
+                ]
+            if filtered_events:
+                user_prompt += (
+                    "\n\n这些天有这些事（可以围绕其中一件关心冷冷，也可以不围绕）：\n"
+                    + "\n".join(events_mgr.describe_events(filtered_events))
+                )
         if recent:
             said = "\n".join(f"- 「{t[:60]}」" for t in recent)
             user_prompt += (
-                "\n\n最近 24 小时你已经说过这些话，不要重复同样的话：\n" + said
+                "\n\n你最近已经发过这些主动消息：\n" + said
+                + "\n【防复读与防模板铁律】：不仅绝对不能说重复字句，"
+                "更绝对禁止复用上一条的句式骨架与意象（如果最近用过『看屋顶/窗外』『下雨/带伞/天气』『想你/回屋』，"
+                "这一条必须彻底更换视角与全新意象，写你自己的独立生活、听歌看书、感官细节或完全不同的话题）。"
             )
     except Exception as e:
         # 读取失败只省略事件块，不阻断消息生成（降级纪律同下方历史块）；
@@ -466,9 +482,15 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
 
     # 用独立的轻量 LLM 调用（低 token、无工具）
     # model 跟随用户在控制台的选择（运行时配置），temperature/max_tokens
-    # 保持本任务的轻量值——主动消息不需要 8192 tokens 的发挥空间
+    # 保持本任务的轻量值——主动消息不需要 8192 tokens 的发挥空间；
+    # 批次 1 采样调优：presence_penalty=0.25 鼓励新话题与新意象，温度 0.95 防模板化。
     from api.routes.config import get_current_model
-    llm = create_deepseek_llm(model=get_current_model(), temperature=1.0, max_tokens=200)
+    llm = create_deepseek_llm(
+        model=get_current_model(),
+        temperature=0.95,
+        max_tokens=200,
+        presence_penalty=0.25,
+    )
     response = await llm.ainvoke([
         SystemMessage(content=BASE_PERSONA),
         HumanMessage(content=user_prompt),

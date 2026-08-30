@@ -55,7 +55,7 @@ async def _seed_birthday(db):
 
 async def test_get_range_returns_schedule_types(client, tmp_db):
     await events_mgr.create_event("期末考试", "exam", _d(7))
-    r = await client.get("/api/events", params={"from": _d(3), "to": "2026-08-31"})
+    r = await client.get("/api/events", params={"from": _d(3), "to": _d(10)})
     assert r.status_code == 200
     data = r.json()
     assert data["count"] == 1

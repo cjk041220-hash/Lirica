@@ -393,8 +393,8 @@ async def test_background_llm_calls_use_runtime_model(tmp_db):
 
     calls = []
 
-    def capture_llm(model=None, temperature=None, max_tokens=None):
-        calls.append({"model": model, "temperature": temperature, "max_tokens": max_tokens})
+    def capture_llm(model=None, temperature=None, max_tokens=None, **kwargs):
+        calls.append({"model": model, "temperature": temperature, "max_tokens": max_tokens, **kwargs})
         fake = MagicMock()
         fake.ainvoke = AsyncMock(return_value=MagicMock(content="小汐在想你~冷冷今天还好吗？"))
         return fake

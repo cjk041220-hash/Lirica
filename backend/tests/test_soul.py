@@ -237,6 +237,43 @@ def test_speech_style_positive_and_bottom_lines():
 def test_bottom_lines_keep_lobbying_ban():
     """底线段保留劝选禁令（防回归：将来不许把禁令改写成正向劝说）。"""
     assert "不劝冷冷的感情" in BASE_PERSONA
+
+
+# ── 批次 2 纪律断言：动作括号、破折号、口语张力与 TONE_ANCHOR ──
+
+
+def test_dialogue_examples_action_bracket_discipline():
+    """示例库动作括号纪律（对治 S3 假人感）：小汐每轮回复至多包含 1 个动作括号。"""
+    import re
+
+    from agent.soul import DIALOGUE_EXAMPLES
+
+    for line in DIALOGUE_EXAMPLES.strip().splitlines():
+        if line.startswith("小汐："):
+            brackets = re.findall(r"（[^）]+）", line)
+            assert len(brackets) <= 1, f"示例行包含超过 1 个动作括号: {line}"
+
+
+def test_dialogue_examples_no_dashes():
+    """示例库无破折号（——）。"""
+    from agent.soul import DIALOGUE_EXAMPLES
+    assert "——" not in DIALOGUE_EXAMPLES
+
+
+def test_dialogue_examples_colloquial_emotional_tension():
+    """示例库包含真实口语张力与情绪惊叹（批 2-5：我去/我靠/真的假的/笑死）。"""
+    from agent.soul import DIALOGUE_EXAMPLES
+    assert any(k in DIALOGUE_EXAMPLES for k in ["我去", "我靠", "真的假的", "笑死"])
+    assert "记在日历上了" in DIALOGUE_EXAMPLES  # 记事务不挂万能叮嘱示例
+
+
+def test_tone_anchor_defined_and_contains_rules():
+    """TONE_ANCHOR 常量存在且包含核心语气铁律。"""
+    from agent.soul import TONE_ANCHOR
+    assert "语气铁律" in TONE_ANCHOR
+    assert "短句" in TONE_ANCHOR
+    assert "破折号" in TONE_ANCHOR
+
     assert "不说「你还是选 JK」" in BASE_PERSONA
 
 

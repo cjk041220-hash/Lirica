@@ -78,3 +78,15 @@ def test_mood_style_hint_unknown_returns_none():
     assert mood_style_hint("不存在的心情") is None
     assert mood_style_hint("") is None
     assert mood_style_hint(None) is None
+
+
+def test_time_periods_events_expanded_and_diverse():
+    """时段事件池扩容（批次1：solo 素材井扩容，每个时段 ≥20 条，涵盖小汐自己的生活）。"""
+    for period_key, cfg in TIME_PERIODS.items():
+        events = cfg["events"]
+        assert len(events) >= 20, f"时段 {period_key} 事件池仅 {len(events)} 条，不足 20 条"
+        # 确保包含小汐自己的生活素材（非纯盯冷冷）
+        joined = " ".join(events)
+        assert any(k in joined for k in ["曲", "歌", "书", "番", "甜品", "汤", "光", "星", "浪", "海"]), (
+            f"时段 {period_key} 缺少小汐自己的生活/兴趣/感官元素"
+        )

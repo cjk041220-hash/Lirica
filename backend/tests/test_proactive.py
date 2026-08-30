@@ -136,6 +136,59 @@ async def test_generate_proactive_fallback_on_short_text():
     assert len(result) >= 5
 
 
+async def test_generate_proactive_prompt_anti_template_and_imagery():
+    """独处消息提示词包含反模板与反意象复读铁律（批次 1）。"""
+    import heartbeat
+
+    captured_prompt = None
+
+    class FakeLLM:
+        async def ainvoke(self, messages):
+            nonlocal captured_prompt
+            captured_prompt = messages[1].content
+            return MagicMock(content="在浅滩看了一会儿水纹。")
+
+    with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])):
+        with patch("utils.events.get_recent_proactive_texts", new=AsyncMock(return_value=["偷偷看了一眼你那边"])):
+            await heartbeat._generate_proactive_message("发呆", "在映海里发呆", 15, greeting_allowed=False)
+
+    assert captured_prompt is not None
+    assert "禁止套用『偷偷看你那边" in captured_prompt
+    assert "防复读与防模板铁律" in captured_prompt
+    assert "换" in captured_prompt and "意象" in captured_prompt
+
+
+async def test_generate_proactive_weather_cooldown():
+    """近期主动消息已提过天气时，活跃天气事件自动冷却不注入（对治 S1/S2 天气轰炸）。"""
+    import heartbeat
+
+    captured_prompt = None
+
+    class FakeLLM:
+        async def ainvoke(self, messages):
+            nonlocal captured_prompt
+            captured_prompt = messages[1].content
+            return MagicMock(content="今天翻了一会儿书。")
+
+    mock_events = [
+        {"id": "w1", "title": "2026-08-31 有雷暴", "event_type": "thunderstorm", "event_date": "2026-08-31", "source": "weather"},
+        {"id": "e1", "title": "期末考试", "event_type": "exam", "event_date": "2026-09-02", "source": "llm"},
+    ]
+
+    with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \
+         patch("memory.chat_archive.recent_messages", new=AsyncMock(return_value=[])), \
+         patch("utils.events.get_active_events", new=AsyncMock(return_value=mock_events)):
+        # 最近已发过天气相关的消息
+        with patch("utils.events.get_recent_proactive_texts", new=AsyncMock(return_value=["下雨了，记得带伞哦"])):
+            await heartbeat._generate_proactive_message("平静", "看书", 15, greeting_allowed=False)
+
+    assert captured_prompt is not None
+    assert "有雷暴" not in captured_prompt  # 天气事件冷却过滤
+    assert "期末考试" in captured_prompt   # 非天气事件保留
+
+
+
 # ── 消息存储测试 ──────────────────────────────────────────────
 
 

@@ -298,6 +298,35 @@ class _PersonaAnchorMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+class _ToneAnchorMiddleware(AgentMiddleware):
+    """语气重锚（PHI，批次②，2026-08-30 计划）：每轮模型调用前注入语气铁律。
+
+    依据 SillyTavern Post-History Instructions（PHI）机制与 M7 调研：
+    贴近模型输出的末尾指令优先级高于主提示。本中间件在每次 LLM 模型调用前，
+    将 soul.TONE_ANCHOR 作为轻量 SystemMessage 追加在系统段末尾（贴近对话输入），
+    纯内存改写 request.messages，不进入 checkpoint 持久化。
+    """
+
+    async def awrap_model_call(self, request, handler):
+        from agent.soul import TONE_ANCHOR  # 惰性 import 防环
+
+        if TONE_ANCHOR:
+            tone_msg = SystemMessage(content=TONE_ANCHOR)
+            first_conv = next(
+                (i for i, m in enumerate(request.messages)
+                 if getattr(m, "type", "") != "system"),
+                len(request.messages),
+            )
+            request = request.override(
+                messages=(
+                    request.messages[:first_conv]
+                    + [tone_msg]
+                    + request.messages[first_conv:]
+                )
+            )
+        return await handler(request)
+
+
 # ── Agent 构建 ──────────────────────────────────────────────────
 
 
@@ -335,13 +364,14 @@ def build_agent(
     if pre_model_hook is not None:
         middleware.append(_PreModelHookMiddleware(pre_model_hook))
     # 排序理由（Task 2 Step 0 实测后定）：wrap_model_call 按列表顺序
-    # 组合、第一个为最外层先执行——_PreModelHookMiddleware 在前、锚在
-    # 后，记忆叙事先构造进 request.messages，锚在其上追加（锚的
-    # Author's Note depth 语义要求贴近对话、重申力最强）。两中间件都
-    # 只就地改写 request.messages（纯内存不进 checkpoint），顺序即
-    # 语义：叙事在先、锚在后、互不覆盖。
+    # 组合、第一个为最外层先执行——_PreModelHookMiddleware 在前、身份锚在
+    # 后，记忆叙事先构造进 request.messages，身份锚在其上追加；
+    # 最内层接 _ToneAnchorMiddleware（PHI 语气重锚）：贴紧对话消息前，
+    # 保证每轮模型调用都携带语气铁律。各中间件均纯内存改写 request.messages，
+    # 不进 checkpoint，顺序即语义：叙事 → 身份锚 → 语气锚。
     if anchor_interval is not None:
         middleware.append(_PersonaAnchorMiddleware(anchor_interval))
+    middleware.append(_ToneAnchorMiddleware())
 
     kwargs = dict(
         model=model,
