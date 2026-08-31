@@ -855,6 +855,32 @@ async def test_session_delete_cascade_and_404(client):
     assert resp.status_code == 404
 
 
+async def test_chat_cross_session_proactive_awareness_integration(client, integration_app, tmp_db):
+    """端到端集成验证：主动消息发出后，冷冷在不同 session 回复，系统信息正确注入主动消息感知。"""
+    import datetime
+    from utils.timezone import HKT
+
+    now = datetime.datetime.now(HKT).strftime("%Y-%m-%d %H:%M")
+    await tmp_db.execute(
+        "INSERT INTO proactive_messages (id, content, created_at, status, session_id) "
+        "VALUES ('msg_int_care', '在吗在吗？冷冷，你知道 JK 怎么了吗？', ?, 'delivered', 'e-proactive-sid')",
+        (now,),
+    )
+    await tmp_db.commit()
+
+    captured = _install_capturing_stream(integration_app)
+    resp = await client.post("/api/chat/stream", json={
+        "message": "咋了",
+        "session_id": "s-cross-reply",
+    })
+    events, done = await _collect_sse(resp)
+    assert done
+
+    content = captured["input"]["messages"][0].content
+    assert "在吗在吗？冷冷，你知道 JK 怎么了吗？" in content
+    assert "主动向冷冷发过消息" in content or "主动给冷冷发过消息" in content
+
+
 async def test_security_headers_present():
     """真实 create_app 中间件栈：响应带安全头（公网纵深防御）。
 

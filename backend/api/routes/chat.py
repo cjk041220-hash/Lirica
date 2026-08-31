@@ -235,6 +235,32 @@ async def _resolve_user_content(user_message: str, req: ChatRequest, sid: str) -
         log.warning("异常感知关心整体失败，跳过", exc_info=True)
         care_lines = []
 
+    # 近期主动消息感知（跨会话接话）：若 12 小时内发过主动消息且在不同会话
+    try:
+        conn = await get_db()
+        cursor = await conn.execute(
+            """SELECT content, created_at, session_id FROM proactive_messages
+               WHERE status IN ('delivered', 'stored')
+               ORDER BY created_at DESC, rowid DESC LIMIT 1"""
+        )
+        p_row = await cursor.fetchone()
+        if p_row and p_row[0] and p_row[1]:
+            p_content, p_created_at, p_sid = p_row[0], p_row[1], p_row[2]
+            try:
+                p_dt = datetime.datetime.strptime(p_created_at, "%Y-%m-%d %H:%M").replace(tzinfo=_HKT)
+                elapsed_min = (now_dt - p_dt).total_seconds() / 60
+                if 0 <= elapsed_min <= 720:  # 12 小时以内
+                    if p_sid != sid:
+                        time_desc = "刚刚" if elapsed_min < 5 else f"{int(elapsed_min)}分钟前" if elapsed_min < 60 else f"{int(elapsed_min/60)}小时前"
+                        care_lines.append(
+                            f"你于{time_desc}主动向冷冷发过消息：「{p_content}」。"
+                            f"如果冷冷此句（如『咋了/怎么了/怎么啦/在的』等）是在回复你刚才的主动消息，请顺着你的主动消息自然承接。"
+                        )
+            except Exception:
+                pass
+    except Exception:
+        log.warning("近期主动消息上下文读取失败，跳过", exc_info=True)
+
     return user_message + _system_info_block(now_dt, care_lines, lat_lon)
 
 
@@ -309,6 +335,75 @@ async def _await_with_disconnect_watch(coro, request: Request, sid: str):
     return task.result()
 
 
+async def ensure_checkpoint_hydrated(agent, sid: str, max_messages: int = 20) -> None:
+    """确保 LangGraph Checkpoint 与 SQLite 档案表（chat_messages）对齐。
+
+    若 checkpointer 中当前 thread 为空（如初次接话 era 独处时间线、脚本外部注入、
+    checkpoint 被裁剪或重启），从 chat_archive 读取该会话已有历史消息，
+    灌入 checkpoint，使 LLM 上下文与前端看到的内容完全一致。
+    """
+    if agent is None or not sid:
+        return
+    try:
+        from unittest.mock import AsyncMock, MagicMock
+        if isinstance(agent, (AsyncMock, MagicMock)):
+            return
+    except ImportError:
+        pass
+
+    try:
+        aget_state = getattr(agent, "aget_state", None)
+        if not callable(aget_state):
+            return
+        state = await aget_state({"configurable": {"thread_id": sid}})
+        values = getattr(state, "values", None)
+        existing_msgs = values.get("messages", []) if isinstance(values, dict) else []
+        if not existing_msgs:
+            history = await chat_archive.get_messages(sid, limit=max_messages)
+            if history:
+                nodes = {}
+                get_graph = getattr(agent, "get_graph", None)
+                if callable(get_graph):
+                    try:
+                        g = get_graph()
+                        if hasattr(g, "nodes") and isinstance(g.nodes, dict):
+                            nodes = g.nodes
+                    except Exception:
+                        pass
+                attribution = next(
+                    (n for n in ("model", "agent") if n in nodes),
+                    next(
+                        (
+                            n
+                            for n in nodes
+                            if n not in ("__start__", "__end__", "start", "end", "input", "output")
+                        ),
+                        None,
+                    ),
+                )
+                if attribution is not None and hasattr(agent, "aupdate_state"):
+                    from langchain_core.messages import AIMessage, HumanMessage
+
+                    to_inject = []
+                    for m in history:
+                        content = m.get("content", "")
+                        if not content:
+                            continue
+                        if m.get("role") == "user":
+                            to_inject.append(HumanMessage(content=content))
+                        else:
+                            to_inject.append(AIMessage(content=content))
+                    if to_inject:
+                        await agent.aupdate_state(
+                            {"configurable": {"thread_id": sid}},
+                            {"messages": to_inject},
+                            as_node=attribution,
+                        )
+                        log.info("会话 checkpoint 自动水合完成 (sid=%s, n=%d)", sid, len(to_inject))
+    except Exception as e:
+        log.warning("会话 checkpoint 水合检查失败 (sid=%s): %s", sid, e)
+
+
 # ── 对话端点 ────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
@@ -331,6 +426,9 @@ async def chat(req: ChatRequest, request: Request):
         # 档案写入也在锁内：用户消息在头、助手回复在尾，连点发送时
         # 档案顺序才与真实对话一致（u1,a1,u2,a2 而非 u1,u2,a1,a2）
         async with _session_lock(sid):
+            # 对话上下文水合：若当前会话在 checkpointer 里为空但档案库有历史，预先水合
+            await ensure_checkpoint_hydrated(agent, sid)
+
             # 对话档案：用户消息落库（req.message 不含 GPS 后缀——后缀
             # 只拼进 input_data，档案与前端看到的一致）。失败只记日志
             await chat_archive.record_user_message(sid, req.message)
@@ -406,6 +504,9 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 连点发送时档案顺序才与真实对话一致，否则 u2 会抢在 a1 之前插入
         try:
             async with _session_lock(sid):
+                # 对话上下文水合：若当前会话在 checkpointer 里为空但档案库有历史，预先水合
+                await ensure_checkpoint_hydrated(agent, sid)
+
                 # 对话档案：用户消息落库（req.message 不含 GPS 后缀）。
                 # 客户端在流开始迭代前就断开则不归档——对话没有发生
                 await chat_archive.record_user_message(sid, req.message)

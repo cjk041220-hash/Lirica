@@ -25,6 +25,8 @@ const mockState = vi.hoisted(() => ({
   sessionId: 's-test',
   unseenEraId: null,
   unread: [],
+  userSentCount: 0,
+  isStreaming: false,
   markRead: vi.fn(async () => true),
   checkUnread: vi.fn(async () => []),
   switchSession: vi.fn(async () => {}),
@@ -34,12 +36,13 @@ const mockState = vi.hoisted(() => ({
 vi.mock('./hooks/useChat', () => ({
   useChat: () => ({
     messages: [],
-    isStreaming: false,
+    isStreaming: mockState.isStreaming,
     characterState: 'idle',
     sendMessage: vi.fn(),
     stopStreaming: vi.fn(),
     receiveProactive: mockState.receiveProactive,
     userMsgCount: 0,
+    userSentCount: mockState.userSentCount,
     sessionId: mockState.sessionId,
     newSession: vi.fn(),
     switchSession: mockState.switchSession,
@@ -78,6 +81,8 @@ beforeEach(() => {
   mockState.sessionId = 's-test'
   mockState.unseenEraId = null
   mockState.unread = []
+  mockState.userSentCount = 0
+  mockState.isStreaming = false
   mockState.receiveProactive.mockClear()
   mockState.markRead.mockClear()
   mockState.checkUnread.mockClear()
@@ -169,6 +174,18 @@ describe('App v21 era 时间线（主动消息独立会话）', () => {
     render(<App />)
 
     await waitFor(() => expect(mockState.markRead).toHaveBeenCalledWith(['p-era']))
+    expect(mockState.switchSession).not.toHaveBeenCalled()
+  })
+
+  it('syncEra：用户在当前页面已主动发过消息（userSentCount > 0）→ 不打断，不自动切换', async () => {
+    mockState.unseenEraId = 'e-1'
+    mockState.userSentCount = 1
+    mockState.checkUnread.mockResolvedValue([
+      { id: 'p-era', content: '我在看云。', created_at: '2026-08-09 10:00', session_id: 'e-1' },
+    ])
+    render(<App />)
+
+    // 不应自动切会话
     expect(mockState.switchSession).not.toHaveBeenCalled()
   })
 })

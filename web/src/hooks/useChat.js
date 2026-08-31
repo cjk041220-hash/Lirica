@@ -163,6 +163,8 @@ export function useChat() {
   // App.jsx 的 displayState useMemo 依赖它触发重算，ref 对象引用恒定，
   // 值变不触发重算（此前靠 characterState 变化间接重算才碰巧工作）
   const [userMsgCount, setUserMsgCount] = useState(0)
+  // 本次页面交互中用户主动发送的消息数（区分“正在活跃聊天”与“仅从本地恢复了历史”）
+  const [userSentCount, setUserSentCount] = useState(0)
 
   // 时段问候注入（商业级 2.2）：新会话一句招呼，每会话仅一次
   //（localStorage 记账，刷新不重复）；仅当消息列表仍为空时注入，
@@ -253,8 +255,9 @@ export function useChat() {
     const now = hktNowStr()
     const userMsg = { id: nextId(), role: 'user', content: text, created_at: now }
     setMessages((prev) => [...prev, userMsg])
-    // 深夜唤醒序列：记录用户发送的消息数
+    // 深夜唤醒序列与主动发送记账
     setUserMsgCount((c) => c + 1)
+    setUserSentCount((c) => c + 1)
     setIsStreaming(true)
     clearTimeout(happyTimerRef.current)
     setCharacterState('listening')
@@ -671,6 +674,7 @@ export function useChat() {
     setIsStreaming(false)
     setCharacterState('idle')
     setUserMsgCount(0)
+    setUserSentCount(0)
   }, [])
 
   // 开一段新聊天（满足后端 ^[a-z0-9-]{1,64}$；序号尾缀防同毫秒撞 id）
@@ -756,6 +760,7 @@ export function useChat() {
     stopStreaming,
     receiveProactive,
     userMsgCount,
+    userSentCount,
     sessionId,
     newSession,
     switchSession,

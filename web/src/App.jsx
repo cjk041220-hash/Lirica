@@ -207,19 +207,7 @@ export default function App() {
   // 这段时间的活动和话语」）：status.unseen_era_id 非空 = 小汐在独处
   // 时间线写了新话（仍是碎碎念、且未读）且不是当前会话 → 自动切过去。
   //
-  // 2026-08-30 收窄为「只在当前会话还没有任何消息时自动切」：
-  // 原来的实现是无条件切——冷冷正在某段对话里打字、或只是刚发了一句
-  // 话，小汐一句独白就把她从自己正待着的地方拽走（而且切走时输入框
-  // 里没发出去的内容看着像是丢了）。她不在的那段时间里，当前会话本
-  // 就是空的，此时切过去是「推开门就看见小汐」；她已经在聊了，就让
-  // 她聊完——碎碎念会留在列表里，带「碎碎念」标签，她想看随时点。
-  //
-  // 次序保证：checkUnread 拉全 → 先批量 markRead era 未读（从 unread
-  // state 乐观移除，注入 effect 摸不到它们、不会双写）→ 再 switchSession
-  // 回放展示完整时间线。markRead 失败则保留在 unread，下一轮 status
-  // 刷新 / 新消息到达时重试。
-  const hasMessagesRef = useRef(false)
-  hasMessagesRef.current = chat.messages.length > 0
+  // 冷冷当前正在该窗口积极聊天（正在流式生成或在当前页面发过消息）→ 不打断（碎碎念留在列表里等她点开）
   useEffect(() => {
     const eraId = status.unseen_era_id
     if (!eraId) return
@@ -229,8 +217,8 @@ export default function App() {
       if (eraUnread.length > 0) markRead(eraUnread.map((m) => m.id))
       return
     }
-    // 当前会话已经聊起来了 → 不打断（碎碎念留在列表里等她点开）
-    if (hasMessagesRef.current) return
+    // 冷冷当前正在该窗口积极聊天（正在流式生成或在当前页面发过消息）→ 不打断（碎碎念留在列表里等她点开）
+    if (chat.isStreaming || (chat.userSentCount ?? 0) > 0) return
     let cancelled = false
     ;(async () => {
       try {
@@ -254,7 +242,16 @@ export default function App() {
     // switchSession 内部有「id 相同则跳过」守卫，双跑也安全。
     // chat.messages 刻意不进依赖（见 messagesRef 的同一理由：流式期间
     // 每 token 都会重跑本 effect）——只读它的 ref 镜像。
-  }, [status.unseen_era_id, chat.sessionId, unread, markRead, switchSession, checkUnread])
+  }, [
+    status.unseen_era_id,
+    chat.sessionId,
+    chat.isStreaming,
+    chat.userSentCount,
+    unread,
+    markRead,
+    switchSession,
+    checkUnread,
+  ])
 
   // 心情光色族：跟随 status.mood（5min 轮询 + 心跳后刷新），
   // 不追聊天流程态——环境光是慢变量，聊天瞬间的表情由立绘负责
