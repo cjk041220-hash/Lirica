@@ -629,10 +629,32 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int,
             conn, now_dt, get_settings().presence_timeout_minutes
         )
 
-        # 生成消息（开场允许问候；独处时间线后续/在线搭话走独处变体）
-        content = await _generate_proactive_message(
-            mood, daily_event, hour, greeting_allowed=opener, now_dt=now_dt
-        )
+        # 定制消息队列优先：若队列中有待发消息，优先出队发送
+        custom_content = None
+        try:
+            cursor = await conn.execute(
+                "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row:
+                qid, qtext = row
+                await conn.execute(
+                    "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
+                    (qid,),
+                )
+                await conn.commit()
+                custom_content = qtext
+                log.info("从定制队列提取主动消息 [%d]: %s", qid, custom_content[:40])
+        except Exception as e:
+            log.warning("检查定制主动消息队列失败: %s", e)
+
+        # 生成或提取消息内容
+        if custom_content:
+            content = custom_content
+        else:
+            content = await _generate_proactive_message(
+                mood, daily_event, hour, greeting_allowed=opener, now_dt=now_dt
+            )
 
         # 三写一推（档案 + checkpoint + proactive 行 + 推送）
         await append_proactive_turn(app, target_sid, content, kind=kind,

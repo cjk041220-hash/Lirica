@@ -104,6 +104,13 @@ async def _record_message(session_id: str, text: str, role: str, msg_type: str,
                     "WHERE id = ? AND kind <> 'chat'",
                     (session_id,),
                 )
+                # 冷冷主动接话：自动作废尚未发出的定制预设主动消息（避免对话进行中被生硬插话）
+                try:
+                    await conn.execute(
+                        "UPDATE custom_proactive_queue SET status = 'skipped' WHERE status = 'pending'"
+                    )
+                except Exception:
+                    pass
             await conn.commit()
     except Exception:
         log.exception("对话档案写入失败（%s, sid=%s）", role, session_id)

@@ -125,6 +125,17 @@ CARE_LEDGER_SCHEMA_SQL = """
     );
 """
 
+# 定制主动消息待发队列：支持预置顺序发送专属的主动消息。
+# 发出置 sent，冷冷接话置 skipped，空时自动回退 LLM 生成。
+CUSTOM_PROACTIVE_QUEUE_SQL = """
+    CREATE TABLE IF NOT EXISTS custom_proactive_queue (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        content     TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending'
+    );
+"""
+
 
 # ── 迁移函数注册表 ────────────────────────────────────────────
 # 格式：{目标版本号: 迁移函数}

@@ -213,6 +213,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     from database.migrations import (
         CARE_LEDGER_SCHEMA_SQL,
         CHAT_ARCHIVE_SCHEMA_SQL,
+        CUSTOM_PROACTIVE_QUEUE_SQL,
         EVENTS_SCHEMA_SQL,
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
@@ -242,6 +243,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.executescript(MEMORY_EXTRACT_STATE_SQL)
     # care_ledger（迁移 v19）：异常感知关心冷却台账（Spec B）
     await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
+    # custom_proactive_queue：定制主动消息队列
+    await conn.executescript(CUSTOM_PROACTIVE_QUEUE_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针
