@@ -296,14 +296,15 @@ def test_heartbeat_only_uses_dedicated_archive_read_api():
 # ── era 独处消息（v21：msg_type='solo' + is_era）────────────────
 
 async def test_record_solo_message_creates_era_session(archive_db):
-    """era 会话：is_era=1 + 日记式标题 + msg_type='solo' 消息行。"""
+    """era 会话：is_era=1 + kind='solo' + 碎碎念标题 + msg_type='solo' 消息行。"""
     await chat_archive.record_solo_message("e-20260809", "早安，冷冷。今天映海的云很好看。", is_era=1)
 
     sessions = await chat_archive.list_sessions()
     assert len(sessions) == 1
     assert sessions[0]["id"] == "e-20260809"
     assert sessions[0]["is_era"] is True
-    assert sessions[0]["title"] == "小汐的日记 · 07月27日"  # archive_db 假时钟
+    assert sessions[0]["kind"] == "solo"
+    assert sessions[0]["title"] == "小汐的碎碎念"
 
     messages = await chat_archive.get_messages("e-20260809")
     assert len(messages) == 1
@@ -323,17 +324,41 @@ async def test_record_solo_message_online_route_not_era(archive_db):
 
 
 async def test_solo_appends_do_not_overwrite_era_flag(archive_db):
-    """era 追加：is_era 只在会话创建时写入，后续追加不覆盖标题与标记。"""
+    """era 追加：is_era / kind 只在会话创建时写入，后续追加不覆盖标题与标记。"""
     await chat_archive.record_solo_message("e-x", "第一条", is_era=1)
     await chat_archive.record_solo_message("e-x", "第二条", is_era=1)
 
     cursor = await archive_db.execute(
-        "SELECT is_era, title FROM chat_sessions WHERE id = 'e-x'"
+        "SELECT is_era, kind, title FROM chat_sessions WHERE id = 'e-x'"
     )
-    is_era, title = await cursor.fetchone()
+    is_era, kind, title = await cursor.fetchone()
     assert is_era == 1
-    assert title == "小汐的日记 · 07月27日"  # 标题只设一次
+    assert kind == "solo"      # 追加不改写类型
+    assert title == "小汐的碎碎念"  # 标题只设一次
     assert len(await chat_archive.get_messages("e-x")) == 2
+
+
+async def test_user_reply_promotes_era_to_chat(archive_db):
+    """v24：冷冷在 era 里接话 → kind 提升为 'chat'，来源 is_era 保留。
+
+    这是「接话后列表标签还写着碎碎念」的修复点：类型与来源分家后，
+    前端按 kind 渲染标签，接话即消失；is_era=1 仍记录它生于独处时间线。
+    """
+    await chat_archive.record_solo_message("e-rep", "我在看云。", is_era=1)
+    assert (await chat_archive.list_sessions())[0]["kind"] == "solo"
+
+    await chat_archive.record_user_message("e-rep", "我回来啦")
+
+    session = (await chat_archive.list_sessions())[0]
+    assert session["kind"] == "chat"
+    assert session["is_era"] is True  # 来源不变
+
+
+async def test_normal_session_stays_chat_kind(archive_db):
+    """冷冷自己开的会话 kind 恒为 'chat'（在线搭话也不会被改成 solo）。"""
+    await chat_archive.record_user_message("s-n", "在吗")
+    await chat_archive.record_solo_message("s-n", "（在线搭话）想起你说想喝汤。")
+    assert (await chat_archive.list_sessions())[0]["kind"] == "chat"
 
 
 async def test_record_solo_message_empty_skipped(archive_db):

@@ -58,8 +58,18 @@ def _clean_location_cache():
 
 
 @pytest.fixture
-async def integration_app(tmp_db):
-    """创建完整的 FastAPI 测试实例（带中间件、路由、mock 组件）。"""
+async def integration_app(tmp_db, monkeypatch):
+    """创建完整的 FastAPI 测试实例（带中间件、路由、mock 组件）。
+
+    tmp_db 是通过 monkeypatch 注入各模块的 get_db 接入的（2026-08-30 改）。
+    此前用「手动保存旧值 → 夹具拆时还原」，与用例体内的 monkeypatch 组合
+    会永久泄漏：finalizer 按注册的逆序执行，夹具的手动还原**先**跑（还
+    原成真身），随后 monkeypatch.undo() **后**跑，把它记下的旧值——即本
+    夹具的 mock_get_db——又装了回去。于是整个 session 后续所有调用
+    chat_archive.get_db() 的用例都拿到本夹具那个已关闭的 tmp_db
+    （ValueError: no active connection）。改用 monkeypatch 后，undo 按
+    setattr 的逆序进行，最终稳定还原成真身。
+    """
     from memory.manager import MemoryManager
     from memory.narrative import NarrativeBuilder
 
@@ -121,33 +131,25 @@ async def integration_app(tmp_db):
     import api.routes.chat as chat_route_module
     import heartbeat as hb
     import memory.chat_archive as chat_archive_module
-    original_soul_get_db = soul_module.get_db
-    original_hb_get_db = hb.get_db
-    original_archive_get_db = chat_archive_module.get_db
-    original_chat_get_db = chat_route_module.get_db
-    soul_module.get_db = mock_get_db
-    hb.get_db = mock_get_db
-    chat_archive_module.get_db = mock_get_db
-    chat_route_module.get_db = mock_get_db
 
     # Spec B：care 流水线（care_ledger / chat_messages 时间戳 / 活跃事件）
     # 同样必须接到 tmp_db，否则对话路径会读/写穿生产库
     import agent.care as care_module
     import utils.events as events_module
-    original_care_get_db = care_module.get_db
-    original_events_get_db = events_module.get_db
-    care_module.get_db = mock_get_db
-    events_module.get_db = mock_get_db
+
+    # 一律走 monkeypatch：与用例体内的 monkeypatch 共享同一个 undo 栈，
+    # 逆序还原，不会互相覆盖（详见本夹具 docstring）。
+    for _mod in (
+        soul_module,
+        hb,
+        chat_archive_module,
+        chat_route_module,
+        care_module,
+        events_module,
+    ):
+        monkeypatch.setattr(_mod, "get_db", mock_get_db)
 
     yield app
-
-    # 恢复
-    soul_module.get_db = original_soul_get_db
-    hb.get_db = original_hb_get_db
-    chat_archive_module.get_db = original_archive_get_db
-    chat_route_module.get_db = original_chat_get_db
-    care_module.get_db = original_care_get_db
-    events_module.get_db = original_events_get_db
 
 
 @pytest.fixture
@@ -340,44 +342,6 @@ async def test_chat_message_too_long(client):
     assert resp.status_code == 422
 
 
-async def test_chat_history_returns_messages(client, integration_app):
-    """GET /api/chat/history 从 checkpoint 恢复对话（P1-1）。
-
-    GPS 系统信息后缀应被剥离，纯工具调用的空 AIMessage 应被跳过。
-    """
-    from types import SimpleNamespace
-
-    from langchain_core.messages import AIMessage, HumanMessage
-
-    gps_suffix = (
-        "\n\n[系统信息：冷冷当前 GPS 坐标：纬度 22.3，经度 114.1"
-        "（地图工具的 location 参数请用「经度,纬度」格式：114.1,22.3）。]"
-    )
-    integration_app.state.agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={
-        "messages": [
-            HumanMessage(content="你好呀" + gps_suffix),
-            AIMessage(content="你好！小汐在哦~"),
-            AIMessage(content=""),  # 纯工具调用，无文本 → 跳过
-        ]
-    }))
-
-    resp = await client.get("/api/chat/history?session_id=hist-1")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["messages"] == [
-        {"role": "user", "content": "你好呀"},        # GPS 后缀已剥离
-        {"role": "assistant", "content": "你好！小汐在哦~"},
-    ]
-
-
-async def test_chat_history_empty_thread(client, integration_app):
-    """不存在的会话返回空列表（刷新一个全新 session 不报错）。"""
-    integration_app.state.agent.aget_state = AsyncMock(return_value=None)
-    resp = await client.get("/api/chat/history?session_id=brand-new")
-    assert resp.status_code == 200
-    assert resp.json()["messages"] == []
-
-
 def test_session_lock_reused_per_session():
     """同 session 复用同一把锁（P1-3 并发互斥的基础）。"""
     from api.routes.chat import _session_lock
@@ -471,29 +435,6 @@ async def test_chat_injects_time_block_with_period_word(client, integration_app)
     # 同一个 [系统信息：…] 块：一个前缀、一个收尾括号
     assert content.count("[系统信息：") == 1
     assert content.rstrip().endswith("]")
-
-
-async def test_chat_history_strips_time_and_gps_block(client, integration_app):
-    """时间行 + GPS 行同居的整块，剥离后历史回显干净（补断言）。"""
-    from types import SimpleNamespace
-
-    from langchain_core.messages import AIMessage, HumanMessage
-
-    combined = (
-        "\n\n[系统信息：现在是 2026-08-05 周三 02:14，深夜。\n"
-        "冷冷当前 GPS 坐标：纬度 22.3，经度 114.1"
-        "（地图工具的 location 参数请用「经度,纬度」格式：114.1,22.3）。]"
-    )
-    integration_app.state.agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={
-        "messages": [
-            HumanMessage(content="睡不着" + combined),
-            AIMessage(content="小汐陪你。"),
-        ]
-    }))
-
-    resp = await client.get("/api/chat/history?session_id=hist-time")
-    assert resp.status_code == 200
-    assert resp.json()["messages"][0]["content"] == "睡不着"
 
 
 # ── Spec B：异常感知关心注入（深夜/冷却/降级）──────────────────

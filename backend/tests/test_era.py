@@ -225,15 +225,17 @@ async def test_resolve_new_era_preinserts_session_row(tmp_db):
     kind1, sid1, opener1 = await resolve_proactive_target(tmp_db, NOW, 45)
     assert (kind1, opener1) == ("new_era", True)
 
-    # 预插行已落库：is_era=1、标题日记式、无消息 → 对第二个竞态方可见
+    # 预插行已落库：is_era=1 + kind='solo'、碎碎念标题、无消息
+    # → 对第二个竞态方可见（get_open_era_id 按 kind='solo' 找）
     cursor = await tmp_db.execute(
-        "SELECT id, is_era, title FROM chat_sessions WHERE id = ?",
+        "SELECT id, is_era, kind, title FROM chat_sessions WHERE id = ?",
         (sid1,),
     )
     row = await cursor.fetchone()
     assert row is not None
     assert row[1] == 1
-    assert row[2].startswith("小汐的日记 · ")
+    assert row[2] == "solo"
+    assert row[3] == "小汐的碎碎念"
 
     # 第二个竞态方：命中第一个预插的 era → 追加而非再开
     kind2, sid2, opener2 = await resolve_proactive_target(tmp_db, NOW, 45)

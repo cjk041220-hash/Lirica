@@ -303,17 +303,20 @@ async def test_sessions_requires_token_when_configured():
     assert inner.calls == 1
 
 
-async def test_rate_limit_history_separate_from_chat():
-    """history 走独立桶：聊天桶刷满后，同 IP 的 history 仍可用。
+async def test_rate_limit_sessions_separate_from_chat():
+    """会话档案走独立桶：聊天桶刷满后，同 IP 的 /api/sessions 仍可用。
 
-    顺序回归——_check_rate 首前缀匹配即 break，history 必须排在 chat
-    之前，否则会被 10 次/分钟的聊天桶吞掉（实测复现：刷新+连聊误触 429）。
+    顺序回归——_check_rate 首前缀匹配即 break，各前缀必须有自己的桶，
+    否则刷会话列表会被 10 次/分钟的聊天桶吞掉（该 bug 曾以
+    /api/chat/history 的形态实测复现：刷新页面时连拉历史 + 连聊触发
+    429；history 端点已并入 /api/sessions，回归用例随之改名）。
     """
     ip = "9.9.9.9"
     for _ in range(10):
         assert auth_mod._check_rate("/api/chat", ip)[0] is True
     assert auth_mod._check_rate("/api/chat", ip)[0] is False  # 第 11 次被限
-    assert auth_mod._check_rate("/api/chat/history", ip)[0] is True  # 独立桶不受影响
+    assert auth_mod._check_rate("/api/sessions", ip)[0] is True  # 独立桶不受影响
+    assert auth_mod._check_rate("/api/sessions/s-1/messages", ip)[0] is True
 
 
 def test_retry_after_computed_from_oldest_record():

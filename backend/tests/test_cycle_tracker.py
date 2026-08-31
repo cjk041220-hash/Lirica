@@ -1,4 +1,11 @@
-"""生理期追踪器测试。"""
+"""生理期追踪器测试。
+
+每个用例都用 `monkeypatch.setattr(db_core, "_db", tmp_db)` 注入临时库
+（覆盖 utils.cycle_tracker 里 from database.core import get_db 的引用）。
+2026-08-30 起一律走 monkeypatch——此前是直接赋值且从不还原，跑完本文件
+后 database.core._db 永久指向一个失效连接，会连累后续调用 get_db() 又
+不自己打补丁的用例（详见 test_cycle_tools.py 的模块注释）。
+"""
 
 
 import database.core as db_core
@@ -15,9 +22,9 @@ from utils.cycle_tracker import (
 # ── 记录管理 ──────────────────────────────────────────────────
 
 
-async def test_add_record_inserts(tmp_db):
+async def test_add_record_inserts(tmp_db, monkeypatch):
     """add_record 插入新记录。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     ok = await add_record("2026-04-22")
     assert ok is True
 
@@ -26,9 +33,9 @@ async def test_add_record_inserts(tmp_db):
     assert records[0]["start_date"] == "2026-04-22"
 
 
-async def test_add_record_dedup(tmp_db):
+async def test_add_record_dedup(tmp_db, monkeypatch):
     """同一日期不重复插入，且返回值如实反映是否插入（回归：此前恒返回 True）。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     first = await add_record("2026-04-22")
     second = await add_record("2026-04-22")  # 重复
     assert first is True
@@ -37,9 +44,9 @@ async def test_add_record_dedup(tmp_db):
     assert len(records) == 1
 
 
-async def test_seed_initial_counts_only_real_inserts(tmp_db):
+async def test_seed_initial_counts_only_real_inserts(tmp_db, monkeypatch):
     """回归：seed 计数不再把重复日期虚报为成功插入。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     inserted = await seed_initial_records(
         ["2026-04-22", "2026-05-20", "2026-04-22", "2026-05-20"]
     )
@@ -47,9 +54,9 @@ async def test_seed_initial_counts_only_real_inserts(tmp_db):
     assert len(await get_records()) == 2
 
 
-async def test_seed_initial_records(tmp_db):
+async def test_seed_initial_records(tmp_db, monkeypatch):
     """批量写入初始记录。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     dates = ["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"]
     inserted = await seed_initial_records(dates)
     assert inserted == 4
@@ -61,25 +68,25 @@ async def test_seed_initial_records(tmp_db):
 # ── 对话修正面（delete / move / update_note）────────────────
 
 
-async def test_delete_record_removes(tmp_db):
+async def test_delete_record_removes(tmp_db, monkeypatch):
     """delete_record 删掉记录并返回 True。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18", "这次来得晚")
     assert await delete_record("2026-07-18") is True
     assert await get_records() == []
 
 
-async def test_delete_record_not_found(tmp_db):
+async def test_delete_record_not_found(tmp_db, monkeypatch):
     """删不存在的日期返回 False。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await delete_record("2026-01-01") is False
     assert len(await get_records()) == 1
 
 
-async def test_delete_record_rejects_malformed(tmp_db):
+async def test_delete_record_rejects_malformed(tmp_db, monkeypatch):
     """坏日期不删且不误伤既有记录。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await delete_record("2026-13-40") is False
     assert await delete_record("明天") is False
@@ -87,9 +94,9 @@ async def test_delete_record_rejects_malformed(tmp_db):
     assert len(await get_records()) == 1
 
 
-async def test_move_record_moves_and_keeps_note(tmp_db):
+async def test_move_record_moves_and_keeps_note(tmp_db, monkeypatch):
     """move_record 挪动记录并保留旧备注。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18", "近期周期波动较大")
     assert await move_record("2026-07-18", "2026-07-16") == "moved"
 
@@ -99,9 +106,9 @@ async def test_move_record_moves_and_keeps_note(tmp_db):
     assert records[0]["note"] == "近期周期波动较大"
 
 
-async def test_move_record_target_exists_keeps_old(tmp_db):
+async def test_move_record_target_exists_keeps_old(tmp_db, monkeypatch):
     """新日期已有记录时返回 exists，旧记录不受损（原子性回归）。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18", "旧备注")
     await add_record("2026-07-16", "已有备注")
     assert await move_record("2026-07-18", "2026-07-16") == "exists"
@@ -110,9 +117,9 @@ async def test_move_record_target_exists_keeps_old(tmp_db):
     assert records == {"2026-07-18": "旧备注", "2026-07-16": "已有备注"}
 
 
-async def test_move_record_not_found_creates_no_ghost(tmp_db):
+async def test_move_record_not_found_creates_no_ghost(tmp_db, monkeypatch):
     """旧日期不存在时返回 not_found，且不产生幽灵新记录。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await move_record("2026-01-01", "2026-02-02") == "not_found"
     records = await get_records()
@@ -120,17 +127,17 @@ async def test_move_record_not_found_creates_no_ghost(tmp_db):
     assert records[0]["start_date"] == "2026-07-18"
 
 
-async def test_move_record_same_date_is_exists(tmp_db):
+async def test_move_record_same_date_is_exists(tmp_db, monkeypatch):
     """old==new 归一为 exists 的幂等无操作。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await move_record("2026-07-18", "2026-07-18") == "exists"
     assert len(await get_records()) == 1
 
 
-async def test_move_record_rejects_malformed(tmp_db):
+async def test_move_record_rejects_malformed(tmp_db, monkeypatch):
     """任一端日期非法即拒绝，记录不动。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await move_record("2026-13-40", "2026-07-16") == "not_found"
     assert await move_record("2026-07-18", "明天") == "not_found"
@@ -140,18 +147,18 @@ async def test_move_record_rejects_malformed(tmp_db):
     assert records[0]["start_date"] == "2026-07-18"
 
 
-async def test_update_note_updates(tmp_db):
+async def test_update_note_updates(tmp_db, monkeypatch):
     """update_note 补/改备注。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     assert await update_note("2026-07-18", "那次痛得很厉害") is True
     records = await get_records()
     assert records[0]["note"] == "那次痛得很厉害"
 
 
-async def test_update_note_not_found(tmp_db):
+async def test_update_note_not_found(tmp_db, monkeypatch):
     """改不存在记录的备注返回 False。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     assert await update_note("2026-01-01", "备注") is False
     assert await update_note("2026-13-40", "备注") is False
 
@@ -159,17 +166,17 @@ async def test_update_note_not_found(tmp_db):
 # ── 周期计算 ──────────────────────────────────────────────────
 
 
-async def test_cycle_stats_insufficient_data(tmp_db):
+async def test_cycle_stats_insufficient_data(tmp_db, monkeypatch):
     """记录不足 2 条时返回 None。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await add_record("2026-07-18")
     stats = await get_cycle_stats()
     assert stats is None
 
 
-async def test_cycle_stats_calculates_average(tmp_db):
+async def test_cycle_stats_calculates_average(tmp_db, monkeypatch):
     """正确计算平均周期。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     # 间隔: 28, 26, 33 → 平均 ≈ 29
     await seed_initial_records(["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"])
     stats = await get_cycle_stats()
@@ -180,9 +187,9 @@ async def test_cycle_stats_calculates_average(tmp_db):
     assert stats["records_count"] == 4
 
 
-async def test_cycle_stats_predicts_next(tmp_db):
+async def test_cycle_stats_predicts_next(tmp_db, monkeypatch):
     """正确预测下次日期。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     await seed_initial_records(["2026-04-22", "2026-05-20", "2026-06-15", "2026-07-18"])
     stats = await get_cycle_stats()
 
@@ -195,9 +202,9 @@ async def test_cycle_stats_predicts_next(tmp_db):
 # 原 get_care_context 及其三例窗口测试随 A4 收敛删除。
 
 
-async def test_add_record_rejects_malformed_date(tmp_db):
+async def test_add_record_rejects_malformed_date(tmp_db, monkeypatch):
     """非法日期格式在入口被拒（防止一条坏数据拖垮 get_cycle_stats 全表 strptime）。"""
-    db_core._db = tmp_db
+    monkeypatch.setattr(db_core, "_db", tmp_db)
     assert await add_record("2026-13-40") is False   # 月日越界
     assert await add_record("明天") is False          # 非日期
     assert await add_record("") is False              # 空串

@@ -70,10 +70,10 @@ async def test_status_returns_presence_fields(client, tmp_db):
 
 
 async def test_status_unseen_era_id_when_unread_proactive(client, tmp_db):
-    """era 会话有未读主动消息 → 返回 unseen_era_id（非 null 即切换信号）。"""
+    """era 会话仍是碎碎念（kind='solo'）且有未读主动消息 → 返回 id。"""
     await tmp_db.execute(
-        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
-        "VALUES ('e-1', '小汐的日记 · 08月09日', '2026-08-09 08:00', '2026-08-09 12:00', 1)"
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era, kind) "
+        "VALUES ('e-1', '小汐的碎碎念', '2026-08-09 08:00', '2026-08-09 12:00', 1, 'solo')"
     )
     await tmp_db.execute(
         "INSERT INTO proactive_messages (id, content, created_at, status, session_id) "
@@ -88,12 +88,32 @@ async def test_status_unseen_era_id_when_unread_proactive(client, tmp_db):
 async def test_status_unseen_era_none_when_all_read(client, tmp_db):
     """era 未读全部已读 → unseen_era_id 为 null（不打断当前会话）。"""
     await tmp_db.execute(
-        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
-        "VALUES ('e-2', '小汐的日记 · 08月09日', '2026-08-09 08:00', '2026-08-09 12:00', 1)"
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era, kind) "
+        "VALUES ('e-2', '小汐的碎碎念', '2026-08-09 08:00', '2026-08-09 12:00', 1, 'solo')"
     )
     await tmp_db.execute(
         "INSERT INTO proactive_messages (id, content, created_at, status, read_at, session_id) "
         "VALUES ('p-2', '我在看云。', '2026-08-09 10:00', 'read', '2026-08-09 11:00', 'e-2')"
+    )
+    await tmp_db.commit()
+
+    r = await client.get("/api/status")
+    assert r.json()["unseen_era_id"] is None
+
+
+async def test_status_unseen_era_none_after_user_replied(client, tmp_db):
+    """v24：era 被接话（kind='chat'）→ 不再当作「小汐独处说了话」的信号。
+
+    来源仍是 era（is_era=1），但类型已经变成对话——此时她正在这段会话
+    里聊着，切换信号会把她从自己刚说话的地方拽走。
+    """
+    await tmp_db.execute(
+        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era, kind) "
+        "VALUES ('e-3', '小汐的碎碎念', '2026-08-09 08:00', '2026-08-09 12:00', 1, 'chat')"
+    )
+    await tmp_db.execute(
+        "INSERT INTO proactive_messages (id, content, created_at, status, session_id) "
+        "VALUES ('p-3', '我在看云。', '2026-08-09 10:00', 'delivered', 'e-3')"
     )
     await tmp_db.commit()
 
