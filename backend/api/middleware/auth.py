@@ -34,10 +34,9 @@ _PUBLIC_PATHS = ("/api/push/vapid-key", "/api/health")
 _rate_buckets: dict[str, list[float]] = {}
 
 # 前缀匹配由 _RATE_PREFIXES_LONGEST_FIRST 保证「最长前缀优先」——
-# /api/chat/history 不会被 /api/chat 先吃掉共用聊天的 10 次/分钟桶
-#（实测复现过的 429 误触）。新增前缀无需再记得手工摆顺序。
+# /api/sessions 不会被更短的 /api/s 之类前缀先吃掉；新增前缀无需再
+# 记得手工摆顺序。
 _RATE_LIMITS = {
-    "/api/chat/history": 60,  # 历史只读：独立桶，不与聊天 LLM 成本桶相争
     "/api/chat": 10,          # 聊天：10 次/分钟（LLM 成本防线，不放宽）
     # 配置：30 次/分钟。重建 Agent 只是进程内对象替换，开销很小；
     # 温度滑杆已做 250ms 前端防抖。10 次/分钟对设置页交互过紧

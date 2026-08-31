@@ -372,6 +372,74 @@ async def prune_checkpoints(
     return deleted
 
 
+async def delete_checkpoint_thread(thread_id: str,
+                                   db_path: Path | None = None) -> int:
+    """删除某个 thread 的全部 checkpoint（会话被删除时的对账清理）。
+
+    背景：checkpoint 是 LLM 的实时上下文（LangGraph thread，thread_id
+    就是 session_id），对话档案 chat_messages 才是永久历史。此前
+    delete_session 只清档案四张表，thread 留在 checkpoints.db 里等
+    prune_checkpoints 的 30 天不活跃策略——期间如果冷冷又用同一个
+    session_id 说话（localStorage 记住了它），小汐会带着「这段对话
+    从没被删过」的完整上下文接话，而界面上历史是空的：上下文与界面
+    彻底脱节。删会话就该连上下文一起删。
+
+    与 prune_checkpoints 同款：独立连接打开 checkpoints.db（WAL 下
+    与 AsyncSqliteSaver 并发安全），表名经白名单探测适配
+    langgraph-checkpoint-sqlite 新旧 schema。返回删除的 checkpoint
+    行数；库不存在 / 无任何行时返回 0。异常不上抛——清理是旁路，
+    删不掉档案也已经删干净了，不该让会话删除整体失败。
+    """
+    path = db_path or _CHECKPOINTS_DB_PATH
+    if not path.exists():
+        return 0
+
+    deleted = 0
+    try:
+        async with aiosqlite.connect(str(path)) as conn:
+            await conn.execute("PRAGMA busy_timeout=5000")
+
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+            tables = {r[0] for r in await cursor.fetchall()}
+            if "checkpoints" not in tables:
+                return 0
+
+            # 先清从属表（writes / blobs），再清主表——顺序反过来会
+            # 留下找不到父行的孤儿（本库无 FK 约束，SQLite 不会代劳）
+            writes_table = next(
+                (t for t in ("writes", "checkpoint_writes") if t in tables), None
+            )
+            if writes_table:
+                await conn.execute(
+                    f"DELETE FROM {writes_table} WHERE thread_id = ?",
+                    (thread_id,),
+                )
+            if "checkpoint_blobs" in tables:  # 仅旧 schema 存在
+                await conn.execute(
+                    "DELETE FROM checkpoint_blobs WHERE thread_id = ?",
+                    (thread_id,),
+                )
+
+            cursor = await conn.execute(
+                "DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,)
+            )
+            deleted = cursor.rowcount
+            await conn.commit()
+
+            if deleted > 50:
+                await conn.execute("VACUUM")
+    except Exception as e:
+        log.warning("checkpoint 线程清理失败（thread=%s，档案已删）: %s",
+                    thread_id, e)
+        return 0
+
+    if deleted:
+        log.info("已删除 checkpoint 线程 %s（%d 个 checkpoint）", thread_id, deleted)
+    return deleted
+
+
 # ── 数据库备份 ────────────────────────────────────────────────
 
 _BACKUP_DIR = Path(__file__).parent.parent / "data" / "backups"

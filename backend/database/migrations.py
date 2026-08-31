@@ -88,7 +88,21 @@ log = get_logger(__name__)
 #     （agent/soul.py 近7天互动密度）与批②画像蒸馏查询（memory/profile.py
 #     近30天画像素材）都按 (role='user', created_at) 谓词扫 chat_messages，
 #     无索引时全表扫。组合索引一次覆盖两处；纯索引迁移，无数据语义变更。
-SCHEMA_VERSION = 23
+# v24: 会话「类型」与「来源」分家 — chat_sessions 新增 kind
+#     （'chat' 普通对话 / 'solo' 小汐的碎碎念，可变）+ era 会话标题统一。
+#     此前只有 is_era 一个字段，它本质是**来源**标记（这段会话诞生于
+#     冷冷离线的独处时间线，创建后不可变），却被当成**内容类型**在读
+#     ——于是「小汐的碎碎念」被冷冷接话变成真正的对话后，列表标签仍
+#     然写着碎碎念，永远不更新。kind 补上缺失的可变类型层：
+#       is_era=1, kind='solo'  小汐独处、还没人接话 → 列表标「碎碎念」
+#       is_era=1, kind='chat'  被冷冷接话了 → 它就是一段对话，标签消失
+#       is_era=0, kind='chat'  冷冷自己开的对话（kind 不可能是 solo）
+#     冷冷的第一条消息到达即把 kind 从 'solo' 提升为 'chat'（chat_archive
+#     ._record_message 内与「摘要作废」同一分支）。
+#     存量回填：is_era=1 且尚无 user 消息 → kind='solo'；era 会话标题
+#     统一为「小汐的碎碎念」（旧标题带日期「小汐的日记 · 08月09日」，
+#     与新的时间分组列表重复表达日期，也和 diaries 表的真日记撞名）。
+SCHEMA_VERSION = 24
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -484,13 +498,16 @@ _migrations[7] = _migrate_v7
 #       chat_messages 加 msg_type（'chat' 普通对话 / 'solo' 主动消息的
 #       独处话语——回放时渲染为日记风 + 时间戳）。两列都在共享常量里，
 #       老库由 v21 迁移补列，全新安装直接带列，终态一致。
+# v24：chat_sessions 加 kind（'chat' 对话 / 'solo' 小汐的碎碎念）。
+#       is_era 是来源（不可变），kind 是当前类型（可变）——两者正交。
 CHAT_ARCHIVE_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS chat_sessions (
         id          TEXT PRIMARY KEY,
         title       TEXT NOT NULL DEFAULT '',
         created_at  TEXT NOT NULL,
         updated_at  TEXT NOT NULL,
-        is_era      INTEGER NOT NULL DEFAULT 0
+        is_era      INTEGER NOT NULL DEFAULT 0,
+        kind        TEXT NOT NULL DEFAULT 'chat'
     );
 
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
@@ -508,6 +525,14 @@ CHAT_ARCHIVE_SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session
         ON chat_messages(session_id, id);
 """
+
+# era 会话（小汐的碎碎念）的显示名。三处共用同一个常量，避免漂移：
+# chat_archive 建会话行、era.py 预插行（C-1 竞态防护）、v24 存量回填。
+# 固定文案不带日期——日期由会话列表的时间分组与会话内的时间分隔条
+# 表达，标题再写一遍「08月09日」是重复；且旧格式「小汐的日记 · 08月
+# 09日」与 diaries 表每晚自动生成的真日记几乎同名，两者实为互不相通
+# 的三种东西（真日记 / era 会话 / solo 消息），命名必须收口区分开。
+ERA_SESSION_TITLE = "小汐的碎碎念"
 
 
 async def _migrate_v8(conn: aiosqlite.Connection) -> None:
@@ -1061,6 +1086,54 @@ async def _migrate_v23(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[23] = _migrate_v23
+
+
+# ── 迁移 v24：会话类型与来源分家（kind 列）─────────────────────
+
+async def _migrate_v24(conn: aiosqlite.Connection) -> None:
+    """v24: chat_sessions.kind — 把「当前类型」从「来源」里拆出来。
+
+    is_era 是会话的出生证明（创建时写入、永不改写），kind 是会话现在
+    是什么（冷冷接话即提升为 'chat'）。此前只有前者，于是列表把
+    is_era 当类型用 → 被接话的碎碎念永远顶着「碎碎念」标签。
+
+    三步，全部幂等：
+    1. 补列 kind（老库 ALTER，新库已由 CHAT_ARCHIVE_SCHEMA_SQL 带列）；
+    2. 回填：is_era=1 且还没有 user 消息的 → kind='solo'（其余保持
+       默认 'chat'，含「已被接话的 era」与冷冷自己开的会话）；
+    3. era 会话标题统一为 ERA_SESSION_TITLE（旧日记式标题带日期，与
+       新的时间分组列表重复，也与 diaries 表的真日记撞名）。
+
+    第 2 步的「还没有 user 消息」与旧 get_open_era_id 的判定逐字一致，
+    保证迁移前后「哪些 era 算开放」的答案不变——era 路由不受影响。
+    """
+    cursor = await conn.execute("PRAGMA table_info(chat_sessions)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "kind" not in columns:
+        await conn.execute(
+            "ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'"
+        )
+
+    await conn.execute(
+        """UPDATE chat_sessions
+              SET kind = 'solo'
+            WHERE is_era = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM chat_messages m
+                   WHERE m.session_id = chat_sessions.id AND m.role = 'user'
+              )"""
+    )
+
+    await conn.execute(
+        "UPDATE chat_sessions SET title = ? WHERE is_era = 1 AND title <> ?",
+        (ERA_SESSION_TITLE, ERA_SESSION_TITLE),
+    )
+
+    await conn.commit()
+    log.info("迁移 v24 完成：chat_sessions.kind 已就绪，era 会话标题已统一")
+
+
+_migrations[24] = _migrate_v24
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

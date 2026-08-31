@@ -1,26 +1,36 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconHistory from '../assets/icons/IconHistory'
 import IconWhale from '../assets/icons/IconWhale'
 import { apiFetch } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { bucketOf, formatMessageTime, hktNowStr } from '../utils/time'
 
-// 「今天/今年」按 HKT 判定——后端时间戳是 HKT 文本（utils/timezone），
-// 项目原则是天空/深夜/时间显示全部走 HKT 钟，不跟设备本地时区
-//（Intl 'sv' locale 输出 ISO 风格 "2026-07-27 22:04:33"，可切片取用）
-const hktNow = () =>
-  new Intl.DateTimeFormat('sv', { timeZone: 'Asia/Hong_Kong' }).format(new Date())
+// 单用户陪伴场景：会话量级是「几百条」，一次拉齐比分页体验更好——
+// 前端要按时间连续分组，分页会在翻页处把分组切断。上限只是防御性封顶。
+const LIST_LIMIT = 500
 
-// updated_at 为 HKT「YYYY-MM-DD HH:MM」文本，字典序即时序：
-// 今天 → HH:MM，今年 → MM-DD，更早 → YYYY-MM-DD
-const fmtTime = (s) => {
-  const str = String(s || '')
-  const [date, time] = str.split(' ')
-  if (!date) return ''
-  const now = hktNow()
-  if (date === now.slice(0, 10)) return time || ''
-  if (date.startsWith(now.slice(0, 4))) return date.slice(5)
-  return date
+// 行内是否补一天中的时刻：分组标题已经给出日期，只有「今天/昨天」
+// 这种跨一整天的桶才需要再补 HH:MM（「今天 14:23」比「今天」有用），
+// 「8月」「2025年」这种桶补时刻反而是噪音。
+const SHOWS_CLOCK = new Set(['今天', '昨天'])
+
+/**
+ * 按时间把会话切成连续的分组。
+ *
+ * 后端已按 updated_at DESC 排好序，所以只需顺序扫描、桶 key 一变就
+ * 起一个新分组——不需要先建 Map 再排序，也天然保证「同桶的会话一定
+ * 相邻」（真要做 key→list 的聚合，遇到未排序数据反而会散成多段）。
+ */
+function groupByTime(sessions, nowStr) {
+  const groups = []
+  for (const s of sessions) {
+    const key = bucketOf(s.updated_at, nowStr)
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.items.push(s)
+    else groups.push({ key, items: [s] })
+  }
+  return groups
 }
 
 export default function SessionsPanel({ chat, onClose }) {
@@ -37,7 +47,7 @@ export default function SessionsPanel({ chat, onClose }) {
 
   useEffect(() => {
     let cancelled = false
-    apiFetch('/api/sessions?limit=100')
+    apiFetch(`/api/sessions?limit=${LIST_LIMIT}`)
       .then((res) => (res.ok ? res.json() : { sessions: [] }))
       .then((data) => {
         if (!cancelled) setSessions(Array.isArray(data.sessions) ? data.sessions : [])
@@ -50,6 +60,13 @@ export default function SessionsPanel({ chat, onClose }) {
       cancelled = true
     }
   }, [])
+
+  // 「现在」在面板挂载时取一次：分组标题（今天/昨天/本周）在面板
+  // 打开期间保持一致。中途跨越午夜也不重算——半开的面板里日期分界
+  // 突然跳一下比「慢一拍」更晃眼。
+  const nowStrRef = useRef(null)
+  if (nowStrRef.current === null) nowStrRef.current = hktNowStr()
+  const groups = useMemo(() => groupByTime(sessions, nowStrRef.current), [sessions])
 
   // Esc 关闭（同 MemoriesPanel 的 dialog 语义）
   useEffect(() => {
@@ -156,66 +173,86 @@ export default function SessionsPanel({ chat, onClose }) {
               <span className="text-[12px] text-plum/60">还没有对话呢，去和小汐聊聊吧。</span>
             </div>
           ) : (
-            <div className="space-y-2 pt-1">
-              {sessions.map((s) => {
-                const isCurrent = s.id === chat.sessionId
-                return (
-                  // 行容器用 div role="button"（不用 <button>）——HTML 规范
-                  // 不允许 button 内嵌交互元素，删除按钮需要是真正的 button
-                  <div
-                    key={s.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openSession(s)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        openSession(s)
-                      }
-                    }}
-                    className={`springy w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
-                      isCurrent ? 'bg-strawberry/10 ring-1 ring-strawberry/40' : 'hover:bg-plum/5'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <p className="flex-1 truncate text-[13px] font-medium text-plum/75">
-                        {s.title || '(没有标题)'}
-                      </p>
-                      {/* v21 era 标记：小汐的独处时间线窗口（离线期间主动
-                          消息新开的会话），与冷冷自己的对话区分开 */}
-                      {s.is_era && (
-                        <span className="shrink-0 text-[9px] text-plum/55 bg-plum/8 px-1.5 py-0.5 rounded-full">
-                          小汐的日记
-                        </span>
-                      )}
-                      {isCurrent && (
-                        <span className="shrink-0 text-[9px] text-raspberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
-                          现在
-                        </span>
-                      )}
-                      <span className="shrink-0 text-[10px] text-plum/60">
-                        {fmtTime(s.updated_at)}
-                      </span>
-                      <button
-                        aria-label={confirmId === s.id ? '再点一次确认删除' : '删除这段对话'}
-                        onClick={(e) => handleDelete(e, s.id)}
-                        /* 20px 视觉 + 透明伪元素扩到 44px 点击区（HIG 拇指目标），
-                           伪元素属按钮自身，点击仍命中删除而非行容器 */
-                        className={`btn-press relative shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors after:content-[''] after:absolute after:-inset-3 ${
-                          confirmId === s.id
-                            ? 'bg-red-400/15 text-red-500 text-[9px]'
-                            : 'text-plum/20 hover:text-plum/50 hover:bg-plum/5'
-                        }`}
-                      >
-                        {confirmId === s.id ? '确认?' : <IconClose size={10} />}
-                      </button>
-                    </div>
-                    {s.preview && (
-                      <p className="mt-0.5 truncate text-[11px] text-plum/40">{s.preview}</p>
-                    )}
+            <div className="space-y-3 pt-1">
+              {groups.map((g) => (
+                <div key={g.key}>
+                  {/* 时间分组标题：日期只在分组层说一次，行内不再重复。
+                      粘性吸顶——长列表往下滚时始终知道自己在哪一天。
+                      背景取面板同色的实色奶油（刻意不用 backdrop-filter，
+                      同 .panel-surface 记录的扫掠感教训）。 */}
+                  <p className="sticky top-0 z-10 bg-cream py-1 mb-1 text-[10px] font-medium text-plum/45 tracking-wide">
+                    {g.key}
+                  </p>
+                  <div className="space-y-2">
+                    {g.items.map((s) => {
+                      const isCurrent = s.id === chat.sessionId
+                      // 「碎碎念」标签读 kind（会话**现在**的类型），不读
+                      // is_era（它的来源）。冷冷在独处时间线里接了话，kind
+                      // 就变成 'chat'，标签自然消失——此前读 is_era 的结果
+                      // 是：接话后这段明明已经是对话，标签还永远挂在那儿。
+                      const isSolo = s.kind === 'solo'
+                      const clock = SHOWS_CLOCK.has(g.key)
+                        ? formatMessageTime(s.updated_at)
+                        : ''
+                      return (
+                        // 行容器用 div role="button"（不用 <button>）——HTML 规范
+                        // 不允许 button 内嵌交互元素，删除按钮需要是真正的 button
+                        <div
+                          key={s.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openSession(s)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              openSession(s)
+                            }
+                          }}
+                          className={`springy w-full text-left rounded-xl px-3.5 py-2.5 transition-colors cursor-pointer ${
+                            isCurrent ? 'bg-strawberry/10 ring-1 ring-strawberry/40' : 'hover:bg-plum/5'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <p className="flex-1 truncate text-[13px] font-medium text-plum/75">
+                              {s.title || '(没有标题)'}
+                            </p>
+                            {/* 小汐的碎碎念：她独处时说的话，冷冷还没接话 */}
+                            {isSolo && (
+                              <span className="shrink-0 text-[9px] text-plum/55 bg-plum/8 px-1.5 py-0.5 rounded-full">
+                                碎碎念
+                              </span>
+                            )}
+                            {isCurrent && (
+                              <span className="shrink-0 text-[9px] text-raspberry bg-strawberry/10 px-1.5 py-0.5 rounded-full">
+                                现在
+                              </span>
+                            )}
+                            {clock && (
+                              <span className="shrink-0 text-[10px] text-plum/60">{clock}</span>
+                            )}
+                            <button
+                              aria-label={confirmId === s.id ? '再点一次确认删除' : '删除这段对话'}
+                              onClick={(e) => handleDelete(e, s.id)}
+                              /* 20px 视觉 + 透明伪元素扩到 44px 点击区（HIG 拇指目标），
+                                 伪元素属按钮自身，点击仍命中删除而非行容器 */
+                              className={`btn-press relative shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-colors after:content-[''] after:absolute after:-inset-3 ${
+                                confirmId === s.id
+                                  ? 'bg-red-400/15 text-red-500 text-[9px]'
+                                  : 'text-plum/20 hover:text-plum/50 hover:bg-plum/5'
+                              }`}
+                            >
+                              {confirmId === s.id ? '确认?' : <IconClose size={10} />}
+                            </button>
+                          </div>
+                          {s.preview && (
+                            <p className="mt-0.5 truncate text-[11px] text-plum/40">{s.preview}</p>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
-                )
-              })}
+                </div>
+              ))}
             </div>
           )}
         </div>

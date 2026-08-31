@@ -40,11 +40,14 @@ async def get_status():
                 "last_seen_at": None, "active_session_id": None,
                 "unseen_era_id": None,
             }
-        # unseen_era_id：最新 era 会话且有未读主动消息（delivered/stored
-        # 未读）才返回——没有新内容就不打断当前会话
+        # unseen_era_id：仍是碎碎念（kind='solo'）的 era 会话且有未读
+        # 主动消息（delivered/stored 未读）才返回——没有新内容就不打断
+        # 当前会话。按 kind 而非 is_era 判定：被冷冷接话的 era 已经变成
+        # 对话（kind='chat'），不该再以「小汐独处时说了话」的身份把她
+        # 从当前会话拽走（v24）。
         cursor = await conn.execute(
             """SELECT s.id FROM chat_sessions s
-               WHERE s.is_era = 1 AND EXISTS (
+               WHERE s.kind = 'solo' AND EXISTS (
                    SELECT 1 FROM proactive_messages p
                    WHERE p.session_id = s.id
                      AND p.status IN ('delivered', 'stored')

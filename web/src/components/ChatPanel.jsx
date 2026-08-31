@@ -1,6 +1,33 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
+import { dateKey, formatDayLabel, formatMessageTime, minutesBetween } from '../utils/time'
+
+// 同一天内两条消息相隔多少分钟才插一条时间分隔条。低于这个间隔说明
+// 是一轮接一轮的连续对话，插分隔条只会把对话切碎。
+const TIME_GAP_MINUTES = 30
+
+/**
+ * 会话内的时间分隔条：决定第 i 条消息前面要不要插一条，插什么文案。
+ *
+ * 规则（与微信/Telegram 同类产品一致）：
+ * - 换了自然日 → "8月16日 星期六"（今年）/ "2025年8月16日"（往年）
+ * - 同一天但间隔 ≥ 30 分钟 → "14:23"
+ * - 其余（连续对话）→ 不插
+ *
+ * 没有时间戳的消息（理论上只有极旧的库或写入失败的边角）用前一个
+ * 已知时间兜底比较，自己不产生分隔条——宁可少插一条，也不插一条
+ * 空的或错的。
+ */
+function separatorFor(msg, prevTs) {
+  const ts = msg.created_at
+  if (!ts) return null
+  if (!prevTs) return formatDayLabel(ts) // 会话第一条：把日期说清楚
+  if (dateKey(ts) !== dateKey(prevTs)) return formatDayLabel(ts)
+  const gap = minutesBetween(prevTs, ts)
+  if (!Number.isNaN(gap) && gap >= TIME_GAP_MINUTES) return formatMessageTime(ts)
+  return null
+}
 
 const statusTexts = {
   idle: '小汐在看着窗外',
@@ -44,6 +71,22 @@ export default function ChatPanel({ chat, status, displayState }) {
   // 流式 flush 只改写最后一条的内容、不增加条数，天然不会误计
   const [pendingNew, setPendingNew] = useState(0)
   const prevCountRef = useRef(0)
+
+  // 尾窗口 + 时间分隔条：只在 messages 变化时算一次。流式期间每条
+  // flush 都会换新数组（重算几十条字符串，可忽略，但 memo 能顺手
+  // 把它挡在非渲染路径外）。
+  const visible = useMemo(() => {
+    const windowed = messages.slice(-RENDER_WINDOW)
+    const out = []
+    // prevTs 跨「无时间戳」的消息保持：分隔条只跟有时间的消息比
+    let prevTs = ''
+    for (const msg of windowed) {
+      const separator = separatorFor(msg, prevTs)
+      out.push({ msg, separator })
+      if (msg.created_at) prevTs = msg.created_at
+    }
+    return out
+  }, [messages])
 
   const handleScroll = useCallback(() => {
     const el = listRef.current
@@ -299,8 +342,17 @@ export default function ChatPanel({ chat, status, displayState }) {
               {messages.length > RENDER_WINDOW && (
                 <p className="text-center text-xs text-plum/35 py-1">更早的消息已折叠</p>
               )}
-              {messages.slice(-RENDER_WINDOW).map((msg) => (
-                <MessageBubble key={msg.id} message={msg} />
+              {visible.map(({ msg, separator }) => (
+                <div key={msg.id}>
+                  {separator && (
+                    // 分隔条居中、极轻——它是「时间过去了」的提示，
+                    // 不是一条消息，不该抢气泡的视觉重量
+                    <p className="text-center text-[10px] text-plum/30 py-1.5 select-none">
+                      {separator}
+                    </p>
+                  )}
+                  <MessageBubble message={msg} />
+                </div>
               ))}
               {isStreaming && (
                 <div className="flex items-center gap-1 pl-4">

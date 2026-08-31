@@ -107,15 +107,13 @@ function MessageBubble({ message }) {
     )
   }
 
-  // v21：独处消息的判定扩展到档案回放路径——注入的消息带 type='proactive'，
-  // 回放的 solo 消息（msg_type='solo'，来自 /api/sessions/{id}/messages）走
-  // 同样的弱化样式 + 时间戳，让「小汐的独处时间线」读起来像日记
+  // 独处消息的判定覆盖两条路径——注入的主动消息带 type='proactive'，
+  // 回放的 solo 消息（msg_type='solo'，来自 /api/sessions/{id}/messages）
+  // 走同样的弱化样式，让「小汐一个人的时候说的话」读起来像日记。
+  // 时间戳不再画在气泡里：2026-08-30 起由 ChatPanel 的时间分隔条统一
+  // 负责（跨天出日期、同天隔半小时出时刻），一条消息一个时间戳既和
+  // 分隔条重复、又让普通对话与独处话语在时间呈现上两套标准。
   const isProactive = type === 'proactive' || message.msg_type === 'solo'
-  // 时间戳 chip：只有后端带 created_at（"YYYY-MM-DD HH:MM"）的独处消息
-  // 才有——[5:16] 切出 "MM-DD HH:MM"，她不在的那段时间一目了然
-  const timeChip = isProactive && message.created_at
-    ? String(message.created_at).slice(5, 16)
-    : ''
   return (
     // 方向感入场（商业级 1.4）：小汐的话从左侧滑入
     <div className="cv-bubble flex animate-fade-in-left">
@@ -126,7 +124,6 @@ function MessageBubble({ message }) {
         <div
           className={`text-[15px] leading-[1.75] py-0.5 break-words ${isProactive ? 'text-plum/40' : 'text-plum/85'}`}
         >
-          {timeChip && <p className="text-[10px] text-plum/30 mb-0.5">{timeChip}</p>}
           {isProactive ? (
             <p className="whitespace-pre-wrap break-words">{content}</p>
           ) : (

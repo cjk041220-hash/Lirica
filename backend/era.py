@@ -7,9 +7,10 @@
   active_session_id），她实时看到；
 - 冷冷离线时（presence 判定：pagehide 上报 leaving 或距上次在线超
   过 presence_timeout_minutes），第一条主动消息**新开 era 会话**
-  （chat_sessions.is_era=1，一条「小汐的独处时间线」），后续离线期间
-  的主动消息全部追加进它——直到冷冷回来在 era 里接话（出现 user
-  消息）即视为关闭；她再次离线后，下一条主动消息再开新 era；
+  （is_era=1 + kind='solo'，一条「小汐的碎碎念」时间线），后续离线
+  期间的主动消息全部追加进它——直到冷冷回来在 era 里接话（第一条
+  user 消息把 kind 提升为 'chat'）即视为关闭；她再次离线后，下一条
+  主动消息再开新 era；
 - 每条主动消息三写一推：档案行（chat_messages role='assistant' +
   msg_type='solo'）→ checkpoint 追加 AI turn（她回来后 LLM 上下文里
   有独处内容，能自然接话）→ proactive_messages 行（带 session_id）
@@ -103,16 +104,18 @@ def new_era_id() -> str:
 async def get_open_era_id(conn) -> str | None:
     """最新「仍在开放」的 era 会话 id，无则 None。
 
-    开放 = is_era=1 且还没有任何用户消息（冷冷还没回来接话）。她回来
-    在 era 里说话（出现 user 行）即视为关闭；era 被用户在 SessionsPanel
-    删除后行消失，本查询自然找不到 → 下一条主动消息新开 era。
+    开放 = kind='solo'（小汐在独处时间线说话、冷冷还没接话）。她回来
+    在 era 里说话（第一条 user 消息）→ chat_archive 把 kind 提升为
+    'chat' → 本查询自然找不到，视为关闭；era 被用户在 SessionsPanel
+    删除后行消失，同样找不到 → 下一条主动消息新开 era。
+
+    v24 前这里写的是 is_era=1 AND NOT EXISTS(user 消息)，那是拿来源
+    标记兼当类型用的老写法；kind 列补上后判定收敛为一个等值条件
+    （还能吃上索引，不必每次扫 chat_messages 做 NOT EXISTS）。
     """
     cursor = await conn.execute(
         """SELECT id FROM chat_sessions
-           WHERE is_era = 1 AND NOT EXISTS (
-               SELECT 1 FROM chat_messages m
-               WHERE m.session_id = chat_sessions.id AND m.role = 'user'
-           )
+           WHERE kind = 'solo'
            ORDER BY created_at DESC, rowid DESC LIMIT 1"""
     )
     row = await cursor.fetchone()
@@ -155,23 +158,24 @@ async def resolve_proactive_target(conn, now_dt: datetime.datetime,
             # C-1（2026-08-14）：预插会话行，关闭双 era 竞态窗口。
             # 竞态场景：早安 cron 与启动对齐的心跳（或任何两条主动消息
             # 任务）同分钟并发 resolve，都看到「无开放 era」→ 各开一个
-            # era 且都允许开场问候（双份「小汐的日记」）。此处立即在写
-            # 锁内预插 chat_sessions 行（is_era=1、日记式标题、无消息）：
-            # get_open_era_id 只要求「is_era 且无 user 消息」，第二个
-            # 竞态方 resolve 时命中它 → 降级为追加，双开窗口关闭。
-            # 标题与 record_solo_message 同款（chat_archive._diary_title），
+            # era 且都允许开场问候（双份碎碎念）。此处立即在写锁内预插
+            # chat_sessions 行（is_era=1 + kind='solo'、无消息）：
+            # get_open_era_id 按 kind='solo' 找，第二个竞态方 resolve 时
+            # 命中它 → 降级为追加，双开窗口关闭。
+            # 标题与 record_solo_message 同款（chat_archive.era_title），
             # 保证 SessionsPanel 呈现一致。预插失败（罕见）只记日志、
             # 仍返回 new_era——回到修复前行为（宁可可能双开，不吞消息）。
             try:
                 from database.core import get_write_lock
-                from memory.chat_archive import _diary_title
+                from memory.chat_archive import era_title
 
                 now_str = now_dt.strftime(_TIME_FMT)
                 async with get_write_lock():
                     await conn.execute(
-                        "INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era) "
-                        "VALUES (?, ?, ?, ?, 1)",
-                        (sid, _diary_title(now_str), now_str, now_str),
+                        "INSERT INTO chat_sessions "
+                        "(id, title, created_at, updated_at, is_era, kind) "
+                        "VALUES (?, ?, ?, ?, 1, 'solo')",
+                        (sid, era_title(), now_str, now_str),
                     )
                     await conn.commit()
             except Exception as e:
@@ -190,7 +194,7 @@ async def append_proactive_turn(app, session_id: str, content: str, *,
     """主动消息的三写一推，顺序固定，每步独立降级。
 
     1. 档案行：record_solo_message（msg_type='solo'；era 类会话带
-       is_era=1 标记；内部已吞异常只记日志）
+       is_era=1 + kind='solo' 标记；内部已吞异常只记日志）
     2. checkpoint 追加 AI turn：失败只记日志——她回来后上下文缺这段
        独处内容，但档案与推送不丢（失败放行）
     3. proactive_messages 行 + 推送：_store_and_push_proactive 内部

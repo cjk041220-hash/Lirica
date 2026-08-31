@@ -3,7 +3,7 @@ import { apiFetch, getToken, UNAUTHORIZED_EVENT } from '../api/client'
 import { getGpsCoords, isGpsEnabled } from '../api/location'
 import { isValidNav } from '../utils/mapLink'
 import { isValidTarot } from '../utils/tarot'
-import { getHKTHour } from '../utils/time'
+import { getHKTHour, hktNowStr } from '../utils/time'
 
 // iOS Safari <17.4 的 fetch + ReadableStream 会整段缓冲、生成完毕才
 // 一次性吐出（WebKit 17.4 起才真增量）——打字机效果全毁，用户盯着
@@ -33,6 +33,33 @@ const nextId = () => `msg-${++msgId}-${Date.now()}`
 // 新会话 id 的单调序号尾缀：Date.now() 只有毫秒分辨率，
 // 同毫秒连点「开一段新聊天」会撞 id（后端会视为同一会话）
 let sessionSeq = 0
+
+// 已问候过的会话记账。此前是「每会话一个 localStorage key」
+//（xiaoxi-greeted-${sid}）——会话越多 key 越多，且永不清理：单用户长期
+// 跑下来是纯粹的无界泄漏。改成单 key 存一个定长队列（只留最近 50 个
+// 会话 id）：问候只关心「刚开的新会话有没有打过招呼」，几个月前的
+// 记录丢掉毫无影响。
+const GREETED_KEY = 'xiaoxi-greeted'
+const GREETED_MAX = 50
+
+function loadGreeted() {
+  try {
+    const raw = localStorage.getItem(GREETED_KEY)
+    const ids = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [])
+  } catch {
+    return new Set() // 私密模式读不了 / 内容损坏 → 当没问候过，多一句招呼无害
+  }
+}
+
+function persistGreeted(set) {
+  try {
+    // Set 保序，尾部是最新——超限丢最旧
+    localStorage.setItem(GREETED_KEY, JSON.stringify([...set].slice(-GREETED_MAX)))
+  } catch {
+    /* 写不进去就不记账，下次可能再问候一次，可接受 */
+  }
+}
 
 // 会话 ID 持久化（修复 P1-1）：刷新页面不再是"陌生人"，
 // checkpoint 连续性与产品叙事"一直在网页里陪你"对齐。
@@ -125,6 +152,10 @@ export function useChat() {
   //（sendMessage/stopStreaming 等零依赖回调里读 ref，避免闭包过期值）
   const [sessionId, _setSessionId] = useState(getSessionId)
   const sessionIdRef = useRef(sessionId)
+  // 已问候会话的进程内镜像（初值取自 loadGreeted）——Set 是可变容器，
+  // 用 ref 持有避免每次问候都触发重渲染
+  const greetedRef = useRef(null)
+  if (greetedRef.current === null) greetedRef.current = loadGreeted()
   // 会话纪元：切换会话时 +1。旧流被 abort 后 finally 里的立绘/
   // streaming 收尾动作只对当前纪元生效，避免给新会话演一出伤心
   const epochRef = useRef(0)
@@ -134,72 +165,64 @@ export function useChat() {
   const [userMsgCount, setUserMsgCount] = useState(0)
 
   // 时段问候注入（商业级 2.2）：新会话一句招呼，每会话仅一次
-  //（localStorage 按会话 id 记账，刷新不重复）；仅当消息列表
-  // 仍为空时注入，绝不覆盖期间到达的主动消息
+  //（localStorage 记账，刷新不重复）；仅当消息列表仍为空时注入，
+  // 绝不覆盖期间到达的主动消息
   const maybeGreet = useCallback((sid) => {
-    const greetKey = `xiaoxi-greeted-${sid}`
-    let greeted = false
-    try {
-      greeted = !!localStorage.getItem(greetKey)
-    } catch {
-      /* 私密模式读不了就当没问候过——多一句招呼无害 */
-    }
-    if (greeted) return
-    try {
-      localStorage.setItem(greetKey, '1')
-    } catch {
-      /* 写不进去就不记账，下次可能再问候一次，可接受 */
-    }
+    if (greetedRef.current.has(sid)) return
+    greetedRef.current.add(sid)
+    persistGreeted(greetedRef.current)
     const greeting = timeGreeting()
     setMessages((prev) =>
       prev.length === 0
-        ? [{ id: nextId(), role: 'system', type: 'proactive', content: greeting }]
+        ? [
+            {
+              id: nextId(),
+              role: 'system',
+              type: 'proactive',
+              content: greeting,
+              created_at: hktNowStr(),
+            },
+          ]
         : prev
     )
   }, [])
 
-  // 刷新后恢复对话历史（修复 P1-1 的"刷新即失忆"）：
-  // 优先读持久对话档案（迁移 v8）；档案为空的旧会话（v8 之前
-  // 建立、还没有新消息）回退 checkpoint 历史兜底
+  // 刷新后恢复对话历史（修复 P1-1 的"刷新即失忆"）：读持久对话档案。
+  //
+  // 档案是历史的唯一真相源——每条用户/助手消息在写入时就已归档（见
+  // chat.py 两条对话路径），而 checkpoint 只是 LLM 的实时上下文、会被
+  // prune_checkpoints 定期裁剪。2026-08-30 前这里有条 checkpoint 回退
+  // 分支：两个端点返回的字段都不一致（档案带 created_at 与 msg_type，
+  // checkpoint 路径两者皆无），同一段对话刷新前后会长出两套时间信息，
+  // 会话内的时间分隔条也就时有时无。回退已随 /api/chat/history 一并
+  // 删除——现在刷新恢复与「回到旧会话」走的是同一条路、同一份契约。
   const loadHistory = useCallback(async () => {
     const sid = sessionIdRef.current
-    const toLocal = (list) =>
-      (list || [])
+    try {
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`)
+      if (!res.ok) return
+      const history = ((await res.json()).messages || [])
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
         .map((m) => ({
           id: nextId(),
           role: m.role,
           content: m.content,
-          // v21：档案行带 msg_type（'solo' 独处消息）与 created_at——
-          // MessageBubble 据此渲染日记风 + 时间戳；checkpoint 回退路径
-          // 无这两字段，undefined 自然回退普通样式
+          // 档案行带 msg_type（'solo' 小汐的独处话语）与 created_at：
+          // MessageBubble 据此渲染弱化样式，ChatPanel 据此插时间分隔条
           msg_type: m.msg_type,
           created_at: m.created_at,
         }))
-
-    let history = []
-    try {
-      const res = await apiFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`)
-      if (res.ok) history = toLocal((await res.json()).messages)
+      if (history.length === 0) {
+        maybeGreet(sid)
+        return
+      }
+      // 仅在当前为空时注入，避免覆盖已到达的主动消息
+      setMessages((prev) => (prev.length === 0 ? history : prev))
+      // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
+      setUserMsgCount(history.filter((m) => m.role === 'user').length)
     } catch (e) {
       console.warn('[useChat] archive load failed:', e)
     }
-    if (history.length === 0) {
-      try {
-        const res = await apiFetch(`/api/chat/history?session_id=${encodeURIComponent(sid)}`)
-        if (res.ok) history = toLocal((await res.json()).messages)
-      } catch (e) {
-        console.warn('[useChat] failed to load history:', e)
-      }
-    }
-    if (history.length === 0) {
-      maybeGreet(sid)
-      return
-    }
-    // 仅在当前为空时注入，避免覆盖已到达的主动消息
-    setMessages((prev) => (prev.length === 0 ? history : prev))
-    // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
-    setUserMsgCount(history.filter((m) => m.role === 'user').length)
     // maybeGreet 是 useCallback([]) 恒稳定，加入依赖不改变 loadHistory 身份
   }, [maybeGreet])
 
@@ -223,8 +246,12 @@ export function useChat() {
     abortRef.current = controller
     const myEpoch = epochRef.current // 本次发送所属的会话纪元
 
-    // 添加用户消息
-    const userMsg = { id: nextId(), role: 'user', content: text }
+    // 添加用户消息。created_at 用与后端同形的 HKT 串——本地消息此后
+    // 与档案回放的消息同构，ChatPanel 的时间分隔条才能把它们一视同仁
+    //（此前只有回放的消息带时间，现聊的全程没有时间戳，一条分隔条
+    // 也插不出来）。
+    const now = hktNowStr()
+    const userMsg = { id: nextId(), role: 'user', content: text, created_at: now }
     setMessages((prev) => [...prev, userMsg])
     // 深夜唤醒序列：记录用户发送的消息数
     setUserMsgCount((c) => c + 1)
@@ -233,10 +260,10 @@ export function useChat() {
     setCharacterState('listening')
 
     const assistantId = nextId()
-    // 添加空的助手消息占位
+    // 添加空的助手消息占位（同一时刻——同一轮对话，不另取时钟）
     setMessages((prev) => [
       ...prev,
-      { id: assistantId, role: 'assistant', content: '', streaming: true },
+      { id: assistantId, role: 'assistant', content: '', streaming: true, created_at: now },
     ])
 
     // 只有流正常读完才算「聊成功」—— 401 / 网络错误 / 中断都不算，
@@ -648,11 +675,19 @@ export function useChat() {
 
   // 开一段新聊天（满足后端 ^[a-z0-9-]{1,64}$；序号尾缀防同毫秒撞 id）
   const newSession = useCallback(() => {
-    changeSession(`s-${Date.now().toString(36)}-${(sessionSeq++).toString(36)}`)
+    const sid = `s-${Date.now().toString(36)}-${(sessionSeq++).toString(36)}`
+    changeSession(sid)
+    // 立即让后端落一条空会话行：从前要等第一条消息才建行，新会话在
+    // 列表里根本不存在——用户发消息前切走或刷新，这段对话就凭空消失
+    //（只剩一个 localStorage 里的 id）。建行失败不影响本地已经切好
+    // 的会话（失败放行：真发消息时 chat.py 仍会 upsert 出自愈行）。
+    apiFetch(`/api/sessions?session_id=${encodeURIComponent(sid)}`, {
+      method: 'POST',
+    }).catch((e) => console.warn('[useChat] create session failed:', e))
     // 商业级 2.2 原意「新会话小汐抬头打招呼」：loadHistory 只在挂载时跑，
     // 页内新建会话走不到问候注入——这里补上（changeSession 已同步更新
     // sessionIdRef，maybeGreet 的空列表守卫防覆盖期间到达的主动消息）
-    maybeGreet(sessionIdRef.current)
+    maybeGreet(sid)
   }, [changeSession, maybeGreet])
 
   // 回到一段旧聊天：载入档案消息，可直接续聊（session_id 就是

@@ -630,55 +630,6 @@ def _log_tool_telemetry(sid: str, tool_names: list[str]) -> None:
                  ",".join(names), len(names), sid)
 
 
-# ── 会话历史（陪伴连续性）────────────────────────────────────
-
-
-def _strip_location_suffix(text: str) -> str:
-    """去掉用户消息尾部注入的 GPS 系统信息（不应回显给前端）。"""
-    return re.split(r"\n\n\[系统信息：", text, maxsplit=1)[0]
-
-
-@router.get("/chat/history")
-async def chat_history(
-    request: Request,
-    session_id: str = Query(..., pattern=r"^[a-z0-9-]{1,64}$"),
-    limit: int = Query(50, ge=1, le=200),
-):
-    """从 checkpoint 读取会话历史，供前端刷新后恢复「刚才聊过什么」。
-
-    只回 human/ai 的文本消息；工具调用中间态不回显。
-    记忆注入的 SystemMessage 走 llm_input_messages，不进 checkpoint，
-    因此不会出现在这里。
-    """
-    agent = request.app.state.agent
-    if agent is None:
-        raise HTTPException(503, "小汐还在睡觉……过一会儿再来找她吧")
-
-    try:
-        state = await agent.aget_state(
-            {"configurable": {"thread_id": session_id}}
-        )
-    except Exception:
-        log.exception("读取会话历史失败 (sid=%s)", session_id)
-        raise HTTPException(500, "映海里的记忆有点模糊……再试一次？")
-
-    if state is None:
-        return {"messages": [], "session_id": session_id}
-
-    out = []
-    for m in state.values.get("messages", []):
-        mtype = getattr(m, "type", "")
-        content = getattr(m, "content", "")
-        if not isinstance(content, str) or not content.strip():
-            continue  # 多模态 content 列表 / 纯工具调用的空 AIMessage
-        if mtype == "human":
-            out.append({"role": "user", "content": _strip_location_suffix(content)})
-        elif mtype == "ai":
-            out.append({"role": "assistant", "content": content})
-
-    return {"messages": out[-limit:], "session_id": session_id}
-
-
 # ── 记忆管理端点 ────────────────────────────────────────────
 
 @router.patch("/memories/{memory_id}")

@@ -13,6 +13,7 @@ recent_messages 读取异常正常上抛，由调用方降级（历史块可省�
 生成不可断）；其余读取 / 删除函数正常上抛，由路由层处理。
 """
 from database.core import get_db, get_write_lock
+from database.migrations import ERA_SESSION_TITLE
 from utils.logger import get_logger
 from utils.timezone import now_str
 
@@ -30,34 +31,40 @@ def _make_title(text: str) -> str:
     return t[:_TITLE_MAX] + ("…" if len(t) > _TITLE_MAX else "")
 
 
-def _diary_title(now: str) -> str:
-    """era 会话（小汐的独处时间线）的标题：日记式命名。
+def era_title() -> str:
+    """era 会话（小汐的碎碎念）的标题：固定文案，不带日期。
 
-    以消息时间定名（「小汐的日记 · 08月09日」），让 SessionsPanel 里
-    一眼能看出是哪一天的日记。标题只在会话创建时写入，不随时间漂移。
+    曾经是「小汐的日记 · 08月09日」——两个问题：日期后来由会话列表的
+    时间分组（今天/昨天/8月）与会话内的时间分隔条表达，标题再写一遍
+    是重复；且与 diaries 表每晚自动生成的真日记几乎同名，而「小汐的
+    日记」实为互不相通的三种东西（真日记 / era 会话 / solo 消息），
+    命名必须收口区分开。标题只在会话创建时写入，不随时间漂移。
     """
-    return f"小汐的日记 · {now[5:7]}月{now[8:10]}日"
+    return ERA_SESSION_TITLE
 
 
 async def _upsert_session(conn, session_id: str, fallback_title: str, now: str,
-                          is_era: int = 0) -> None:
-    """会话行不存在则以 fallback_title 为标题创建；已存在只刷新 updated_at。
+                          is_era: int = 0, kind: str = "chat") -> None:
+    """会话行不存在则以 fallback_title / kind 创建；已存在只刷新 updated_at。
 
-    标题只在首次创建时写入，后续消息不覆盖（ON CONFLICT 只更新
-    updated_at）。is_era 同样只在创建时写入——era 会话从第一条独处
-    消息起被标记，之后的追加/接话都不会改写。会话被删除后若同一 id
-    再次写入（删掉了正在进行的会话），行会自愈重建。
+    标题与 is_era / kind 都只在首次创建时写入（ON CONFLICT 只更新
+    updated_at）——is_era 是来源标记、kind 是创建时的类型，两者都不
+    能被后续消息改写。类型的**提升**（碎碎念被冷冷接话 → 变成对话）
+    是唯一的可变路径，走 _record_message 里 role='user' 分支的显式
+    UPDATE，不在本函数里。会话被删除后若同一 id 再次写入（删掉了
+    正在进行的会话），行会自愈重建。
     """
     await conn.execute(
-        """INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era, kind)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at""",
-        (session_id, fallback_title, now, now, is_era),
+        (session_id, fallback_title, now, now, is_era, kind),
     )
 
 
 async def _record_message(session_id: str, text: str, role: str, msg_type: str,
-                          is_era: int = 0, *, now: str | None = None) -> None:
+                          is_era: int = 0, kind: str = "chat",
+                          *, now: str | None = None) -> None:
     """归档一条消息的公共实现（用户 / 助手回复 / 主动消息独处话语共用）。
 
     text 应为不含 GPS 系统信息后缀的原始文本（后缀只拼进发给 LLM 的
@@ -69,21 +76,32 @@ async def _record_message(session_id: str, text: str, role: str, msg_type: str,
         # 逻辑写锁：upsert 会话行 + 插消息 + commit 是一个序列；
         # 持锁也防本 commit 截断记忆域进行中的多语句写
         async with get_write_lock():
-            fallback = _diary_title(now) if msg_type == "solo" else _make_title(text)
-            await _upsert_session(conn, session_id, fallback, now, is_era=is_era)
+            fallback = era_title() if msg_type == "solo" else _make_title(text)
+            await _upsert_session(conn, session_id, fallback, now,
+                                  is_era=is_era, kind=kind)
             await conn.execute(
                 "INSERT INTO chat_messages (session_id, role, content, created_at, msg_type) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (session_id, role, text, now, msg_type),
             )
-            # A-1（2026-08-14）：用户新消息到达 = 上一个关闭窗口结束、新窗口
-            # 开启 → 既有摘要作废。摘要只代表「上一次已关闭窗口」，重开就
-            # 重摘；否则 summarize 的 NOT EXISTS 守卫会让续聊内容永不进摘要，
-            # 叙事「最近的谈话」块越聊越旧。只对 role='user' 生效——era 主动
-            # 消息追加（role='assistant'）不触发作废。
             if role == "user":
+                # A-1（2026-08-14）：用户新消息到达 = 上一个关闭窗口结束、新窗口
+                # 开启 → 既有摘要作废。摘要只代表「上一次已关闭窗口」，重开就
+                # 重摘；否则 summarize 的 NOT EXISTS 守卫会让续聊内容永不进摘要，
+                # 叙事「最近的谈话」块越聊越旧。只对 role='user' 生效——era 主动
+                # 消息追加（role='assistant'）不触发作废。
                 await conn.execute(
                     "DELETE FROM session_summaries WHERE session_id = ?",
+                    (session_id,),
+                )
+                # v24：冷冷接话 = 这段会话从「小汐的碎碎念」变成真正的对话。
+                # is_era 是来源（不可变，留着记录它生于独处时间线），kind 是
+                # 当前类型——列表标签读 kind，接话后「碎碎念」标签自然消失，
+                # 不再像从前那样顶着来源标记永远不更新。带 AND kind <> 'chat'
+                # 守卫：普通会话的每条消息不该都发一次无谓 UPDATE。
+                await conn.execute(
+                    "UPDATE chat_sessions SET kind = 'chat' "
+                    "WHERE id = ? AND kind <> 'chat'",
                     (session_id,),
                 )
             await conn.commit()
@@ -114,22 +132,60 @@ async def record_solo_message(session_id: str, text: str, *, is_era: int = 0,
 
     msg_type='solo'：回放时前端渲染为日记风 + 时间戳，区别于普通回复；
     role 走 'assistant'（chat_messages 的 CHECK 约束只允许 user/assistant，
-    solo 消息是小汐的话，就是 assistant）。is_era=1 标记 era 会话
-    （离线期间主动消息新开的「小汐的独处时间线」窗口），会话行只在
-    首次创建时带上该标记。失败只记日志，不影响推送。
+    solo 消息是小汐的话，就是 assistant）。is_era=1 / kind='solo' 标记
+    era 会话（离线期间主动消息新开的独处时间线窗口）——两者都只在会话
+    行首次创建时写入，追加消息不改。在线搭话走 is_era=0 / kind='chat'：
+    那是在冷冷已有的对话里插一句话，会话本来就是对话，不改成碎碎念。
+    失败只记日志，不影响推送。
     """
     text = (text or "").strip()
     if not text:
         return
-    await _record_message(session_id, text, "assistant", "solo", is_era=is_era, now=now)
+    await _record_message(session_id, text, "assistant", "solo", is_era=is_era,
+                          kind="solo" if is_era else "chat", now=now)
+
+
+async def create_session(session_id: str, title: str = "",
+                         kind: str = "chat") -> None:
+    """显式建一条空会话行（前端「开一段新聊天」时立即调用）。
+
+    修的是「惰性创建」的老问题：从前前端点了新聊天只改本地 sessionId，
+    后端要等第一条消息才建行——于是新会话在列表里根本不存在，用户
+    发完消息前切走／刷新，这段对话就凭空消失（只剩一个 localStorage
+    里的 id）。现在点新聊天即落一行空会话，列表里立刻可见。
+
+    幂等：id 已存在（如删除后立即重建同名）则静默跳过——ON CONFLICT
+    DO NOTHING，不动既有标题与类型。失败只记日志：建行是旁路，建不
+    成也不该打断用户开始一段新对话。
+    """
+    now = now_str()
+    try:
+        conn = await get_db()
+        async with get_write_lock():
+            await conn.execute(
+                """INSERT INTO chat_sessions (id, title, created_at, updated_at, is_era, kind)
+                   VALUES (?, ?, ?, ?, 0, ?)
+                   ON CONFLICT(id) DO NOTHING""",
+                (session_id, title, now, now, kind),
+            )
+            await conn.commit()
+    except Exception:
+        log.exception("创建会话行失败（sid=%s）", session_id)
 
 
 async def list_sessions(limit: int = 50, offset: int = 0) -> list[dict]:
-    """按最近活跃倒序列出会话，附带末条消息预览与消息数。"""
+    """按最近活跃倒序列出会话，附带末条消息预览与消息数。
+
+    kind 与 is_era 一起返回，前端按职责分开用：
+    - kind（'chat' / 'solo'）决定列表标签——「小汐的碎碎念」只在它真
+      的还是独处时间线时出现，冷冷一接话标签就没了；
+    - is_era 只作来源留档（这段会话生于冷冷离线的独处时间线），前端
+      默认不展示。
+    """
     conn = await get_db()
     cursor = await conn.execute(
         """
-        SELECT s.id, s.title, s.created_at, s.updated_at, s.is_era,
+        SELECT s.id, s.title, s.created_at, s.updated_at, s.is_era, s.kind,
                (SELECT m.content FROM chat_messages m
                   WHERE m.session_id = s.id ORDER BY m.id DESC LIMIT 1) AS preview,
                (SELECT COUNT(*) FROM chat_messages m
@@ -148,8 +204,9 @@ async def list_sessions(limit: int = 50, offset: int = 0) -> list[dict]:
             "created_at": r[2],
             "updated_at": r[3],
             "is_era": bool(r[4]),
-            "preview": (r[5] or "")[:_PREVIEW_MAX],
-            "message_count": r[6],
+            "kind": r[5] or "chat",
+            "preview": (r[6] or "")[:_PREVIEW_MAX],
+            "message_count": r[7],
         }
         for r in rows
     ]

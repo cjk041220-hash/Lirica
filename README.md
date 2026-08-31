@@ -76,10 +76,10 @@ docker compose up -d
 |------|------|------|
 | `/api/chat` | POST | 对话（非流式） |
 | `/api/chat/stream` | POST | 流式对话（SSE，token 级） |
-| `/api/chat/history` | GET | 当前会话刷新恢复（读 checkpoint，会被定期裁剪） |
-| `/api/sessions` | GET | 对话档案列表（标题/预览/时间，永久保留） |
-| `/api/sessions/{id}/messages` | GET | 对话档案回看（最近 N 条，升序） |
-| `/api/sessions/{id}` | DELETE | 删除一段对话档案（级联删消息） |
+| `/api/sessions` | GET | 对话档案列表（标题/类型/预览/时间，永久保留） |
+| `/api/sessions` | POST | 新建空会话行（点「开一段新聊天」即落库，列表立刻可见） |
+| `/api/sessions/{id}/messages` | GET | 对话档案回看（最近 N 条，升序，带时间戳） |
+| `/api/sessions/{id}` | DELETE | 删除一段对话档案（级联删消息 + 清 LLM 上下文线程） |
 | `/api/config` | GET | 获取控制台配置 |
 | `/api/config` | POST | 更新配置（模型/温度/思考强度；部分更新，返回合并后全量） |
 | `/api/health` | GET | 健康检查 |
