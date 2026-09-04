@@ -31,7 +31,7 @@ _agent_lock = asyncio.Lock()
 # （temperature=0.8 / max_tokens=8192 / flash 模型）保持一致。
 
 _runtime_config = {
-    "model": "deepseek-v4-flash",
+    "model": "deepseek-v4-pro",
     "temperature": 0.8,
     "max_tokens": 8192,
     "thinking_intensity": "medium",

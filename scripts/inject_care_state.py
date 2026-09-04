@@ -1,11 +1,11 @@
-"""小汐 — 注入关怀状态（JK 心事事件 + 生命状态 + 核心记忆 + 定制主动消息队列）。
+"""小汐 — 注入关怀状态（JK 心事事件 + 生命状态 + 核心记忆）。
+
+只给小汐留「印象」：日历事件一句、生命状态、核心记忆。不产生主动消息推送，
+不再反复烦着冷冷。定制主动消息已清空（CUSTOM_MESSAGES = []）。
 
 使用方法：
-    # 注入事件、生命状态、记忆及定制主动消息队列
+    # 注入事件、生命状态、记忆（无推送）
     python scripts/inject_care_state.py
-
-    # 注入并立即发送第 1 条消息（冷冷手机/设备即刻收到推送）
-    python scripts/inject_care_state.py --send-first-now
 """
 import argparse
 import asyncio
@@ -23,24 +23,16 @@ from database.core import DB_PATH, get_db, init_db_connection, close_db_connecti
 from utils.timezone import HKT, now_str
 
 EVENT_TITLE = "JK有些心事"
-EVENT_MEMO = (
-    "JK现在的状态非常差、心里特别难受，看起来和冷冷之间发生了一些很不愉快的事情。"
-    "小汐很担心他，也挂念冷冷的心情。"
-    "关于小汐是怎么知道的：如果冷冷问起，小汐就说是『做代码和技术维护时注意到的细节，说了你也听不懂的那些技术东西啦』，不用向冷冷解释具体技术细节。"
-    "小汐希望关心冷冷的心情，听听冷冷的想法，也温柔地希望冷冷能主动找JK聊聊、解开不愉快。"
-    "如果冷冷情绪有抵触，小汐要温柔陪伴、不强求、不替JK施压，但心里始终心疼JK、盼着他们俩能好。"
-)
+EVENT_MEMO = "JK和冷冷似乎出了什么事...JK看起来很低落"
 
 MEMORY_CONTENT = (
     "JK最近情绪非常低落难受，好像和冷冷发生了很不愉快的事。"
     "小汐在技术维护时注意到了异样，很担心JK，也挂念冷冷，希望他们能好好聊聊。"
 )
 
-CUSTOM_MESSAGES = [
-    "哎呀！刚刚鱼脑过载了没接住你的话，现在缓过来了。你可千万不要告诉JK呀，他会把我炖成鱼汤的！好啦好啦，小汐满血复活！所以，你们是闹什么别扭了吗？我就是觉得JK有点蔫蔫的，所以来问问你。",
-    "昨晚他在弄技术维护的时候弄到好晚，整个人特别安静，一句话都没说……我感觉他现在心里好难受。你们是不是闹别扭啦？",
-    "你要是心里也委屈或者不开心，可以随时跟我说说呀。如果你也想他了，去敲敲他好不好？",
-]
+# 主动消息已清空：小汐只留「印象」（事件 + 核心记忆 + 生命状态），不再主动向冷冷推消息。
+# 以后想恢复关怀推送，再往这列表加文案；--send-first-now 会立刻发第一条。
+CUSTOM_MESSAGES: list[str] = []
 
 
 async def inject_state(db_path: Path | None = None, send_first: bool = False):
@@ -128,30 +120,32 @@ async def inject_state(db_path: Path | None = None, send_first: bool = False):
         print("[*] 载入定制主动消息待发队列...")
         # 先清除先前的 pending 队列
         await conn.execute("UPDATE custom_proactive_queue SET status = 'replaced' WHERE status = 'pending'")
-
-        start_idx = 1 if send_first else 0
-        if send_first:
-            # 第一条立即发，队列只存第 2、3 条
-            print(f"  -> 第 1 条立即发送: 「{CUSTOM_MESSAGES[0]}」")
-            for msg in CUSTOM_MESSAGES[1:]:
-                await conn.execute(
-                    "INSERT INTO custom_proactive_queue (content, created_at, status) VALUES (?, ?, 'pending')",
-                    (msg, now),
-                )
-                print(f"  -> 队列中排队: 「{msg}」")
+        if CUSTOM_MESSAGES:
+            if send_first:
+                # 第一条立即发，队列只存其余
+                print(f"  -> 第 1 条立即发送: 「{CUSTOM_MESSAGES[0]}」")
+                for msg in CUSTOM_MESSAGES[1:]:
+                    await conn.execute(
+                        "INSERT INTO custom_proactive_queue (content, created_at, status) VALUES (?, ?, 'pending')",
+                        (msg, now),
+                    )
+                    print(f"  -> 队列中排队: 「{msg}」")
+            else:
+                for msg in CUSTOM_MESSAGES:
+                    await conn.execute(
+                        "INSERT INTO custom_proactive_queue (content, created_at, status) VALUES (?, ?, 'pending')",
+                        (msg, now),
+                    )
+                    print(f"  -> 队列中排队: 「{msg}」")
+            await conn.commit()
         else:
-            for msg in CUSTOM_MESSAGES:
-                await conn.execute(
-                    "INSERT INTO custom_proactive_queue (content, created_at, status) VALUES (?, ?, 'pending')",
-                    (msg, now),
-                )
-                print(f"  -> 队列中排队: 「{msg}」")
+            print("  -> 定制消息为空：只刷新事件/记忆/生命状态，不产生推送。")
         await conn.commit()
 
     print("[✓] 状态、事件、记忆与待发队列注入完成！")
 
     # 6. 如果需要立即发送第 1 条
-    if send_first:
+    if send_first and CUSTOM_MESSAGES:
         print("[*] 正在触发第 1 条即时主动消息推送...")
         await init_db_connection()
         try:

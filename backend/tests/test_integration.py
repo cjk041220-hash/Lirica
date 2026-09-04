@@ -73,6 +73,9 @@ async def integration_app(tmp_db, monkeypatch):
     from memory.manager import MemoryManager
     from memory.narrative import NarrativeBuilder
 
+    from config.settings import get_settings
+    monkeypatch.setattr(get_settings(), "xiaoxi_api_token", "")
+
     # 组件初始化
     memory_mgr = MemoryManager(tmp_db)
     narrative_builder = NarrativeBuilder(memory_mgr)
@@ -101,7 +104,7 @@ async def integration_app(tmp_db, monkeypatch):
     app.state.memory_manager = memory_mgr
     app.state.narrative_builder = narrative_builder
     app.state.tools = []
-    app.state.checkpointer = None
+    app.state.checkpointer = object()
 
     # mock agent
     mock_agent = AsyncMock()

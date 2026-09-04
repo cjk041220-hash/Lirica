@@ -808,8 +808,10 @@ async def test_update_event_bad_date_raises(events_db):
 
 async def test_update_event_archived_to_future_revives(events_db):
     """归档行被改到未来日期 → 自动翻回 active（反悔改期）。"""
+    import datetime
+    future_date = (datetime.date.today() + datetime.timedelta(days=10)).isoformat()
     await _insert_event(events_db, "e-old", "延期的约定", "2026-07-01", status="archived")
-    updated = await ev.update_event("e-old", event_date="2026-09-01")
+    updated = await ev.update_event("e-old", event_date=future_date)
     assert updated["status"] == "active"
 
 

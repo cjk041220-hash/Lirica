@@ -102,7 +102,9 @@ log = get_logger(__name__)
 #     存量回填：is_era=1 且尚无 user 消息 → kind='solo'；era 会话标题
 #     统一为「小汐的碎碎念」（旧标题带日期「小汐的日记 · 08月09日」，
 #     与新的时间分组列表重复表达日期，也和 diaries 表的真日记撞名）。
-SCHEMA_VERSION = 24
+# v25: 话题库系统（topic_bank 表）— 后台话题素材池（聊到一个删一个，
+#     隐秘独立、用于自然寻找话头，核销素材不影响真实记忆）。
+SCHEMA_VERSION = 25
 
 
 # memories 去重唯一部分索引 DDL。三处共享此常量保证永不漂移：
@@ -112,6 +114,23 @@ SCHEMA_VERSION = 24
 MEMORIES_INDEX_SQL = """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_cat_content
         ON memories(category, content) WHERE status IN ('active', 'core');
+"""
+
+
+# 话题库表结构（迁移 v25）：存储待聊话题素材，随聊随删（status: pending -> consumed）。
+TOPIC_BANK_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS topic_bank (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        category    TEXT NOT NULL DEFAULT 'chat',
+        content     TEXT NOT NULL,
+        guidance    TEXT NOT NULL DEFAULT '',
+        keywords    TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'pending',
+        created_at  TEXT NOT NULL,
+        consumed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_topic_bank_status ON topic_bank(status);
 """
 
 
@@ -1145,6 +1164,18 @@ async def _migrate_v24(conn: aiosqlite.Connection) -> None:
 
 
 _migrations[24] = _migrate_v24
+
+
+# ── 迁移 v25：话题库系统（topic_bank 表）───────────────────────
+
+async def _migrate_v25(conn: aiosqlite.Connection) -> None:
+    """v25: topic_bank 表 — 后台话题素材池。"""
+    await conn.executescript(TOPIC_BANK_SCHEMA_SQL)
+    await conn.commit()
+    log.info("迁移 v25 完成：topic_bank 表已建立")
+
+
+_migrations[25] = _migrate_v25
 
 
 # ── 核心迁移逻辑 ──────────────────────────────────────────────

@@ -54,7 +54,7 @@ def test_create_llm_unknown_model_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
 
     create_deepseek_llm(model="typo-model")
-    assert captured["model"] == "deepseek-v4-flash"  # settings 默认
+    assert captured["model"] == "deepseek-v4-pro"  # settings 默认
 
 
 def test_create_llm_max_tokens_clamped_to_model_cap(monkeypatch):
@@ -88,7 +88,7 @@ def test_create_llm_defaults_unchanged(monkeypatch):
     monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
 
     create_deepseek_llm()
-    assert captured["model"] == "deepseek-v4-flash"   # settings 默认
+    assert captured["model"] == "deepseek-v4-pro"   # settings 默认
     assert captured["temperature"] == 0.8
     assert captured["max_tokens"] == 8192
     assert captured["timeout"] == 120

@@ -218,6 +218,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
         MEMORY_EXTRACT_STATE_SQL,
+        TOPIC_BANK_SCHEMA_SQL,
         ensure_schema,
     )
     # life_state 表（v7：含 first_met_on）：老库由迁移补列，新库由共享
@@ -245,6 +246,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     # custom_proactive_queue：定制主动消息队列
     await conn.executescript(CUSTOM_PROACTIVE_QUEUE_SQL)
+    # topic_bank（迁移 v25）：话题库系统
+    await conn.executescript(TOPIC_BANK_SCHEMA_SQL)
     await conn.commit()
 
     # 确保 life_state 有一条初始数据，防止后续读取空指针

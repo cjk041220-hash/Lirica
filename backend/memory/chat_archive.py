@@ -131,6 +131,11 @@ async def record_assistant_message(session_id: str, text: str) -> None:
     if not text:
         return
     await _record_message(session_id, text, "assistant", "chat")
+    try:
+        from agent.topic_bank import auto_consume_topics_from_text
+        await auto_consume_topics_from_text([text])
+    except Exception as e:
+        log.warning("话题库自动核销检测失败: %s", e)
 
 
 async def record_solo_message(session_id: str, text: str, *, is_era: int = 0,
@@ -150,6 +155,11 @@ async def record_solo_message(session_id: str, text: str, *, is_era: int = 0,
         return
     await _record_message(session_id, text, "assistant", "solo", is_era=is_era,
                           kind="solo" if is_era else "chat", now=now)
+    try:
+        from agent.topic_bank import auto_consume_topics_from_text
+        await auto_consume_topics_from_text([text])
+    except Exception as e:
+        log.warning("话题库主动消息核销检测失败: %s", e)
 
 
 async def create_session(session_id: str, title: str = "",

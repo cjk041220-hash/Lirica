@@ -55,6 +55,7 @@ async def tmp_db(tmp_path):
         MEMORIES_INDEX_SQL,
         MEMORY_EXTRACT_STATE_SQL,
         SESSION_SUMMARIES_SCHEMA_SQL,
+        TOPIC_BANK_SCHEMA_SQL,
     )
     await conn.executescript(LIFE_STATE_SCHEMA_SQL)
     await conn.executescript(EVENTS_SCHEMA_SQL)
@@ -64,6 +65,7 @@ async def tmp_db(tmp_path):
     await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     await conn.executescript(SESSION_SUMMARIES_SCHEMA_SQL)
     await conn.executescript(CUSTOM_PROACTIVE_QUEUE_SQL)
+    await conn.executescript(TOPIC_BANK_SCHEMA_SQL)
     # 插入初始生命状态行（与 database/core.py init_db 保持一致，v16 含 mood_changed_at）
     from datetime import datetime
 

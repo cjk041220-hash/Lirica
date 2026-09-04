@@ -171,9 +171,11 @@ async def test_generate_proactive_weather_cooldown():
             captured_prompt = messages[1].content
             return MagicMock(content="今天翻了一会儿书。")
 
+    import datetime
+    future_date = (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
     mock_events = [
-        {"id": "w1", "title": "2026-08-31 有雷暴", "event_type": "thunderstorm", "event_date": "2026-08-31", "source": "weather"},
-        {"id": "e1", "title": "期末考试", "event_type": "exam", "event_date": "2026-09-02", "source": "llm"},
+        {"id": "w1", "title": f"{future_date} 有雷暴", "event_type": "thunderstorm", "event_date": future_date, "source": "weather"},
+        {"id": "e1", "title": "期末考试", "event_type": "exam", "event_date": future_date, "source": "llm"},
     ]
 
     with patch("providers.deepseek.create_deepseek_llm", return_value=FakeLLM()), \

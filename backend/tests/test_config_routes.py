@@ -12,7 +12,7 @@ async def test_get_runtime_config_defaults():
     from api.routes.config import get_runtime_config
 
     cfg = get_runtime_config()
-    assert cfg["model"] == "deepseek-v4-flash"
+    assert cfg["model"] == "deepseek-v4-pro"
     assert cfg["temperature"] == 0.8
     assert cfg["max_tokens"] == 8192
     assert cfg["thinking_intensity"] == "medium"

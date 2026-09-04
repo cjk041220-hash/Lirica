@@ -769,6 +769,31 @@ async def daily_morning_greeting(app=None):
         conn, datetime.datetime.now(_HKT), get_settings().presence_timeout_minutes
     )
 
+    # 定制消息队列优先：若队列中有待发消息，优先出队发送
+    custom_content = None
+    try:
+        cursor = await conn.execute(
+            "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        if row:
+            qid, qtext = row
+            await conn.execute(
+                "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
+                (qid,),
+            )
+            await conn.commit()
+            custom_content = qtext
+            log.info("从定制队列提取早安消息 [%d]: %s", qid, custom_content[:40])
+    except Exception as e:
+        log.warning("检查定制早安消息队列失败: %s", e)
+
+    if custom_content:
+        await append_proactive_turn(app, target_sid, custom_content, kind=kind,
+                                    label="早安消息")
+        log.info("早安问候任务完成（定制消息 era=%s）", target_sid)
+        return
+
     # 独处变体：era 已开放（离线期间已有一条以上的主动消息），早安不是
     # 「当天第一次开口」——按心理活动写，不问候（天气/日程等素材段省略）
     if kind == "era":
@@ -980,6 +1005,31 @@ async def daily_evening_reminder(app=None):
         kind, target_sid, _opener = await resolve_proactive_target(
             conn, datetime.datetime.now(_HKT), get_settings().presence_timeout_minutes
         )
+
+        # 定制消息队列优先：若队列中有待发消息，优先出队发送
+        custom_content = None
+        try:
+            cursor = await conn.execute(
+                "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row:
+                qid, qtext = row
+                await conn.execute(
+                    "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
+                    (qid,),
+                )
+                await conn.commit()
+                custom_content = qtext
+                log.info("从定制队列提取前夜消息 [%d]: %s", qid, custom_content[:40])
+        except Exception as e:
+            log.warning("检查定制前夜消息队列失败: %s", e)
+
+        if custom_content:
+            await append_proactive_turn(app, target_sid, custom_content, kind=kind,
+                                        label="前夜提醒")
+            log.info("前夜提醒任务完成（定制消息 era=%s）", target_sid)
+            return
 
         tomorrow = (datetime.datetime.now(_HKT).date() + datetime.timedelta(days=1)).isoformat()
         events = await events_mgr.list_events_for_calendar(tomorrow, tomorrow)
