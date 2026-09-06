@@ -203,6 +203,9 @@ async def auto_consume_topics_from_text(messages: list[str]) -> list[str]:
                     "信" in combined_text and ("今早" in combined_text or "早上" in combined_text or "前几天" in combined_text)
                 ):
                     matched = True
+            elif tid == "topic_teacher_cert_care":
+                if any(w in combined_text for w in ("教资", "教师资格证", "冷冷老师", "考老师", "备考")):
+                    matched = True
 
         if matched:
             success = await consume_topic(tid)

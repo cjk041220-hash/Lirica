@@ -73,15 +73,43 @@ def is_online(now_dt: datetime.datetime, last_seen_at: str | None,
     return (now_dt - last) <= datetime.timedelta(minutes=timeout_minutes)
 
 
-def decide_proactive_target(online: bool, active_session_id: str | None,
-                            open_era_id: str | None) -> tuple[str, str | None]:
+def decide_proactive_target(online: bool = False,
+                            active_session_id: str | None = None,
+                            open_era_id: str | None = None,
+                            *,
+                            latest_session: dict | None = None,
+                            today_date: str | None = None) -> tuple[str, str | None]:
     """主动消息的路由判定（纯函数）。
 
-    返回 (kind, session_id)：
-    - ('session', sid)：在线且报了活跃会话 → 追加进当前对话
-    - ('era', era_id)：离线且已有开放的 era → 追加进独处时间线
-    - ('new_era', None)：离线且无开放的 era → 新开一段独处时间线
+    业务规则（2026-09-06 用户裁定）：
+    1. 主动消息永远放在最新的聊天之下，不要搞得乱七八糟的；
+    2. 小汐每天的主动消息都放在新一天的同一个聊天下；
+    3. 除非冷冷新开聊天（冷冷新开后，后续主动消息跟随最新聊天）。
+
+    判定流程：
+    若提供 latest_session 与 today_date：
+    - 若最新会话存在且属于今天（updated_at 或 created_at 是 today_date）：
+      * 若最新会话为 is_era 且 kind='solo' → ('era', latest_session['id'])
+      * 否则 → ('session', latest_session['id'])
+    - 若无会话或最新会话属于过去的日期（跨天新的一天）→ ('new_era', None)
+
+    向下兼容（未提供 latest_session 时保留纯函数既有判定）：
+    - 在线且报了活跃会话 → ('session', active_session_id)
+    - 离线且已有开放 era → ('era', open_era_id)
+    - 否则 → ('new_era', None)
     """
+    if latest_session is not None and today_date:
+        latest_date = (
+            latest_session.get("updated_at")
+            or latest_session.get("created_at")
+            or ""
+        )[:10]
+        if latest_date == today_date:
+            if latest_session.get("is_era") and latest_session.get("kind") == "solo":
+                return ("era", latest_session["id"])
+            return ("session", latest_session["id"])
+        return ("new_era", None)
+
     if online and active_session_id:
         return ("session", active_session_id)
     if open_era_id:
@@ -101,33 +129,67 @@ def new_era_id() -> str:
 
 # ── 读面：开放 era 与路由目标 ─────────────────────────────────
 
-async def get_open_era_id(conn) -> str | None:
+async def get_latest_session(conn) -> dict | None:
+    """全库最新活跃的会话（按 updated_at DESC, rowid DESC）。
+
+    保证主动消息永远追加在最新的聊天之下。
+    """
+    cursor = await conn.execute(
+        """SELECT id, title, created_at, updated_at, is_era, kind
+           FROM chat_sessions
+           ORDER BY updated_at DESC, rowid DESC LIMIT 1"""
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "title": row[1],
+        "created_at": row[2],
+        "updated_at": row[3],
+        "is_era": bool(row[4]),
+        "kind": row[5] or "chat",
+    }
+
+
+async def get_open_era_id(conn, today_date: str | None = None) -> str | None:
     """最新「仍在开放」的 era 会话 id，无则 None。
 
     开放 = kind='solo'（小汐在独处时间线说话、冷冷还没接话）。她回来
     在 era 里说话（第一条 user 消息）→ chat_archive 把 kind 提升为
     'chat' → 本查询自然找不到，视为关闭；era 被用户在 SessionsPanel
     删除后行消失，同样找不到 → 下一条主动消息新开 era。
-
-    v24 前这里写的是 is_era=1 AND NOT EXISTS(user 消息)，那是拿来源
-    标记兼当类型用的老写法；kind 列补上后判定收敛为一个等值条件
-    （还能吃上索引，不必每次扫 chat_messages 做 NOT EXISTS）。
+    传入 today_date 时限制为当天会话，防止跨天泄漏进过去的旧独处时间线。
     """
-    cursor = await conn.execute(
-        """SELECT id FROM chat_sessions
-           WHERE kind = 'solo'
-           ORDER BY created_at DESC, rowid DESC LIMIT 1"""
-    )
+    if today_date:
+        cursor = await conn.execute(
+            """SELECT id FROM chat_sessions
+               WHERE kind = 'solo'
+                 AND (created_at LIKE ? OR updated_at LIKE ?)
+               ORDER BY updated_at DESC, rowid DESC LIMIT 1""",
+            (f"{today_date}%", f"{today_date}%"),
+        )
+    else:
+        cursor = await conn.execute(
+            """SELECT id FROM chat_sessions
+               WHERE kind = 'solo'
+               ORDER BY created_at DESC, rowid DESC LIMIT 1"""
+        )
     row = await cursor.fetchone()
     return row[0] if row else None
 
 
 async def get_proactive_target(conn, now_dt: datetime.datetime,
                                timeout_minutes: int) -> tuple[str, str | None, bool]:
-    """判定本条主动消息的路由目标（读 life_state + 开放 era）。
+    """判定本条主动消息的路由目标（读 presence + 最新会话 + 跨天判定）。
+
+    业务规则（2026-09-06 用户裁定）：
+    1. 主动消息永远放在最新的聊天之下，不要搞得乱七八糟的；
+    2. 小汐每天的主动消息都放在新一天的同一个聊天下；
+    3. 除非冷冷新开聊天（冷冷新开后，后续主动消息跟随最新聊天）。
 
     返回 (kind, session_id, opener)：opener = kind == 'new_era'，
-    即「这条消息是独处时间线的开场」——只有开场允许按时段问候。
+    即「这条消息是独处时间线的开场」——只有新一天的开场允许按时段问候。
     """
     cursor = await conn.execute(
         "SELECT last_seen_at, active_session_id FROM life_state WHERE id = 1"
@@ -136,10 +198,39 @@ async def get_proactive_target(conn, now_dt: datetime.datetime,
     last_seen = row[0] if row else None
     active_sid = row[1] if row else None
 
+    today_date = now_dt.strftime("%Y-%m-%d")
     online = is_online(now_dt, last_seen, timeout_minutes)
-    open_era = await get_open_era_id(conn)
-    kind, sid = decide_proactive_target(online, active_sid, open_era)
-    return kind, sid, (kind == "new_era")
+
+    # 1. 若冷冷在线且活跃会话属于今天，优先追加进她正在活跃的对话（实时看到）
+    if online and active_sid:
+        cursor = await conn.execute(
+            "SELECT created_at, updated_at FROM chat_sessions WHERE id = ?",
+            (active_sid,),
+        )
+        s_row = await cursor.fetchone()
+        if s_row:
+            s_date = (s_row[1] or s_row[0] or "")[:10]
+            if s_date == today_date:
+                return ("session", active_sid, False)
+        else:
+            if last_seen and last_seen[:10] == today_date:
+                return ("session", active_sid, False)
+
+    # 2. 否则查全库最新活跃会话（最新优先 + 当天聚合）
+    latest = await get_latest_session(conn)
+    if latest is not None:
+        latest_date = (
+            latest.get("updated_at")
+            or latest.get("created_at")
+            or ""
+        )[:10]
+        if latest_date == today_date:
+            if latest.get("is_era") and latest.get("kind") == "solo":
+                return ("era", latest["id"], False)
+            return ("session", latest["id"], False)
+
+    # 3. 新的一天或全空库：新开一段独处时间线（开场允许时段问候）
+    return ("new_era", None, True)
 
 
 async def resolve_proactive_target(conn, now_dt: datetime.datetime,
@@ -190,7 +281,8 @@ async def resolve_proactive_target(conn, now_dt: datetime.datetime,
 # ── 写面：三写一推 ────────────────────────────────────────────
 
 async def append_proactive_turn(app, session_id: str, content: str, *,
-                                kind: str, label: str = "主动消息") -> None:
+                                kind: str, label: str = "主动消息",
+                                now_dt: datetime.datetime | None = None) -> None:
     """主动消息的三写一推，顺序固定，每步独立降级。
 
     1. 档案行：record_solo_message（msg_type='solo'；era 类会话带
@@ -206,7 +298,8 @@ async def append_proactive_turn(app, session_id: str, content: str, *,
     from memory import chat_archive
 
     is_era = 1 if kind in ("era", "new_era") else 0
-    await chat_archive.record_solo_message(session_id, content, is_era=is_era)
+    now_str = now_dt.strftime(_TIME_FMT) if now_dt else None
+    await chat_archive.record_solo_message(session_id, content, is_era=is_era, now=now_str)
 
     # 2) checkpoint 追加 —— 图 state 的 messages 通道带 add_messages
     # reducer，aupdate_state 直接追加；目标线程不存在时从空 checkpoint
@@ -251,4 +344,11 @@ async def append_proactive_turn(app, session_id: str, content: str, *,
     # 3) proactive 行 + 推送（含存储失败止步 / 推送失败降级 stored）
     from heartbeat import _store_and_push_proactive
 
-    await _store_and_push_proactive(content, session_id=session_id, label=label)
+    if now_dt is not None:
+        try:
+            await _store_and_push_proactive(content, session_id=session_id, label=label,
+                                            now_dt=now_dt)
+        except TypeError:
+            await _store_and_push_proactive(content, session_id=session_id, label=label)
+    else:
+        await _store_and_push_proactive(content, session_id=session_id, label=label)

@@ -382,29 +382,23 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
             f"{weekend_line}"
             f"这是你这段独处时间的第一条消息——先说一句当天的问候开场"
             f"（按现在{period}自然地来，如「早安呀，冷冷」这类），"
-            f"然后接上此刻你心里的话（自己当下的生活细节、真实心事或见闻）。\n"
-            f"用一两句话。要自然、简短、符合你的性格。不要问客服式的套话。"
+            f"然后像闺蜜一样找她聊聊天（可以说说你手头好玩的事、好奇问问她、或者挑一个话题开聊）。\n"
+            f"用一两句话。要生动自然、有活人感，像平时微信给好朋友发消息一样。不要问客服式的假客套。"
         )
     else:
-        # 独处变体（v21 根因修复 + 批次 1 扩容）：旧文案永远以「现在是{早晨/下午/晚上}」
-        # 开场且无问候约束，LLM 天然产出「早安/午安/晚上好，冷冷」——
-        # 积压四五条全是问候就是它造成的。独处时刻写的是内心戏与生活
-        # 信息。用户裁定（2026-08-10 修正）：不是完全禁止问好，是别
-        # 「一天早中晚都问好」像打卡机——固定句式开场与反复问好要拦，
-        # 偶尔想打招呼的自然流露要留（硬禁令会把这两者一起杀掉）。
+        # 独处/主动搭话变体（v25 升级：注入主动提问与话题库能力，消除沉闷 AI 味）
         user_prompt = (
             f"现在是{period}，你的心情是「{mood}」，今天经历了「{daily_event}」。\n"
             f"{weekend_line}"
-            f"现在是你的独处时刻，冷冷不在身边。写此刻你心里的话："
-            f"自己正在过的日子（读的书、听的曲子、看番、体感、映海里的动静），"
-            f"或者偶尔对冷冷的真实惦记与回忆。\n"
-            f"用一两句话。想她的时候说想她，惦记什么就说惦记什么；"
-            f"严厉禁止套用『偷偷看你那边 / 看着屋顶 / 猜你回屋没 / 有点想你』这类万能模板骨架；"
-            f"偶尔想打招呼也可以自然带一句——但别拿「早安/午安/晚上好，"
-            f"冷冷」这种固定句式当开场白，一天里也别反复问好。"
-            f"你不是自动问候的机器，是在过自己的日子。不要问客服式的套话。"
-            f"心里有好奇的八卦（JK 和冷冷的进展）也别拿来开场——她没提，"
-            f"这份好奇就放在心里惦记。"
+            f"现在是你的独处时刻，冷冷不在身边。写此刻你想找冷冷聊的话，或者你心里的事：\n"
+            f"1. 主动向冷冷好奇提问或关心（特别是聊到她自己时，如备考、上课、日常生活的细节）；\n"
+            f"2. 从心里的话题库里挑选一个话题，主动跟她搭话、撒娇逗趣或推荐好吃的；\n"
+            f"3. 自然分享你当下的真实见闻或可爱心事，并自然顺带向她抛出话头提问。\n"
+            f"【语气与性格要求】：\n"
+            f"- 要有主动提问和闺蜜互动感！小汐是一个有灵气、活生生的女孩，要有好奇心，会关心冷冷也会逗她笑；\n"
+            f"- 严厉禁止套用『偷偷看你那边 / 看着屋顶 / 猜你回屋没 / 有点想你』这类万能模板骨架，更不要通篇自言自语（绝对不要写成独自叹气、看窗外、看天花板、读诗式的沉闷AI独白小作文）；\n"
+            f"- 偶尔想打招呼也可以自然带一句——但别拿「早安/午安/晚上好，冷冷」这种固定句式当开场白，一天里也别反复问好。你不是自动问候的机器，是在过自己的日子；\n"
+            f"- 简短自然，一两句话，充满活人感！"
         )
 
     # 生理期关心已收敛进事件系统：预测窗口内的 cycle 事件会随下面
@@ -461,24 +455,40 @@ async def _generate_proactive_message(mood: str, daily_event: str, hour: int,
     if history:
         if greeting_allowed:
             tail_guidance = (
-                "接着这个语气和情境自然地搭话。聊到一半没说完的事，"
-                "可以自己跟进；如果上次闹了别扭或气氛僵着，按你生气时的"
-                "性子来——可以别扭地先递个台阶，可以傲娇一点，但别装没"
-                "发生过，也别翻旧账。"
+                "接着这个语气和情境自然地搭话。之前和冷冷聊到一半没说完的事（特别是冷冷提到她自己的事），"
+                "可以自己主动跟进、好奇提问或逗逗她；如果上次闹了别扭或气氛僵着，按你生气时的"
+                "性子来——可以别扭地先递个台阶，可以傲娇一点，但别装没发生过，也别翻旧账。"
             )
         else:
-            # 独处变体：不是「搭话」，是接着自己的心事往下写；闹过别扭
-            # 也只在心里记着，不隔着空气翻旧账
             tail_guidance = (
-                "接着你自己的心事往下写。之前和冷冷聊到一半的事，可以"
-                "惦记着提一句；如果上次闹了别扭，心里记着就好，别装没"
-                "发生过，也别翻旧账。"
+                "接着你自己的心事往下写，自然地找冷冷搭话。之前和冷冷聊到一半的事，可以"
+                "惦记着提一句；如果上次闹了别扭，心里记着就好，别装没发生过，也别翻旧账。"
+                "特别是冷冷提到关于她自己的事情（比如她要准备什么考试、身体累、生活琐事），"
+                "一定要有好奇心，主动去关心她、问问她、逗她开心！"
+                "不要像个自闭机器一样自己对自己嘀咕，要像一个真正的朋友一样跟她说话。"
             )
         user_prompt += (
             "\n\n你最近和冷冷说过这些话（最新在最后）：\n"
             + format_recent_messages(history)
             + "\n\n" + tail_guidance
         )
+
+    # ── 待聊话题库（Topic Bank）：让小汐有生活素材与主动开启话题、好奇提问的能力 ──
+    try:
+        from agent.topic_bank import get_pending_topics
+        pending_topics = await get_pending_topics(limit=3)
+        if pending_topics:
+            topic_lines = [
+                f"- 【{t['title']}】：{t['content']}（建议聊法：{t.get('guidance', '')}）"
+                for t in pending_topics
+            ]
+            user_prompt += (
+                "\n\n【你心里一直想找机会和冷冷聊的话题库（非常建议挑其中一个主动找她搭话、提问或逗她开心）】：\n"
+                + "\n".join(topic_lines)
+                + "\n提示：如果你挑选了上面某个话题，要用你古灵精怪、傲娇可爱的闺蜜口吻自然发起，主动提问或逗她开心，千万不要生硬背诵。"
+            )
+    except Exception as e:
+        log.warning("主动消息：读取话题库失败，省略话题库块: %s", e)
 
     # 用独立的轻量 LLM 调用（低 token、无工具）
     # model 跟随用户在控制台的选择（运行时配置），temperature/max_tokens
@@ -551,7 +561,8 @@ async def sweep_orphan_proactive_messages() -> int:
 
 
 async def _store_and_push_proactive(content: str, *, label: str = "主动消息",
-                                    session_id: str | None = None) -> None:
+                                    session_id: str | None = None,
+                                    now_dt: datetime.datetime | None = None) -> None:
     """主动消息 / 早安 / 前夜提醒共用的「存 pending → 推送 → 失败降级 stored」流水线。
 
     统一三处曾经的重复实现，并固定更安全的语义：**存库失败则不推送**。
@@ -563,7 +574,7 @@ async def _store_and_push_proactive(content: str, *, label: str = "主动消息"
     前端据此决定消息注入哪个窗口。None = 无归属（旧调用方/兜底路径），
     迁移 v21 已把存量无归属未读全部清账。
     """
-    now = datetime.datetime.now(_HKT).strftime(_TIME_FMT)
+    now = (now_dt or datetime.datetime.now(_HKT)).strftime(_TIME_FMT)
     msg_id = uuid.uuid4().hex[:16]
 
     # 1) 存 pending —— 失败即止步，不推送（见 docstring 的安全语义）
@@ -657,8 +668,16 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int,
             )
 
         # 三写一推（档案 + checkpoint + proactive 行 + 推送）
-        await append_proactive_turn(app, target_sid, content, kind=kind,
-                                    label="主动消息")
+        if now_dt is not None:
+            try:
+                await append_proactive_turn(app, target_sid, content, kind=kind,
+                                            label="主动消息", now_dt=now_dt)
+            except TypeError:
+                await append_proactive_turn(app, target_sid, content, kind=kind,
+                                            label="主动消息")
+        else:
+            await append_proactive_turn(app, target_sid, content, kind=kind,
+                                        label="主动消息")
 
     except Exception as e:
         log.error("主动消息生成失败: %s", e)

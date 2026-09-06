@@ -199,3 +199,49 @@ async def test_build_system_prompt_integration(tmp_db):
     assert "## 小汐想找机会聊的话题清单" in prompt_with_topic
     assert "测试话题标题" in prompt_with_topic
     assert "测试话题内容描述" in prompt_with_topic
+
+
+@pytest.mark.asyncio
+async def test_teacher_cert_topic_consumption(tmp_db):
+    """测试教资备考话题的关键词自动核销。"""
+    await add_topic(
+        "topic_teacher_cert_care",
+        "教资备考关心与冷冷老师调侃",
+        "关心冷冷教资备考",
+        keywords="教资,教师资格证,老师,复习,冷冷老师",
+    )
+
+    consumed = await auto_consume_topics_from_text(["冷冷，你教资书翻开第一页了没呀，冷冷老师？"])
+    assert consumed == ["topic_teacher_cert_care"]
+    all_topics = await get_all_topics()
+    assert all_topics[0]["status"] == STATUS_CONSUMED
+
+
+@pytest.mark.asyncio
+async def test_proactive_prompt_includes_topic_bank(tmp_db, monkeypatch):
+    """测试主动消息生成 prompt 中动态包含待聊话题库素材与主动提问指引。"""
+    from heartbeat import _generate_proactive_message
+
+    await add_topic(
+        "topic_test_prompt",
+        "教资备考关心与冷冷老师调侃",
+        "好奇冷冷打算考什么科目的老师",
+        guidance="问问她书翻开第一页没有，叫她一声冷冷老师逗她笑",
+    )
+
+    captured_prompt = []
+
+    class FakeModel:
+        async def ainvoke(self, messages):
+            captured_prompt.append(messages[1].content)
+            return type("M", (), {"content": "冷冷，教资看完了没呀？"})()
+
+    monkeypatch.setattr("providers.deepseek.create_deepseek_llm", lambda **kwargs: FakeModel())
+
+    msg = await _generate_proactive_message("开心", "在映海晒太阳", 15, greeting_allowed=False)
+    assert len(captured_prompt) == 1
+    content = captured_prompt[0]
+    # 验证包含话题库章节与具体话题
+    assert "【你心里一直想找机会和冷冷聊的话题库" in content
+    assert "教资备考关心与冷冷老师调侃" in content
+    assert "好奇提问" in content

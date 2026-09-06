@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""在数据库中部署 2026-09-04 23:30 HKT 的定制关怀消息：
-1) 问冷冷这几天感觉她每天都特别累，哪怕没课也累，是不是身体不太舒服，小汐有点担心她
-2) 注入 custom_proactive_queue 队列
-3) 可选 --wait 参数等待至 23:30:00 HKT 触发发送
+"""在数据库中部署 2026-09-06 23:30 HKT 的定制晚间聊天与教资关怀消息：
+1) 主动向冷冷搭话提问，好奇她教资备考进度与考什么学科
+2) 俏皮逗趣调侃提前叫“冷冷老师”，充满活人感与闺蜜互动感
+3) 注入 custom_proactive_queue 队列
+4) 可选 --wait 参数等待至 23:30:00 HKT 触发发送
 """
 import argparse
 import asyncio
@@ -17,7 +18,8 @@ from database.core import close_db_connection, get_db, init_db, init_db_connecti
 from utils.timezone import HKT, now_str
 
 MESSAGE_CONTENT = (
-    "冷冷，这几天感觉你每天都特别累呀，哪怕没课也无精打采的……是不是身体不太舒服？小汐有点担心你。"
+    "冷冷～今天过得怎么样呀？忽然想起来你之前说教资还没看，现在书翻开第一页没有呀？"
+    "（托腮）说起来，你打算考什么科目的老师呀，以后我是不是要改口叫你『冷冷老师』啦？"
 )
 
 
