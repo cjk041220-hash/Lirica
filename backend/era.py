@@ -300,6 +300,11 @@ async def append_proactive_turn(app, session_id: str, content: str, *,
     is_era = 1 if kind in ("era", "new_era") else 0
     now_str = now_dt.strftime(_TIME_FMT) if now_dt else None
     await chat_archive.record_solo_message(session_id, content, is_era=is_era, now=now_str)
+    try:
+        from agent.topic_bank import auto_consume_topics_from_text
+        await auto_consume_topics_from_text([content])
+    except Exception as e:
+        log.warning("主动消息话题库自动核销检测失败: %s", e)
 
     # 2) checkpoint 追加 —— 图 state 的 messages 通道带 add_messages
     # reducer，aupdate_state 直接追加；目标线程不存在时从空 checkpoint

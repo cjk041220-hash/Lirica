@@ -461,6 +461,11 @@ async def chat(req: ChatRequest, request: Request):
 
             # 对话档案：助手回复落库（空回复会被 record 侧跳过）
             await chat_archive.record_assistant_message(sid, reply)
+            try:
+                from agent.topic_bank import auto_consume_topics_from_text
+                await auto_consume_topics_from_text([reply])
+            except Exception as e:
+                log.warning("话题库自动核销检测失败: %s", e)
 
         return ChatResponse(reply=reply.strip(), session_id=sid)
 
@@ -614,7 +619,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     # 对话档案：已生成的助手文本在锁内落库（顺序保证见上）。
                     # record_* 自身吞异常；唯一未覆盖的是 flush 期间任务
                     # 被再次取消（客户端硬断开的尽力归档缺口，罕见，接受）
-                    await chat_archive.record_assistant_message(sid, "".join(chunks))
+                    full_text = "".join(chunks)
+                    await chat_archive.record_assistant_message(sid, full_text)
+                    try:
+                        from agent.topic_bank import auto_consume_topics_from_text
+                        await auto_consume_topics_from_text([full_text])
+                    except Exception as e:
+                        log.warning("话题库自动核销检测失败: %s", e)
                     # 工具调用遥测（每轮打点，见 _log_tool_telemetry）
                     _log_tool_telemetry(sid, stream_tools)
 
