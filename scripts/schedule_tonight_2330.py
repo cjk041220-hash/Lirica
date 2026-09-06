@@ -18,7 +18,7 @@ from database.core import close_db_connection, get_db, init_db, init_db_connecti
 from utils.timezone import HKT, now_str
 
 MESSAGE_CONTENT = (
-    "冷冷～今天过得怎么样呀？忽然想起来你之前说教资还没看，现在书翻开第一页没有呀？"
+    "冷冷～今天过得怎么样呀？忽然想起来你之前说要准备考教资，最近复习得怎么样啦？"
     "（托腮）说起来，你打算考什么科目的老师呀，以后我是不是要改口叫你『冷冷老师』啦？"
 )
 

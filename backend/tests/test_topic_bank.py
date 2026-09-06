@@ -211,7 +211,7 @@ async def test_teacher_cert_topic_consumption(tmp_db):
         keywords="教资,教师资格证,老师,复习,冷冷老师",
     )
 
-    consumed = await auto_consume_topics_from_text(["冷冷，你教资书翻开第一页了没呀，冷冷老师？"])
+    consumed = await auto_consume_topics_from_text(["冷冷，你最近教资复习得怎么样了呀，冷冷老师？"])
     assert consumed == ["topic_teacher_cert_care"]
     all_topics = await get_all_topics()
     assert all_topics[0]["status"] == STATUS_CONSUMED
@@ -226,7 +226,7 @@ async def test_proactive_prompt_includes_topic_bank(tmp_db, monkeypatch):
         "topic_test_prompt",
         "教资备考关心与冷冷老师调侃",
         "好奇冷冷打算考什么科目的老师",
-        guidance="问问她书翻开第一页没有，叫她一声冷冷老师逗她笑",
+        guidance="问问她最近复习得怎么样啦，叫她一声冷冷老师逗她笑",
     )
 
     captured_prompt = []
