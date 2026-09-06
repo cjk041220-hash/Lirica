@@ -617,6 +617,27 @@ async def _store_and_push_proactive(content: str, *, label: str = "主动消息"
         await _mark_stored(msg_id, label=label)
 
 
+async def _pop_pending_custom_proactive(conn) -> tuple[str, str] | None:
+    """原子获取并核销一条待发的定制主动消息。返回 (msg_id, content) 或 None。"""
+    try:
+        cursor = await conn.execute(
+            "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        msg_id, content = row[0], row[1]
+        await conn.execute(
+            "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
+            (msg_id,),
+        )
+        await conn.commit()
+        return msg_id, content
+    except Exception as e:
+        log.warning("读取/核销定制主动消息队列异常: %s", e)
+        return None
+
+
 async def _try_proactive_message(mood: str, daily_event: str, hour: int,
                                  *, app=None, now_dt: datetime.datetime | None = None):
     """尝试生成并推送一条主动消息（era 路由，v21）。
@@ -642,22 +663,10 @@ async def _try_proactive_message(mood: str, daily_event: str, hour: int,
 
         # 定制消息队列优先：若队列中有待发消息，优先出队发送
         custom_content = None
-        try:
-            cursor = await conn.execute(
-                "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
-            )
-            row = await cursor.fetchone()
-            if row:
-                qid, qtext = row
-                await conn.execute(
-                    "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
-                    (qid,),
-                )
-                await conn.commit()
-                custom_content = qtext
-                log.info("从定制队列提取主动消息 [%d]: %s", qid, custom_content[:40])
-        except Exception as e:
-            log.warning("检查定制主动消息队列失败: %s", e)
+        custom_row = await _pop_pending_custom_proactive(conn)
+        if custom_row:
+            qid, custom_content = custom_row
+            log.info("从定制队列提取主动消息 [%s]: %s", qid, custom_content[:40])
 
         # 生成或提取消息内容
         if custom_content:
@@ -789,25 +798,10 @@ async def daily_morning_greeting(app=None):
     )
 
     # 定制消息队列优先：若队列中有待发消息，优先出队发送
-    custom_content = None
-    try:
-        cursor = await conn.execute(
-            "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
-        )
-        row = await cursor.fetchone()
-        if row:
-            qid, qtext = row
-            await conn.execute(
-                "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
-                (qid,),
-            )
-            await conn.commit()
-            custom_content = qtext
-            log.info("从定制队列提取早安消息 [%d]: %s", qid, custom_content[:40])
-    except Exception as e:
-        log.warning("检查定制早安消息队列失败: %s", e)
-
-    if custom_content:
+    custom_row = await _pop_pending_custom_proactive(conn)
+    if custom_row:
+        qid, custom_content = custom_row
+        log.info("从定制队列提取早安消息 [%s]: %s", qid, custom_content[:40])
         await append_proactive_turn(app, target_sid, custom_content, kind=kind,
                                     label="早安消息")
         log.info("早安问候任务完成（定制消息 era=%s）", target_sid)
@@ -1026,25 +1020,10 @@ async def daily_evening_reminder(app=None):
         )
 
         # 定制消息队列优先：若队列中有待发消息，优先出队发送
-        custom_content = None
-        try:
-            cursor = await conn.execute(
-                "SELECT id, content FROM custom_proactive_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
-            )
-            row = await cursor.fetchone()
-            if row:
-                qid, qtext = row
-                await conn.execute(
-                    "UPDATE custom_proactive_queue SET status = 'sent' WHERE id = ?",
-                    (qid,),
-                )
-                await conn.commit()
-                custom_content = qtext
-                log.info("从定制队列提取前夜消息 [%d]: %s", qid, custom_content[:40])
-        except Exception as e:
-            log.warning("检查定制前夜消息队列失败: %s", e)
-
-        if custom_content:
+        custom_row = await _pop_pending_custom_proactive(conn)
+        if custom_row:
+            qid, custom_content = custom_row
+            log.info("从定制队列提取前夜消息 [%s]: %s", qid, custom_content[:40])
             await append_proactive_turn(app, target_sid, custom_content, kind=kind,
                                         label="前夜提醒")
             log.info("前夜提醒任务完成（定制消息 era=%s）", target_sid)
