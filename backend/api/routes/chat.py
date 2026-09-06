@@ -344,12 +344,8 @@ async def ensure_checkpoint_hydrated(agent, sid: str, max_messages: int = 20) ->
     """
     if agent is None or not sid:
         return
-    try:
-        from unittest.mock import AsyncMock, MagicMock
-        if isinstance(agent, (AsyncMock, MagicMock)):
-            return
-    except ImportError:
-        pass
+    if type(agent).__module__.startswith("unittest.mock"):
+        return
 
     try:
         aget_state = getattr(agent, "aget_state", None)

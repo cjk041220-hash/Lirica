@@ -8,7 +8,7 @@
 4. 全链路真实调用（Fake Chat Model 捕获输入）：验证冷冷回“咋了”时，LLM 实际收到的输入包含小汐的主动提问。
 """
 import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -23,8 +23,7 @@ from api.routes.chat import (
 )
 from era import append_proactive_turn
 from memory import chat_archive
-from utils.timezone import HKT, now_str
-
+from utils.timezone import HKT
 
 _captured_records = []
 

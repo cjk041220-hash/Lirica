@@ -70,10 +70,9 @@ async def integration_app(tmp_db, monkeypatch):
     （ValueError: no active connection）。改用 monkeypatch 后，undo 按
     setattr 的逆序进行，最终稳定还原成真身。
     """
+    from config.settings import get_settings
     from memory.manager import MemoryManager
     from memory.narrative import NarrativeBuilder
-
-    from config.settings import get_settings
     monkeypatch.setattr(get_settings(), "xiaoxi_api_token", "")
 
     # 组件初始化
@@ -130,14 +129,13 @@ async def integration_app(tmp_db, monkeypatch):
     async def mock_get_db():
         return tmp_db
 
+    # Spec B：care 流水线（care_ledger / chat_messages 时间戳 / 活跃事件）
+    # 同样必须接到 tmp_db，否则对话路径会读/写穿生产库
+    import agent.care as care_module
     import agent.soul as soul_module
     import api.routes.chat as chat_route_module
     import heartbeat as hb
     import memory.chat_archive as chat_archive_module
-
-    # Spec B：care 流水线（care_ledger / chat_messages 时间戳 / 活跃事件）
-    # 同样必须接到 tmp_db，否则对话路径会读/写穿生产库
-    import agent.care as care_module
     import utils.events as events_module
 
     # 一律走 monkeypatch：与用例体内的 monkeypatch 共享同一个 undo 栈，
@@ -861,6 +859,7 @@ async def test_session_delete_cascade_and_404(client):
 async def test_chat_cross_session_proactive_awareness_integration(client, integration_app, tmp_db):
     """端到端集成验证：主动消息发出后，冷冷在不同 session 回复，系统信息正确注入主动消息感知。"""
     import datetime
+
     from utils.timezone import HKT
 
     now = datetime.datetime.now(HKT).strftime("%Y-%m-%d %H:%M")

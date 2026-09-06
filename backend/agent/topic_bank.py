@@ -10,10 +10,7 @@
    严禁任务清单式排队盘问，冷冷倾诉或情绪波动时无条件优先陪伴接住情绪。
 """
 import datetime
-import uuid
 from typing import Any
-
-import aiosqlite
 
 from database.core import get_db, rows_to_dicts
 from utils.logger import get_logger

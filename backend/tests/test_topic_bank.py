@@ -8,8 +8,9 @@
 5. 记忆与话题库安全隔离（核销话题不影响 memories 表）
 6. 系统提示词集成（build_system_prompt 包含话题库章节）
 """
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from agent.topic_bank import (
     STATUS_CONSUMED,
@@ -238,7 +239,7 @@ async def test_proactive_prompt_includes_topic_bank(tmp_db, monkeypatch):
 
     monkeypatch.setattr("providers.deepseek.create_deepseek_llm", lambda **kwargs: FakeModel())
 
-    msg = await _generate_proactive_message("开心", "在映海晒太阳", 15, greeting_allowed=False)
+    await _generate_proactive_message("开心", "在映海晒太阳", 15, greeting_allowed=False)
     assert len(captured_prompt) == 1
     content = captured_prompt[0]
     # 验证包含话题库章节与具体话题

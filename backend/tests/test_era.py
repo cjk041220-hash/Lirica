@@ -254,7 +254,7 @@ async def test_full_day_lifecycle_and_cross_day_transition(era_db):
     4. Day 1 晚 23:00 -> session 追加进冷冷最新对话 (opener=False)
     5. Day 2 早 08:00 -> new_era 跨天新开 Day 2 时间线 (opener=True)
     """
-    from era import resolve_proactive_target, append_proactive_turn
+    from era import append_proactive_turn, resolve_proactive_target
     from memory import chat_archive
 
     # 1. Day 1 08:00
