@@ -218,6 +218,7 @@ async def init_db(conn: aiosqlite.Connection) -> None:
         LIFE_STATE_SCHEMA_SQL,
         MEMORIES_INDEX_SQL,
         MEMORY_EXTRACT_STATE_SQL,
+        SESSION_SUMMARIES_SCHEMA_SQL,
         TOPIC_BANK_SCHEMA_SQL,
         ensure_schema,
     )
@@ -246,6 +247,8 @@ async def init_db(conn: aiosqlite.Connection) -> None:
     await conn.executescript(CARE_LEDGER_SCHEMA_SQL)
     # custom_proactive_queue：定制主动消息队列
     await conn.executescript(CUSTOM_PROACTIVE_QUEUE_SQL)
+    # session_summaries（迁移 v23）：会话脉络摘要表
+    await conn.executescript(SESSION_SUMMARIES_SCHEMA_SQL)
     # topic_bank（迁移 v25）：话题库系统
     await conn.executescript(TOPIC_BANK_SCHEMA_SQL)
     await conn.commit()
