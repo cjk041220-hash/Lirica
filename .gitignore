@@ -21,6 +21,10 @@ backend/test_output.txt
 backend/out.txt
 backend/.pytest_cache/
 
+# 临时调试导出
+*聊天记录*.md
+chat_messages_*.json
+
 # 实跑日志（含会话 sid、绝对路径等运行细节，不入库）
 *.log
 
