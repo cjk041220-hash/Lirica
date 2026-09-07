@@ -12,13 +12,16 @@ from api.middleware.auth import AuthAndRateLimitMiddleware
 
 
 class _InnerApp:
-    """最小 ASGI 内层应用：记录被调用次数。"""
+    """最小 ASGI 内层应用：记录被调用次数并发出 200 响应。"""
 
     def __init__(self):
         self.calls = 0
 
     async def __call__(self, scope, receive, send):
         self.calls += 1
+        if scope.get("type") == "http":
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b'{"status":"ok"}'})
 
 
 @pytest.fixture(autouse=True)
@@ -334,3 +337,63 @@ def test_retry_after_computed_from_oldest_record():
 def test_rate_limit_health_has_bucket():
     """健康检查有独立限流桶（公网不可无限频刷的轻量 DoS 面）。"""
     assert auth_mod._RATE_LIMITS.get("/api/health", 0) >= 1
+
+
+# ── Cookie 凭证支持与种植（Task 1）──────────────────────────
+
+
+async def test_auth_via_cookie_succeeds_without_bearer():
+    """仅携带 xiaoxi_token Cookie 时受保护端点放行。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="secret-cookie-token")
+
+    status, _ = await _invoke(
+        mw,
+        inner,
+        "/api/memories",
+        headers=[(b"cookie", b"other=123; xiaoxi_token=secret-cookie-token; foo=bar")],
+    )
+    assert status == 200
+    assert inner.calls == 1
+
+
+async def test_auth_via_wrong_cookie_returns_401():
+    """携带错误的 xiaoxi_token Cookie 返回 401。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="secret-cookie-token")
+
+    status, _ = await _invoke(
+        mw,
+        inner,
+        "/api/memories",
+        headers=[(b"cookie", b"xiaoxi_token=wrong-token")],
+    )
+    assert status == 401
+    assert inner.calls == 0
+
+
+async def test_valid_auth_sets_cookie_header():
+    """带有效 Bearer Token 成功请求时，响应附带 1 年长效 xiaoxi_token Cookie。"""
+    inner = _InnerApp()
+    mw = AuthAndRateLimitMiddleware(inner, api_token="secret-token")
+    headers_out = []
+
+    status, _ = await _invoke(
+        mw,
+        inner,
+        "/api/status",
+        headers=[(b"authorization", b"Bearer secret-token")],
+        headers_out=headers_out,
+    )
+    assert status == 200
+    assert inner.calls == 1
+    # 验证响应头中包含 Set-Cookie
+    cookies = [
+        v.decode()
+        for k, v in headers_out[-1].items()
+        if k.decode().lower() == "set-cookie"
+    ]
+    assert len(cookies) == 1
+    assert "xiaoxi_token=secret-token" in cookies[0]
+    assert "Max-Age=31536000" in cookies[0]
+

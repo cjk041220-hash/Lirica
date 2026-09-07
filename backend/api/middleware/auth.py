@@ -7,6 +7,7 @@
 - Token 比较使用 hmac.compare_digest（常量时间，防时序侧信道）
 - 429 响应带 Retry-After 头（客户端可据此退避）；OPTIONS 预检不占限流桶
 """
+import hmac
 import math
 import time
 
@@ -107,6 +108,19 @@ def _get_path_prefix(path: str) -> str | None:
     return None
 
 
+def _extract_cookie_token(scope: Scope) -> str | None:
+    """从 ASGI scope 的 Cookie 头解析 xiaoxi_token 值。"""
+    headers = dict(scope.get("headers", []))
+    cookie_raw = headers.get(b"cookie", b"").decode("utf-8", errors="ignore")
+    if not cookie_raw:
+        return None
+    for item in cookie_raw.split(";"):
+        item = item.strip()
+        if item.startswith("xiaoxi_token="):
+            return item[len("xiaoxi_token=") :].strip()
+    return None
+
+
 def _is_public_path(path: str) -> bool:
     """是否为免认证的公开端点。"""
     return path in _PUBLIC_PATHS
@@ -191,21 +205,48 @@ class AuthAndRateLimitMiddleware:
                 return
 
         # ── 认证 ──
-        if prefix and self.api_token and not _is_public_path(path):
+        should_set_cookie = False
+        if self.api_token:
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"").decode()
-            if not _token_matches(auth, self.api_token):
-                # OPTIONS 预检不需要认证
-                if method != "OPTIONS":
-                    response = JSONResponse(
-                        # P0-4（2026-08-12）：原「需要有效的 API Token 才能访问
-                        # 此接口」太僵硬，对齐「浪花家族」语气（429 同款 ~ 尾缀）。
-                        # 前端 client.js 只按状态码广播 UNAUTHORIZED_EVENT，
-                        # detail 不渲染，润色零风险。
-                        {"detail": "想和小汐说话，得先对上暗号哦~"},
-                        status_code=401,
-                    )
-                    await response(scope, receive, send)
-                    return
+            cookie_token = _extract_cookie_token(scope)
 
-        await self.app(scope, receive, send)
+            bearer_ok = _token_matches(auth, self.api_token) if auth else False
+            cookie_ok = (
+                hmac.compare_digest(cookie_token.encode("utf-8"), self.api_token.encode("utf-8"))
+                if cookie_token
+                else False
+            )
+
+            is_authed = bearer_ok or cookie_ok
+
+            if prefix and not _is_public_path(path):
+                if not is_authed:
+                    # OPTIONS 预检不需要认证
+                    if method != "OPTIONS":
+                        response = JSONResponse(
+                            {"detail": "想和小汐说话，得先对上暗号哦~"},
+                            status_code=401,
+                        )
+                        await response(scope, receive, send)
+                        return
+                else:
+                    should_set_cookie = True
+            elif is_authed:
+                should_set_cookie = True
+
+        if should_set_cookie:
+            async def send_with_cookie(message: dict):
+                if message["type"] == "http.response.start":
+                    headers_list = list(message.get("headers", []))
+                    cookie_val = (
+                        f"xiaoxi_token={self.api_token}; Path=/; "
+                        "Max-Age=31536000; SameSite=Lax"
+                    )
+                    headers_list.append((b"set-cookie", cookie_val.encode("utf-8")))
+                    message["headers"] = headers_list
+                await send(message)
+
+            await self.app(scope, receive, send_with_cookie)
+        else:
+            await self.app(scope, receive, send)

@@ -25,6 +25,7 @@ export async function fetchEvents(from, to) {
     const res = await apiFetch(
       `/api/events?from=${from}&to=${to}&include_weather=1&include_completed=1`
     )
+    if (res.status === 401) return { events: [], unauthorized: true }
     if (!res.ok) return { events: [] }
     const data = await res.json()
     return { events: Array.isArray(data.events) ? data.events : [] }

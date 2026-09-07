@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { apiFetch, getToken, UNAUTHORIZED_EVENT } from '../api/client'
+import { apiFetch, getToken, UNAUTHORIZED_EVENT, TOKEN_UPDATED_EVENT } from '../api/client'
 import { getGpsCoords, isGpsEnabled } from '../api/location'
 import { isValidNav } from '../utils/mapLink'
 import { isValidTarot } from '../utils/tarot'
 import { getHKTHour, hktNowStr } from '../utils/time'
+import { getLocalItem, setResilientItem, STORAGE_KEYS } from '../utils/storage'
 
 // iOS Safari <17.4 的 fetch + ReadableStream 会整段缓冲、生成完毕才
 // 一次性吐出（WebKit 17.4 起才真增量）——打字机效果全毁，用户盯着
@@ -39,12 +40,12 @@ let sessionSeq = 0
 // 跑下来是纯粹的无界泄漏。改成单 key 存一个定长队列（只留最近 50 个
 // 会话 id）：问候只关心「刚开的新会话有没有打过招呼」，几个月前的
 // 记录丢掉毫无影响。
-const GREETED_KEY = 'xiaoxi-greeted'
+const GREETED_KEY = STORAGE_KEYS.GREETED
 const GREETED_MAX = 50
 
 function loadGreeted() {
   try {
-    const raw = localStorage.getItem(GREETED_KEY)
+    const raw = getLocalItem(GREETED_KEY)
     const ids = raw ? JSON.parse(raw) : []
     return new Set(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [])
   } catch {
@@ -55,7 +56,7 @@ function loadGreeted() {
 function persistGreeted(set) {
   try {
     // Set 保序，尾部是最新——超限丢最旧
-    localStorage.setItem(GREETED_KEY, JSON.stringify([...set].slice(-GREETED_MAX)))
+    setResilientItem(GREETED_KEY, JSON.stringify([...set].slice(-GREETED_MAX)))
   } catch {
     /* 写不进去就不记账，下次可能再问候一次，可接受 */
   }
@@ -63,14 +64,14 @@ function persistGreeted(set) {
 
 // 会话 ID 持久化（修复 P1-1）：刷新页面不再是"陌生人"，
 // checkpoint 连续性与产品叙事"一直在网页里陪你"对齐。
-const SESSION_KEY = 'xiaoxi-session'
+const SESSION_KEY = STORAGE_KEYS.SESSION
 const getSessionId = () => {
   try {
-    const existing = localStorage.getItem(SESSION_KEY)
+    const existing = getLocalItem(SESSION_KEY)
     if (existing) return existing
     // 后端校验 ^[a-z0-9-]{1,64}$：小写字母数字连字符
     const fresh = `s-${Date.now().toString(36)}`
-    localStorage.setItem(SESSION_KEY, fresh)
+    setResilientItem(SESSION_KEY, fresh)
     return fresh
   } catch {
     return `s-${Date.now().toString(36)}`
@@ -193,44 +194,94 @@ export function useChat() {
   //
   // 档案是历史的唯一真相源——每条用户/助手消息在写入时就已归档（见
   // chat.py 两条对话路径），而 checkpoint 只是 LLM 的实时上下文、会被
-  // prune_checkpoints 定期裁剪。2026-08-30 前这里有条 checkpoint 回退
-  // 分支：两个端点返回的字段都不一致（档案带 created_at 与 msg_type，
-  // checkpoint 路径两者皆无），同一段对话刷新前后会长出两套时间信息，
-  // 会话内的时间分隔条也就时有时无。回退已随 /api/chat/history 一并
-  // 删除——现在刷新恢复与「回到旧会话」走的是同一条路、同一份契约。
+  // prune_checkpoints 定期裁剪。
+  //
+  // 会话自愈（2026-09-07 防失联计划）：
+  // 若当前 sessionId 在服务器拉取为 0 条消息且用户未主动发送，并发向
+  // /api/sessions 寻址最新活跃会话并自动对齐，杜绝用户被抛入空白房间。
   const loadHistory = useCallback(async () => {
     const sid = sessionIdRef.current
     try {
       const res = await apiFetch(`/api/sessions/${encodeURIComponent(sid)}/messages`)
-      if (!res.ok) return
-      const history = ((await res.json()).messages || [])
-        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map((m) => ({
-          id: nextId(),
-          role: m.role,
-          content: m.content,
-          // 档案行带 msg_type（'solo' 小汐的独处话语）与 created_at：
-          // MessageBubble 据此渲染弱化样式，ChatPanel 据此插时间分隔条
-          msg_type: m.msg_type,
-          created_at: m.created_at,
-        }))
-      if (history.length === 0) {
-        maybeGreet(sid)
-        return
+      if (res.status === 401) return
+      if (res.ok) {
+        const history = ((await res.json()).messages || [])
+          .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+          .map((m) => ({
+            id: nextId(),
+            role: m.role,
+            content: m.content,
+            // 档案行带 msg_type（'solo' 小汐的独处话语）与 created_at：
+            // MessageBubble 据此渲染弱化样式，ChatPanel 据此插时间分隔条
+            msg_type: m.msg_type,
+            created_at: m.created_at,
+          }))
+        if (history.length > 0) {
+          setMessages((prev) => (prev.length === 0 ? history : prev))
+          setUserMsgCount(history.filter((m) => m.role === 'user').length)
+          return
+        }
       }
-      // 仅在当前为空时注入，避免覆盖已到达的主动消息
-      setMessages((prev) => (prev.length === 0 ? history : prev))
-      // 回填用户消息数：刷新/恢复后深夜唤醒序列才有正确基准
-      setUserMsgCount(history.filter((m) => m.role === 'user').length)
+
+      // 当前会话无消息时：尝试从服务器拉取全库最新活跃会话自愈对齐
+      //（仅当页面未有用户正在进行的本地聊天时）
+      try {
+        const sessRes = await apiFetch('/api/sessions?limit=5')
+        if (sessRes.ok) {
+          const sessData = await sessRes.json()
+          const list = Array.isArray(sessData.sessions) ? sessData.sessions : []
+          const active = list.find((s) => s.id && s.id !== sid && (s.message_count > 0 || s.preview))
+          if (active) {
+            const actRes = await apiFetch(`/api/sessions/${encodeURIComponent(active.id)}/messages`)
+            if (actRes.ok) {
+              const actHistory = ((await actRes.json()).messages || [])
+                .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+                .map((m) => ({
+                  id: nextId(),
+                  role: m.role,
+                  content: m.content,
+                  msg_type: m.msg_type,
+                  created_at: m.created_at,
+                }))
+              if (actHistory.length > 0) {
+                sessionIdRef.current = active.id
+                _setSessionId(active.id)
+                setResilientItem(STORAGE_KEYS.SESSION, active.id)
+                setMessages((prev) => (prev.length === 0 ? actHistory : prev))
+                setUserMsgCount(actHistory.filter((m) => m.role === 'user').length)
+                return
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[useChat] session healing failed:', err)
+      }
+
+      // 全库真为空库时触发时段问候
+      maybeGreet(sid)
     } catch (e) {
       console.warn('[useChat] archive load failed:', e)
     }
-    // maybeGreet 是 useCallback([]) 恒稳定，加入依赖不改变 loadHistory 身份
   }, [maybeGreet])
 
   // 挂载时拉一次历史
   useEffect(() => {
     loadHistory()
+  }, [loadHistory])
+
+  // 监听令牌更新/自愈事件：若当前无消息，自动重新拉取历史
+  useEffect(() => {
+    const onTokenUpdated = () => {
+      setMessages((prev) => {
+        if (prev.length === 0) {
+          loadHistory()
+        }
+        return prev
+      })
+    }
+    window.addEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
+    return () => window.removeEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
   }, [loadHistory])
 
   // 卸载时清掉「开心回落」定时器（防微杜渐：App 根组件永不卸载，但 hook 应保持自洽）
@@ -666,9 +717,7 @@ export function useChat() {
     abortRef.current = null
     sessionIdRef.current = id
     _setSessionId(id)
-    try {
-      localStorage.setItem(SESSION_KEY, id)
-    } catch {}
+    setResilientItem(STORAGE_KEYS.SESSION, id)
     clearTimeout(happyTimerRef.current)
     setMessages([])
     setIsStreaming(false)

@@ -20,6 +20,7 @@ vi.mock('../api/client', () => ({
   apiFetch: apiFetchMock,
   getToken: () => 'test-token',
   UNAUTHORIZED_EVENT: 'unauthorized',
+  TOKEN_UPDATED_EVENT: 'xiaoxi:token-updated',
 }))
 
 // 可控 SSE 流：测试手动 emit 每一行，模拟「网络把 JSON 拆成多个 chunk」
@@ -365,5 +366,51 @@ describe('useChat 读取超时兜底（审计 P1-2）', () => {
     expect(assistant.content).toBe('来了')
     expect(assistant.content).not.toContain('连接中断')
     vi.useRealTimers()
+  })
+
+  describe('会话自愈与对齐（2026-09-07 防失联计划）', () => {
+    it('当前会话为空时，自动寻址全库最新活跃会话并载入历史', async () => {
+      // 1. 初次请求当前空会话返回空消息
+      apiFetchMock.mockImplementation(async (url) => {
+        if (url.includes('/api/sessions?limit=5')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              sessions: [
+                { id: 'e-active-session-1', message_count: 5, preview: '上次聊的话题' },
+              ],
+            }),
+          }
+        }
+        if (url.includes('/api/sessions/e-active-session-1/messages')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              messages: [
+                { role: 'user', content: '小汐你在吗？', created_at: '2026-09-07 12:00' },
+                { role: 'assistant', content: '我一直在呀！', created_at: '2026-09-07 12:01' },
+              ],
+            }),
+          }
+        }
+        // 默认空消息
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ messages: [] }),
+        }
+      })
+
+      const { result } = renderHook(() => useChat())
+      await act(async () => {})
+
+      // 验证当前 sessionId 被对齐为服务器最新活跃会话
+      expect(result.current.sessionId).toBe('e-active-session-1')
+      expect(result.current.messages).toHaveLength(2)
+      expect(result.current.messages[0].content).toBe('小汐你在吗？')
+      expect(result.current.messages[1].content).toBe('我一直在呀！')
+    })
   })
 })

@@ -9,6 +9,10 @@ import '@fontsource/zcool-kuaile'
 import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { initResilientStorage } from './utils/storage'
+
+// 启动时初始化多层容灾存储自愈
+initResilientStorage().catch(() => {})
 
 // 标签页隐藏 → 暂停全部 CSS 动画（评审 F8，配合 index.css 的
 // html.anim-paused 规则）：后台标签页不再白烧 GPU/电量，

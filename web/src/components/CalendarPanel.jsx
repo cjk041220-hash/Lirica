@@ -8,6 +8,7 @@ import {
   deleteEvent,
   setEventCompleted,
 } from '../api/events'
+import { setToken, apiFetch, TOKEN_UPDATED_EVENT } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // 「今天」按 HKT 判定（同 SessionsPanel 的时区纪律：天空/深夜/日历同一口钟）
@@ -99,6 +100,9 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
   const [month, setMonth] = useState({ y: viewY, m: viewM })
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
+  const [isUnauthorized, setIsUnauthorized] = useState(false)
+  const [unlockToken, setUnlockToken] = useState('')
+  const [unlockError, setUnlockError] = useState('')
 
   // 弹层层级：日期详情 → 记/改事件（Esc 从最上层关起）
   const [selectedDay, setSelectedDay] = useState(null)
@@ -142,13 +146,46 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
       )
     : []
 
+  // 监听 Token 更新事件，自动刷新数据并解除锁定
+  useEffect(() => {
+    const onTokenUpdated = () => refresh()
+    window.addEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
+    return () => window.removeEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
+  }, [])
+
+  const handleUnlock = async (e) => {
+    if (e) e.preventDefault()
+    const trimmed = unlockToken.trim()
+    if (!trimmed) return
+    setToken(trimmed)
+    setUnlockError('')
+    try {
+      const res = await apiFetch('/api/events?from=' + cells[0].iso + '&to=' + cells[cells.length - 1].iso)
+      if (res.status === 401) {
+        setUnlockError('暗号好像不太对哦，再试一次吧~')
+      } else {
+        setIsUnauthorized(false)
+        refresh()
+      }
+    } catch {
+      setUnlockError('连接服务器时出了点小状况')
+    }
+  }
+
   // 拉取：切月 / 聊完一条（小汐可能刚记下/改过/删过日程）/ 写操作后
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     fetchEvents(cells[0].iso, cells[cells.length - 1].iso)
       .then((data) => {
-        if (!cancelled) setEvents(data.events)
+        if (!cancelled) {
+          if (data.unauthorized) {
+            setIsUnauthorized(true)
+          } else {
+            setIsUnauthorized(false)
+            setEvents(data.events)
+          }
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -357,80 +394,112 @@ export default function CalendarPanel({ onClose, lastDoneAt = 0 }) {
         </div>
 
         {/* 网格 */}
-        <div className="flex-1 overflow-y-auto px-3 pb-2 chat-scroll">
-          <div className="grid grid-cols-7 px-1 pb-1">
-            {WEEKDAYS.map((w) => (
-              <span key={w} className="text-center text-[10px] text-plum/60 font-medium">
-                {w}
-              </span>
-            ))}
-          </div>
-          {loading ? (
-            // 骨架屏（2026-08-09 商业级 1.2）：7 列日期格点阵预告月历结构
-            <div
-              className="grid grid-cols-7 gap-1"
-              style={{ minHeight: '300px' }}
-              aria-busy="true"
-              aria-label="正在加载日历"
-            >
-              {Array.from({ length: 35 }, (_, i) => (
-                <div
-                  key={i}
-                  className="skeleton-bar rounded-xl"
-                  style={{ animationDelay: `${(i % 7) * 0.06 + Math.floor(i / 7) * 0.1}s` }}
+        <div className="flex-1 overflow-y-auto px-3 pb-2 chat-scroll flex flex-col">
+          {isUnauthorized ? (
+            <div className="flex flex-col items-center justify-center h-full px-6 py-12 text-center my-auto">
+              <div className="w-12 h-12 rounded-full bg-strawberry/15 flex items-center justify-center mb-3 text-xl">
+                🗝️
+              </div>
+              <h3 className="font-display text-[15px] text-plum mb-1.5">
+                小汐还在房间里等你哦~
+              </h3>
+              <p className="text-[12px] text-plum/65 mb-4 leading-relaxed max-w-[260px]">
+                对上专属暗号，小汐记下的重要日程与约定就会立刻显示啦。
+              </p>
+              <form onSubmit={handleUnlock} className="flex flex-col w-full max-w-[240px] gap-2">
+                <input
+                  type="password"
+                  placeholder="输入访问暗号..."
+                  value={unlockToken}
+                  onChange={(e) => setUnlockToken(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-xl bg-plum/5 border border-strawberry/20 text-plum focus:outline-none focus:border-strawberry/50 text-center"
                 />
-              ))}
+                {unlockError && <p className="text-[10px] text-raspberry">{unlockError}</p>}
+                <button
+                  type="submit"
+                  className="btn-press w-full py-1.5 rounded-xl bg-strawberry/20 text-raspberry text-xs font-medium hover:bg-strawberry/30 transition-colors"
+                >
+                  唤醒小汐
+                </button>
+              </form>
             </div>
           ) : (
-            <div
-              key={monthKey}
-              className="grid grid-cols-7 grid-rows-6 gap-1 auto-rows-fr"
-              style={{ minHeight: '300px' }}
-            >
-              {cells.map((c) => {
-                const items = byDay[c.iso] || []
-                const isToday = c.iso === today
-                const isSel = c.iso === selectedDay
-                return (
-                  <button
-                    key={c.iso}
-                    onClick={() => setSelectedDay(c.iso)}
-                    disabled={!c.inMonth}
-                    aria-label={`${month.m}月${c.day}日${items.length ? `，${items.length}件事` : ''}`}
-                    className={`springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
-                      ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}
-                      ${isToday ? 'bg-honey/10' : ''}
-                      ${isSel ? 'bg-strawberry/10 border-strawberry/50' : 'border-transparent hover:bg-plum/5'}
-                      ${c.iso < today && !isToday ? 'opacity-55' : ''}`}
-                  >
-                    <span
-                      className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-raspberry' : 'text-plum/60'}`}
-                    >
-                      {c.day}
-                      {isToday && (
-                        <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(233,180,76,0.9)]" />
-                      )}
-                    </span>
-                    {items.slice(0, 2).map(({ ev, first }, j) => {
-                      const done = !!ev.completed_at
-                      return (
-                        <div
-                          key={ev.id + j}
-                          className={`mt-0.5 min-w-0 truncate rounded-md border-l-2 px-1 text-[9px] leading-[1.6] ${pillClasses(ev)} ${done ? 'opacity-50' : ''}`}
+            <>
+              <div className="grid grid-cols-7 px-1 pb-1">
+                {WEEKDAYS.map((w) => (
+                  <span key={w} className="text-center text-[10px] text-plum/60 font-medium">
+                    {w}
+                  </span>
+                ))}
+              </div>
+              {loading ? (
+                // 骨架屏（2026-08-09 商业级 1.2）：7 列日期格点阵预告月历结构
+                <div
+                  className="grid grid-cols-7 gap-1"
+                  style={{ minHeight: '300px' }}
+                  aria-busy="true"
+                  aria-label="正在加载日历"
+                >
+                  {Array.from({ length: 35 }, (_, i) => (
+                    <div
+                      key={i}
+                      className="skeleton-bar rounded-xl"
+                      style={{ animationDelay: `${(i % 7) * 0.06 + Math.floor(i / 7) * 0.1}s` }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div
+                  key={monthKey}
+                  className="grid grid-cols-7 grid-rows-6 gap-1 auto-rows-fr"
+                  style={{ minHeight: '300px' }}
+                >
+                  {cells.map((c) => {
+                    const items = byDay[c.iso] || []
+                    const isToday = c.iso === today
+                    const isSel = c.iso === selectedDay
+                    return (
+                      <button
+                        key={c.iso}
+                        onClick={() => setSelectedDay(c.iso)}
+                        disabled={!c.inMonth}
+                        aria-label={`${month.m}月${c.day}日${items.length ? `，${items.length}件事` : ''}`}
+                        className={`springy relative min-w-0 rounded-xl p-1 pt-1.5 text-left align-top border transition-colors
+                          ${c.inMonth ? '' : 'opacity-25 pointer-events-none'}
+                          ${isToday ? 'bg-honey/10' : ''}
+                          ${isSel ? 'bg-strawberry/10 border-strawberry/50' : 'border-transparent hover:bg-plum/5'}
+                          ${c.iso < today && !isToday ? 'opacity-55' : ''}`}
+                      >
+                        <span
+                          className={`block text-[11px] font-semibold pl-0.5 ${isToday ? 'text-raspberry' : 'text-plum/60'}`}
                         >
-                          {ev.source === 'weather'
-                            ? `${WEATHER_ICONS[ev.event_type] || '☁️'} ${first ? weatherLabel(ev) : '·'}`
-                            : `${isXiaoxiNoted(ev) && first ? '✦ ' : ''}${done && first ? '✓ ' : ''}${first ? ev.title : '·'}`}
-                        </div>
-                      )
-                    })}
-                    {items.length > 2 && (
-                      <div className="text-[8px] text-plum/60 pl-0.5">＋{items.length - 2}</div>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
+                          {c.day}
+                          {isToday && (
+                            <span className="inline-block ml-1 w-1 h-1 rounded-full bg-honey align-middle shadow-[0_0_5px_rgba(233,180,76,0.9)]" />
+                          )}
+                        </span>
+                        {items.slice(0, 2).map(({ ev, first }, j) => {
+                          const done = !!ev.completed_at
+                          return (
+                            <div
+                              key={ev.id + j}
+                              className={`mt-0.5 min-w-0 truncate rounded-md border-l-2 px-1 text-[9px] leading-[1.6] ${pillClasses(ev)} ${done ? 'opacity-50' : ''}`}
+                            >
+                              {ev.source === 'weather'
+                                ? `${WEATHER_ICONS[ev.event_type] || '☁️'} ${first ? weatherLabel(ev) : '·'}`
+                                : `${isXiaoxiNoted(ev) && first ? '✦ ' : ''}${done && first ? '✓ ' : ''}${first ? ev.title : '·'}`}
+                            </div>
+                          )
+                        })}
+                        {items.length > 2 && (
+                          <div className="text-[8px] text-plum/60 pl-0.5">＋{items.length - 2}</div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </>
           )}
           {/* 图例 */}
           <div className="flex justify-center gap-4 py-2 text-[10px] text-plum/40">

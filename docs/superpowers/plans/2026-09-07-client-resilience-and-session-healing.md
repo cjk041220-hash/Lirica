@@ -3,7 +3,7 @@
 **Goal:** 彻底杜绝 iPad / iPhone（iOS Safari PWA）因发版更新或 WebKit ITP 机制回收本地存储导致用户“失去所有聊天记录、日记、日历和记忆”的体验断层，建立多层容灾持久化与会话自愈对齐机制。
 
 **Date:** 2026-09-07  
-**Status:** Ready to Implement
+**Status:** Completed & Verified
 
 ---
 
@@ -25,7 +25,7 @@
 ### 模块 2：智能会话对齐与历史自愈
 - **改造 `useChat.js` 初始化流程**：
   1. 本地存在有效的 `sessionId` 且拉取到消息，正常渲染；
-  2. 若本地无 `sessionId`，或拉取结果为 0 条消息，**不立即展示空房间**，而是并发向 `/api/status` 或 `/api/sessions?limit=1` 请求全库最新活跃会话；
+  2. 若本地无 `sessionId`，或拉取结果为 0 条消息，**不立即展示空房间**，而是并发向 `/api/status` 或 `/api/sessions?limit=5` 请求全库最新活跃会话；
   3. 若服务器存在非空的历史活跃会话（如 `e-mtir883f-1`），自动无缝将当前会话切回该活跃会话，瞬间展现全部历史；
   4. 仅当服务器全库真为空库时，才初始化新会话与欢迎语。
 
@@ -40,14 +40,14 @@
 
 ## 实施任务分解 (SDD Tasks)
 
-- [ ] **Task 1: 前端双轨存储与后端 Cookie 凭证支持**
-  - 后端 `backend/api/middleware/auth.py` 支持读取 Cookie `xiaoxi_token`；
-  - 前端 `web/src/api/client.js` 增加 IndexedDB 镜像存储与启动自动回填。
-- [ ] **Task 2: `useChat.js` 会话自愈与全库最新会话对齐**
+- [x] **Task 1: 前端双轨存储与后端 Cookie 凭证支持**
+  - 后端 `backend/api/middleware/auth.py` 支持读取 Cookie `xiaoxi_token` 与 1 年长效 Cookie 种植；
+  - 前端 `web/src/utils/storage.js` / `web/src/api/client.js` 增加 IndexedDB 镜像存储与启动自动回填。
+- [x] **Task 2: `useChat.js` 会话自愈与全库最新会话对齐**
   - 移除盲目 `Date.now()` 开空会话逻辑；
-  - 增加空会话回退向 `/api/status` / `/api/sessions` 寻址并自动接驳能力。
-- [ ] **Task 3: 401 拦截友好门锁 UI 与防恐慌提示**
+  - 增加空会话回退向 `/api/sessions` 寻址并自动接驳能力。
+- [x] **Task 3: 401 拦截友好门锁 UI 与防恐慌提示**
   - 前端各面板组件增加 401 拦截门禁与状态保护；
   - 增加输入暗号后自动重试与全局数据刷新广播。
-- [ ] **Task 4: 全量回归测试与 iOS PWA 离线模拟验证**
+- [x] **Task 4: 全量回归测试与 iOS PWA 离线模拟验证**
   - 模拟 `localStorage.clear()` 场景下刷新页面，验证历史会话与数据 100% 自动秒级恢复。

@@ -1,30 +1,29 @@
 // 统一请求层（修复 P1-2）：所有 /api 请求经由此处，自动附带访问令牌。
 //
 // 后端配置 XIAOXI_API_TOKEN 后，未带令牌的请求一律 401。
-// 令牌在设置页填写，存 localStorage（私有部署场景足够）。
+// 令牌在设置页填写，存 localStorage + IndexedDB（三轨容灾）。
 
-const TOKEN_KEY = 'xiaoxi-token'
+import { getLocalItem, setResilientItem, STORAGE_KEYS } from '../utils/storage'
+
+export const TOKEN_KEY = STORAGE_KEYS.TOKEN
 
 export const getToken = () => {
-  try {
-    return (localStorage.getItem(TOKEN_KEY) || '').trim()
-  } catch {
-    return ''
-  }
+  return (getLocalItem(TOKEN_KEY) || '').trim()
 }
 
 export const setToken = (token) => {
-  try {
-    const t = (token || '').trim()
-    if (t) localStorage.setItem(TOKEN_KEY, t)
-    else localStorage.removeItem(TOKEN_KEY)
-  } catch (e) {
-    console.warn('[client] failed to save token:', e)
+  const t = (token || '').trim()
+  setResilientItem(TOKEN_KEY, t)
+  // 广播令牌更新事件，驱动全量面板自愈刷新
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(TOKEN_UPDATED_EVENT, { detail: { token: t } }))
   }
 }
 
 // 收到 401 时广播事件，设置页据此提示填写令牌
 export const UNAUTHORIZED_EVENT = 'xiaoxi:unauthorized'
+// 令牌被更新/恢复时广播事件，各面板据此重新加载数据
+export const TOKEN_UPDATED_EVENT = 'xiaoxi:token-updated'
 
 export async function apiFetch(url, opts = {}) {
   const token = getToken()

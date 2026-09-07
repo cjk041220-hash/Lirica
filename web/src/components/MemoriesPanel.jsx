@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import IconClose from '../assets/icons/IconClose'
 import IconWhale from '../assets/icons/IconWhale'
-import { apiFetch } from '../api/client'
+import { apiFetch, setToken, TOKEN_UPDATED_EVENT } from '../api/client'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 const TABS = [
@@ -15,6 +15,9 @@ export default function MemoriesPanel({ onClose }) {
   const [diaries, setDiaries] = useState([])
   const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [isUnauthorized, setIsUnauthorized] = useState(false)
+  const [unlockToken, setUnlockToken] = useState('')
+  const [unlockError, setUnlockError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   // 记忆编辑/删除（体检 R4：冷冷的记忆主权——控制权不押在 LLM 自觉上）
   const [editingId, setEditingId] = useState(null)
@@ -25,6 +28,13 @@ export default function MemoriesPanel({ onClose }) {
   useEffect(() => () => clearTimeout(confirmDelTimerRef.current), [])
 
   const reload = () => setReloadKey((k) => k + 1)
+
+  // 监听 Token 更新事件，自动刷新数据并解除锁定
+  useEffect(() => {
+    const onTokenUpdated = () => reload()
+    window.addEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
+    return () => window.removeEventListener(TOKEN_UPDATED_EVENT, onTokenUpdated)
+  }, [])
 
   // 导出备份（体检产品决策 3：GET /api/memories/export 只有 API 层，
   // 面板加入口——冷冷的记忆主权包括「可以带走」）。含冷藏记忆与否
@@ -82,6 +92,25 @@ export default function MemoriesPanel({ onClose }) {
     }
   }
 
+  const handleUnlock = async (e) => {
+    if (e) e.preventDefault()
+    const trimmed = unlockToken.trim()
+    if (!trimmed) return
+    setToken(trimmed)
+    setUnlockError('')
+    try {
+      const res = await apiFetch(tab === 'memories' ? '/api/memories' : '/api/diaries')
+      if (res.status === 401) {
+        setUnlockError('暗号好像不太对哦，再试一次吧~')
+      } else {
+        setIsUnauthorized(false)
+        reload()
+      }
+    } catch {
+      setUnlockError('连接服务器时出了点小状况')
+    }
+  }
+
   // 切换 tab / 归档开关时按需拉取（apiFetch 带 token，裸 fetch 在配置了
   // XIAOXI_API_TOKEN 的部署下会 401 静默成空列表）。
   // include_archived=1 时连冷藏记忆一起回看（D8：冷库可读，不是永久丢失）
@@ -89,20 +118,33 @@ export default function MemoriesPanel({ onClose }) {
     let cancelled = false
     setLoading(true)
 
-    const load =
+    const url =
       tab === 'memories'
-        ? apiFetch(showArchived ? '/api/memories?include_archived=1' : '/api/memories')
-            .then((res) => (res.ok ? res.json() : { memories: [] }))
-            .then((data) => {
-              if (!cancelled) setMemories(Array.isArray(data.memories) ? data.memories : [])
-            })
-        : apiFetch('/api/diaries')
-            .then((res) => (res.ok ? res.json() : { diaries: [] }))
-            .then((data) => {
-              if (!cancelled) setDiaries(Array.isArray(data.diaries) ? data.diaries : [])
-            })
+        ? showArchived
+          ? '/api/memories?include_archived=1'
+          : '/api/memories'
+        : '/api/diaries'
 
-    load
+    apiFetch(url)
+      .then((res) => {
+        if (res.status === 401) {
+          if (!cancelled) setIsUnauthorized(true)
+          return null
+        }
+        if (res.ok) {
+          if (!cancelled) setIsUnauthorized(false)
+          return res.json()
+        }
+        return null
+      })
+      .then((data) => {
+        if (!data || cancelled) return
+        if (tab === 'memories') {
+          setMemories(Array.isArray(data.memories) ? data.memories : [])
+        } else {
+          setDiaries(Array.isArray(data.diaries) ? data.diaries : [])
+        }
+      })
       .catch((e) => console.warn('[MemoriesPanel] fetch failed:', e))
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -190,8 +232,36 @@ export default function MemoriesPanel({ onClose }) {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll">
-          {loading ? (
+        <div className="flex-1 overflow-y-auto px-5 pb-8 chat-scroll flex flex-col">
+          {isUnauthorized ? (
+            <div className="flex flex-col items-center justify-center h-full px-6 py-8 text-center my-auto">
+              <div className="w-12 h-12 rounded-full bg-strawberry/15 flex items-center justify-center mb-3 text-xl">
+                🗝️
+              </div>
+              <h3 className="font-display text-[15px] text-plum mb-1.5">
+                小汐还在房间里等你哦~
+              </h3>
+              <p className="text-[12px] text-plum/65 mb-4 leading-relaxed max-w-[260px]">
+                对上专属暗号，小汐珍藏的所有记忆和日记就会立刻浮现啦。
+              </p>
+              <form onSubmit={handleUnlock} className="flex flex-col w-full max-w-[240px] gap-2">
+                <input
+                  type="password"
+                  placeholder="输入访问暗号..."
+                  value={unlockToken}
+                  onChange={(e) => setUnlockToken(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-xl bg-plum/5 border border-strawberry/20 text-plum focus:outline-none focus:border-strawberry/50 text-center"
+                />
+                {unlockError && <p className="text-[10px] text-raspberry">{unlockError}</p>}
+                <button
+                  type="submit"
+                  className="btn-press w-full py-1.5 rounded-xl bg-strawberry/20 text-raspberry text-xs font-medium hover:bg-strawberry/30 transition-colors"
+                >
+                  唤醒小汐
+                </button>
+              </form>
+            </div>
+          ) : loading ? (
             // 骨架屏（2026-08-09 商业级 1.2）：左侧描边 + 日期条 + 正文条，
             // 与记忆条目的真实形状一致，替代 spinner
             <div className="space-y-5 pt-2" aria-busy="true" aria-label="正在加载">
