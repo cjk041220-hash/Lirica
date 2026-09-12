@@ -27,11 +27,16 @@ def test_model_meta_index_consistent():
 
 
 def test_get_model_info_known_and_unknown():
-    """已知模型返回能力元数据；未知/空 → None。"""
-    flash = get_model_info("deepseek-v4-flash")
+    """已知模型返回能力元数据；旧名别名兼容；未知/空 → None。"""
+    flash = get_model_info("deepseek-v4.1-flash")
     assert flash is not None
     assert flash["supports_thinking"] is False
     assert flash["max_output_tokens"] == 8192
+
+    # 旧别名向后兼容映射
+    flash_compat = get_model_info("deepseek-v4-flash")
+    assert flash_compat is not None
+    assert flash_compat["id"] == "deepseek-v4.1-flash"
 
     pro = get_model_info("deepseek-v4-pro")
     assert pro is not None
@@ -54,7 +59,7 @@ def test_create_llm_unknown_model_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
 
     create_deepseek_llm(model="typo-model")
-    assert captured["model"] == "deepseek-v4-pro"  # settings 默认
+    assert captured["model"] == "deepseek-flash"  # settings 默认映射至 upstream flash
 
 
 def test_create_llm_max_tokens_clamped_to_model_cap(monkeypatch):
@@ -68,11 +73,11 @@ def test_create_llm_max_tokens_clamped_to_model_cap(monkeypatch):
     import providers.deepseek as ds
     monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
 
-    create_deepseek_llm(model="deepseek-v4-flash", max_tokens=16384)
+    create_deepseek_llm(model="deepseek-v4.1-flash", max_tokens=16384)
     assert captured["max_tokens"] == 8192  # 上限
 
     # 未越界 → 原样透传
-    create_deepseek_llm(model="deepseek-v4-flash", max_tokens=4096)
+    create_deepseek_llm(model="deepseek-v4.1-flash", max_tokens=4096)
     assert captured["max_tokens"] == 4096
 
 
@@ -88,7 +93,7 @@ def test_create_llm_defaults_unchanged(monkeypatch):
     monkeypatch.setattr(ds, "ChatOpenAI", _FakeLLM)
 
     create_deepseek_llm()
-    assert captured["model"] == "deepseek-v4-pro"   # settings 默认
+    assert captured["model"] == "deepseek-flash"   # settings 默认 upstream 模型
     assert captured["temperature"] == 0.8
     assert captured["max_tokens"] == 8192
     assert captured["timeout"] == 120

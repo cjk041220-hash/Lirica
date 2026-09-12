@@ -5,8 +5,6 @@ import {
   removeResilientItem,
   initResilientStorage,
   STORAGE_KEYS,
-  idbGet,
-  idbSet,
 } from './storage'
 import { setToken, getToken, TOKEN_UPDATED_EVENT } from '../api/client'
 

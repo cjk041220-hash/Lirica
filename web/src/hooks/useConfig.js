@@ -5,7 +5,7 @@ import { apiFetch } from '../api/client'
 // { model, temperature, max_tokens, thinking_intensity, available_models }
 // thinking_intensity: 'low' | 'medium' | 'high' | 'max'（手动调温度后为 'custom'）
 const defaultSettings = {
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-v4.1-flash',
   thinking_intensity: 'medium',
   temperature: 0.7,
   max_tokens: 8192,

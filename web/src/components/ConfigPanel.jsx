@@ -6,7 +6,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // 后端 available_models 拉取失败时的兜底
 const fallbackModels = [
-  { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: '轻量快速' },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', description: '轻量快速' },
   { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: '深度推理' },
 ]
 

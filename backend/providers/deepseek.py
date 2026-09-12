@@ -8,8 +8,8 @@ from config.settings import get_settings
 
 AVAILABLE_MODELS = [
     {
-        "id": "deepseek-v4-flash",
-        "name": "DeepSeek V4 Flash",
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
         "description": "284B MoE (13B active)，轻量快速，1M 上下文",
         "supports_thinking": False,
         "max_output_tokens": 8192,
@@ -24,6 +24,20 @@ AVAILABLE_MODELS = [
         "context_window": "1M",
     },
 ]
+
+# 模型名别名兼容表（兼容旧客户端配置、历史版本与简写）
+_MODEL_ALIASES = {
+    "deepseek-v4-flash": "deepseek-v4.1-flash",
+    "deepseek-flash": "deepseek-v4.1-flash",
+    "deepseek-chat": "deepseek-v4.1-flash",
+}
+
+# 官方 DeepSeek API (api.deepseek.com) 统一使用 deepseek-flash 作为轻量 Flash 模型的标准 API 名。
+# 业务层使用版本化模型名（如 deepseek-v4.1-flash），此处向上游 API 透明映射至受支持的官方底座名。
+_UPSTREAM_MODEL_MAP = {
+    "deepseek-v4.1-flash": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
+}
 
 # 模型 → 元数据索引（防每次调用线性扫描；AVAILABLE_MODELS 增删模型
 # 时此索引自动跟随——字典推导式，无独立维护面）
@@ -48,7 +62,8 @@ def get_model_info(model: str | None) -> dict | None:
     """
     if not model:
         return None
-    return _MODEL_META.get(model)
+    resolved = _MODEL_ALIASES.get(model, model)
+    return _MODEL_META.get(resolved)
 
 
 def create_deepseek_llm(
@@ -70,12 +85,13 @@ def create_deepseek_llm(
         frequency_penalty: 词频惩罚（>0 抑制重复词汇）
     """
     s = get_settings()
-    resolved = model or s.deepseek_model
+    raw_model = model or s.deepseek_model
+    resolved = _MODEL_ALIASES.get(raw_model, raw_model)
     meta = _MODEL_META.get(resolved)
     if meta is None:
         # 未知模型名（配置漂移/手误）：回退默认模型，不静默透传——
         # 透传会让 OpenAI 兼容层报「未知模型」且无本地日志可查
-        resolved = s.deepseek_model
+        resolved = _MODEL_ALIASES.get(s.deepseek_model, s.deepseek_model)
         meta = _MODEL_META.get(resolved) or {}
 
     if max_tokens is not None:
@@ -83,8 +99,10 @@ def create_deepseek_llm(
         if cap and max_tokens > cap:
             max_tokens = cap
 
+    upstream_model = _UPSTREAM_MODEL_MAP.get(resolved, resolved)
+
     kwargs = {
-        "model": resolved,
+        "model": upstream_model,
         "api_key": s.deepseek_api_key,
         "base_url": s.deepseek_base_url,
         "temperature": temperature if temperature is not None else 0.8,

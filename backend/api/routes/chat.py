@@ -459,7 +459,7 @@ async def chat(req: ChatRequest, request: Request):
             await chat_archive.record_assistant_message(sid, reply)
             try:
                 from agent.topic_bank import auto_consume_topics_from_text
-                await auto_consume_topics_from_text([reply])
+                await auto_consume_topics_from_text([req.message, reply])
             except Exception as e:
                 log.warning("话题库自动核销检测失败: %s", e)
 
@@ -619,7 +619,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                     await chat_archive.record_assistant_message(sid, full_text)
                     try:
                         from agent.topic_bank import auto_consume_topics_from_text
-                        await auto_consume_topics_from_text([full_text])
+                        await auto_consume_topics_from_text([req.message, full_text])
                     except Exception as e:
                         log.warning("话题库自动核销检测失败: %s", e)
                     # 工具调用遥测（每轮打点，见 _log_tool_telemetry）

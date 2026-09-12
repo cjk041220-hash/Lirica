@@ -31,7 +31,7 @@ _agent_lock = asyncio.Lock()
 # （temperature=0.8 / max_tokens=8192 / flash 模型）保持一致。
 
 _runtime_config = {
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4.1-flash",
     "temperature": 0.8,
     "max_tokens": 8192,
     "thinking_intensity": "medium",
@@ -39,7 +39,7 @@ _runtime_config = {
 
 # 思考强度 → temperature 映射
 # 诚实地说：这控制的是创造性/随机性，不是真正的"思考深度"
-# 对于 V4 Flash/Pro 来说，高 temperature 让回答更发散、更有想象力
+# 对于 V4.1 Flash/Pro 来说，高 temperature 让回答更发散、更有想象力
 # V4 Pro 支持深度推理模式，但推理深度由模型内部控制，与 temperature 无关
 _THINKING_PRESETS = {
     "low":    {"temperature": 0.3, "max_tokens": 4096,  "label": "轻柔"},
@@ -74,7 +74,7 @@ def get_current_max_tokens() -> int:
 
 def get_current_model() -> str:
     """获取当前模型名称。"""
-    return _runtime_config.get("model", "deepseek-v4-flash")
+    return _runtime_config.get("model", "deepseek-v4.1-flash")
 
 
 def create_llm_from_runtime_config() -> BaseChatModel:

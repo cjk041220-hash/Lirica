@@ -47,7 +47,7 @@ async def test_tomorrow_event_triggers_reminder(hb_db):
     store = AsyncMock()
     with patch("heartbeat._store_and_push_proactive", store), \
          patch("providers.deepseek.create_deepseek_llm", return_value=fake_llm), \
-         patch("api.routes.config.get_current_model", return_value="deepseek-v4-flash"):
+         patch("api.routes.config.get_current_model", return_value="deepseek-v4.1-flash"):
         import heartbeat as hb
         await hb.daily_evening_reminder()
 
