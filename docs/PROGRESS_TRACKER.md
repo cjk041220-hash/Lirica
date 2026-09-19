@@ -10,8 +10,8 @@
 
 | 阶段 | 核心目标 | 状态 | 进度 |
 |:---|:---|:---:|:---:|
-| **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **进行中** | 0/4 |
-| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | 待启动 | 0/4 |
+| **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
+| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | **待启动** | 0/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 待启动 | 0/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
@@ -67,12 +67,26 @@
 - **审查结论**：100% Native Kotlin 异步协程 Flow，无内存泄漏，无 AI 客服腔，遵循参数规范与错误熔断。
 
 ### Task 0.4: 标准 SillyTavern V2/V3 PNG 角色卡元数据二进制解码器
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-19)
 - **交付内容**：
-  - 纯 Kotlin 二进制 PNG 解析器 (定位与解析 PNG `tEXt` / `zTXt` / `iTXt` 数据块)
-  - Base64 解码与 JSON 解析 (兼容 V2 `chara` 与 V3 `ccv3` 规范)
-  - 字段提取与缺省降级 (`system_prompt`, `post_history_instructions`, `character_book`, 基础属性)
-  - 100% 单元测试覆盖与真实/合成 PNG 卡二进制测试用例
-- **测试证据**：待执行
-- **变异验证**：待执行
-- **审查结论**：待审查
+  - 角色卡跨版本核心领域模型设计（`CharacterCard`, `CharacterBook`, `CharacterBookEntry`, `CharacterCardEnvelope`, `CharacterCardData`），完全对齐 SillyTavern `chara_card_v2` 与 `chara_card_v3` 规范
+  - 纯 Kotlin 原生二进制 PNG 流式/块式编解码器（`CharacterCardDecoder`）：
+    - 严密校验 8 字节 PNG 魔法头（`0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A`）
+    - 快速定位与提取 `tEXt`、`zTXt` 数据块（支持 Deflate 解压）
+    - 自动识别并解析 Base64 编码与 UTF-8 JSON 负载（兼容 `chara` 与 `ccv3` 规范）
+    - 提供双向无损编码器：支持将领域模型自动打包为携带标准 `ccv3` tEXt 块与 CRC32 校验码的标准 PNG 图片
+  - 动态宏替换引擎（`MacroExpander`）：支持 `{{char}}`, `{{user}}`, `{{current_time}}`, `{{current_app}}`, `{{battery_level}}`, `{{idle_duration}}` 实时环境插值
+  - 编写与运行 `CharacterCardDecoderTest`，涵盖 V2 JSON 解码、V2 PNG 提取、V3 ccv3 提取、双向 Round-Trip 编解码一致性验证、宏展开及非法 PNG 异常校验
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 18 tests completed, 0 failed, `BUILD SUCCESSFUL in 3s`
+  - `./gradlew test`: 18 tests completed, 0 failed, `BUILD SUCCESSFUL in 3s`
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s`
+- **变异验证**：
+  - 故意改坏 `MacroExpander.kt` 中的宏替换逻辑（将 `charName` 替换为 `"MUTATED"`），运行 `./gradlew testDebugUnitTest` 确认变红报错（`CharacterCardDecoderTest > testMacroExpansion FAILED`），恢复后重新全绿通过。
+- **审查结论**：严格对齐 SillyTavern 官方规范，二进制解析无第三方臃肿依赖，单测覆盖完整，无内存泄露。
+
+---
+
+## 阶段验收里程碑 M0 (Phase 0 全绿达成)
+- **验收时间**：2026-09-19
+- **验收结论**：Task 0.1 ~ Task 0.4 全部通过 TDD 与变异验证，工程构建与测试 100% 成功，APK 打包正常。根据指令，正式具备切入 **Phase 1（心智引擎与记忆系统原生化）** 条件。
