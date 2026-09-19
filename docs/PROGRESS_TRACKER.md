@@ -11,7 +11,7 @@
 | 阶段 | 核心目标 | 状态 | 进度 |
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
-| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | **进行中** | 1/4 |
+| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | **进行中** | 2/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 待启动 | 0/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
@@ -117,16 +117,25 @@
 - **审查结论**：严格遵循双轨记忆架构规范与 Room 原生实践，全量通过单元测试与变异验证。
 
 ### Task 1.2: Russell 情绪空间 (Valence-Arousal) 2D 动力学状态机
-- [ ] 状态：待开始 (首要接手任务)
+- [x] 状态：已完成 (2026-09-19)
 - **前置必读资料**：`docs/局部调研——RESEARCH_AGENT_EMOTION_EVOLUTION.md`（Russell 2D 环形情感模型、情感惯性与漂移阻尼衰减）
 - **参考代码**：`backend/heartbeat_moods.py`
 - **交付内容**：
-  - 连续二维情绪向量空间 `(valence: Float, arousal: Float)`，离散映射到微表情状态（开心、发呆、闹别扭、关切、困惑等）
-  - 情感惯性与基线漂移阻尼数学模型（微分更新方程：$\Delta E = \alpha \cdot \text{Stimulus} - \beta \cdot (E - E_0)$）
-  - 单元测试与变异验证（冲激响应、长程静默向基线阻尼回退）
+  - 连续二维情绪向量空间 `EmotionVector(valence, arousal, dominance)`，提供严格物理边界钳制与 2D 欧式距离计算
+  - 离散微表情状态机 `MoodState`（包含 16 种情绪状态：开心、兴奋、活泼、好奇、期待、满足、发呆、懒洋洋、困倦、关切、闹别扭、困惑、平静、安心、轻松、想念），包含对应 spriteTag 与文风提示词
+  - 最近邻（Nearest Neighbor）确定性微表情映射与高斯加权概率采样（Gaussian Proximity Sampling）双模检索
+  - 情绪动力学微分更新引擎 `EmotionEngine`（数学模型：$\Delta E = \alpha \cdot \text{Stimulus} - \beta \cdot (E - E_0)$），支持外部冲激响应、长程静默向人格基线衰减及 `StateFlow` 响应式状态暴露
+  - 单元测试与变异验证（`EmotionEngineTest` 覆盖基线初始化、冲激响应、长程静默阻尼回退、边界钳制、最近邻与高斯采样）
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 30 tests completed, 0 failed, `BUILD SUCCESSFUL in 12s`
+  - `./gradlew test`: 30 tests completed, 0 failed, `BUILD SUCCESSFUL in 12s`
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s`
+- **变异验证**：
+  - 故意将 `EmotionEngine.kt` 中 `applyStimulus` 的冲激更新计算改坏（将冲激增量符号反转为 `stimulus * -sensitivityAlpha`），运行 `./gradlew testDebugUnitTest` 确认 4 个核心单测变红报错（`testNegativeStimulusAndSulking`, `testStimulusImpulseResponse`, `testClampingBounds`, `testLongTermSilenceDecayTowardsBaseline` 均 `FAILED`），恢复后重新全绿通过。
+- **审查结论**：严格符合 Russell 环形模型与 ALMA 三层架构设计，消除情绪跳变，保障情绪动力学平滑演化。
 
 ### Task 1.3: PHI 语气重锚中间件与 8 轮抗漂移调度器
-- [ ] 状态：待开始
+- [ ] 状态：待开始 (首要接手任务)
 - **交付内容**：
   - 严格将 `post_history_instructions` 置于 Prompt 历史的最尾端、LLM 预测之前，压制注意力遗忘
   - 对话轮数计数器与 8 轮周期强注入压缩版核心设定与约束
@@ -144,7 +153,7 @@
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew test`（当前全绿，18 tests passed）
+   - 运行全量单测：`./gradlew test`（当前全绿，30 tests passed）
    - 验证打包：`./gradlew assembleDebug`
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
@@ -154,5 +163,5 @@
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
    - 当前工作区分支：`master`，Working Tree 干净（Clean）。
-   - 最后一笔提交：`50e28d6` (`feat(persona): 完成 Task 0.4 标准 SillyTavern V2/V3 PNG 角色卡元数据二进制解码器与宏展开引擎`)。
+   - 最近提交：`2f3fdea` (`feat(database): 完成 Task 1.1 Room 数据库落地与双轨记忆表结构`)。
 
