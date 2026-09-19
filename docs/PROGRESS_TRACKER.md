@@ -11,7 +11,7 @@
 | 阶段 | 核心目标 | 状态 | 进度 |
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
-| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | **待启动** | 0/4 |
+| **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移) | **进行中** | 1/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 待启动 | 0/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
@@ -98,19 +98,26 @@
 > **核心使命**：将小汐 1.0 的核心灵魂资产（反 AI 客服腔、语气重锚、情绪动力学、双轨记忆）用 100% Native Kotlin 原生重构，全面消除对旧 Python 后端的依赖。
 
 ### Task 1.1: Room 数据库落地与双轨记忆表结构
-- [ ] 状态：待开始 (首要接手任务)
+- [x] 状态：已完成 (2026-09-19)
 - **前置必读资料**：`docs/局部调研——RESEARCH_AGENT_MEMORY_ARCHITECTURE.md`（双轨记忆、自叙经历表、未完成念头池、时间衰减与矛盾覆盖）
 - **参考代码**：`backend/memory/manager.py`（算法公式参考）
 - **交付内容**：
-  - `UserMemoryEntity` & `UserMemoryDao`：用户事实与画像、置信度、时间戳、`superseded_by` 矛盾覆盖标记
-  - `SelfExperienceEntity` & `SelfExperienceDao`：Agent 自主上网/见闻的第一人称心得
-  - `UnspokenThoughtEntity` & `UnspokenThoughtDao`：观察用户产生的碎片念头池、未说出口想法、紧急度与衰减分
-  - `ChatDialogueEntity` & `ChatDialogueDao`：会话多轮历史持久化
-  - `XiaoxiDatabase`：Room 数据库实例与迁移策略
-  - 单元测试与变异验证（DAO 读写、覆盖标记与并发安全）
+  - `UserMemoryEntity` & `UserMemoryDao`：用户事实与画像、置信度、时间戳、`superseded_by` 矛盾覆盖标记、按日 hitCount 去重
+  - `SelfExperienceEntity` & `SelfExperienceDao`：Agent 自主上网/见闻的第一人称心得与分享流
+  - `UnspokenThoughtEntity` & `UnspokenThoughtDao`：观察用户产生的碎片念头池、未说出口想法、紧急度排序与过期自然遗忘
+  - `ChatDialogueEntity` & `ChatDialogueDao`：会话多轮历史持久化、消息类型与统计
+  - `XiaoxiDatabase`：Room 数据库实例、单例工厂与内存测试工厂
+  - 单元测试与变异验证（`XiaoxiDatabaseTest` 覆盖 CRUD、矛盾覆盖标记、并发事务安全）
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 23 tests completed, 0 failed, `BUILD SUCCESSFUL in 16s`
+  - `./gradlew test`: 23 tests completed, 0 failed, `BUILD SUCCESSFUL in 16s`
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 8s`
+- **变异验证**：
+  - 故意将 `UnspokenThoughtDao.kt` 中的 `discardExpiredThoughts` 过期过滤条件从 `< :currentTimestamp` 反转修改为 `> :currentTimestamp`，运行 `./gradlew testDebugUnitTest` 确认变红报错（`XiaoxiDatabaseTest > testUnspokenThoughtUrgencyAndDecayFlow FAILED: org.junit.ComparisonFailure`），恢复逻辑后重新全绿通过。
+- **审查结论**：严格遵循双轨记忆架构规范与 Room 原生实践，全量通过单元测试与变异验证。
 
 ### Task 1.2: Russell 情绪空间 (Valence-Arousal) 2D 动力学状态机
-- [ ] 状态：待开始
+- [ ] 状态：待开始 (首要接手任务)
 - **前置必读资料**：`docs/局部调研——RESEARCH_AGENT_EMOTION_EVOLUTION.md`（Russell 2D 环形情感模型、情感惯性与漂移阻尼衰减）
 - **参考代码**：`backend/heartbeat_moods.py`
 - **交付内容**：

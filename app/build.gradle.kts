@@ -101,4 +101,20 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("app.cash.turbine:turbine:1.2.0")
     testImplementation("io.ktor:ktor-client-mock:$ktorVersion")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.room:room-testing:$roomVersion")
+}
+
+android {
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.systemProperty("robolectric.dependency.repo.url", "https://maven.aliyun.com/repository/public")
+                it.systemProperty("robolectric.dependency.repo.id", "aliyun")
+            }
+        }
+    }
 }
