@@ -90,3 +90,62 @@
 ## 阶段验收里程碑 M0 (Phase 0 全绿达成)
 - **验收时间**：2026-09-19
 - **验收结论**：Task 0.1 ~ Task 0.4 全部通过 TDD 与变异验证，工程构建与测试 100% 成功，APK 打包正常。根据指令，正式具备切入 **Phase 1（心智引擎与记忆系统原生化）** 条件。
+
+---
+
+## Phase 1 任务拆解与对接指引 (Next Session Action Plan)
+
+> **核心使命**：将小汐 1.0 的核心灵魂资产（反 AI 客服腔、语气重锚、情绪动力学、双轨记忆）用 100% Native Kotlin 原生重构，全面消除对旧 Python 后端的依赖。
+
+### Task 1.1: Room 数据库落地与双轨记忆表结构
+- [ ] 状态：待开始 (首要接手任务)
+- **前置必读资料**：`docs/局部调研——RESEARCH_AGENT_MEMORY_ARCHITECTURE.md`（双轨记忆、自叙经历表、未完成念头池、时间衰减与矛盾覆盖）
+- **参考代码**：`backend/memory/manager.py`（算法公式参考）
+- **交付内容**：
+  - `UserMemoryEntity` & `UserMemoryDao`：用户事实与画像、置信度、时间戳、`superseded_by` 矛盾覆盖标记
+  - `SelfExperienceEntity` & `SelfExperienceDao`：Agent 自主上网/见闻的第一人称心得
+  - `UnspokenThoughtEntity` & `UnspokenThoughtDao`：观察用户产生的碎片念头池、未说出口想法、紧急度与衰减分
+  - `ChatDialogueEntity` & `ChatDialogueDao`：会话多轮历史持久化
+  - `XiaoxiDatabase`：Room 数据库实例与迁移策略
+  - 单元测试与变异验证（DAO 读写、覆盖标记与并发安全）
+
+### Task 1.2: Russell 情绪空间 (Valence-Arousal) 2D 动力学状态机
+- [ ] 状态：待开始
+- **前置必读资料**：`docs/局部调研——RESEARCH_AGENT_EMOTION_EVOLUTION.md`（Russell 2D 环形情感模型、情感惯性与漂移阻尼衰减）
+- **参考代码**：`backend/heartbeat_moods.py`
+- **交付内容**：
+  - 连续二维情绪向量空间 `(valence: Float, arousal: Float)`，离散映射到微表情状态（开心、发呆、闹别扭、关切、困惑等）
+  - 情感惯性与基线漂移阻尼数学模型（微分更新方程：$\Delta E = \alpha \cdot \text{Stimulus} - \beta \cdot (E - E_0)$）
+  - 单元测试与变异验证（冲激响应、长程静默向基线阻尼回退）
+
+### Task 1.3: PHI 语气重锚中间件与 8 轮抗漂移调度器
+- [ ] 状态：待开始
+- **交付内容**：
+  - 严格将 `post_history_instructions` 置于 Prompt 历史的最尾端、LLM 预测之前，压制注意力遗忘
+  - 对话轮数计数器与 8 轮周期强注入压缩版核心设定与约束
+  - 单元测试与变异验证（长对话尾部重锚位置断言、8 轮周期注入触发断言）
+
+### Task 1.4: 反 AI 腔过滤器 (Humanness Gap Filter)
+- [ ] 状态：待开始
+- **交付内容**：
+  - 本地 Regex 与语义违禁黑名单（“作为一个人工智能模型”、“我理解您的感受”、“祝您生活愉快”等）
+  - 违禁检测触发时的本地降级改写与二次自纠环
+  - 单元测试与变异验证（违禁样本 100% 拦截与合规自然语言放行）
+
+---
+
+## 新窗口极速交接备忘录 (Quick Start For Next Agent)
+
+1. **环境与命令**：
+   - 运行全量单测：`./gradlew test`（当前全绿，18 tests passed）
+   - 验证打包：`./gradlew assembleDebug`
+   - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
+   - Java 21 环境，Gradle 8.10.2
+2. **严守铁律**：
+   - **绝不使用 Chaquopy**：100% Native Kotlin + Coroutines + Room。
+   - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
+   - **代码编写前必读局部方案**：严禁写 Dummy Code。
+3. **最新 Git 状态**：
+   - 当前工作区分支：`master`，Working Tree 干净（Clean）。
+   - 最后一笔提交：`50e28d6` (`feat(persona): 完成 Task 0.4 标准 SillyTavern V2/V3 PNG 角色卡元数据二进制解码器与宏展开引擎`)。
+
