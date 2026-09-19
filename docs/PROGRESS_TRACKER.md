@@ -52,16 +52,19 @@
 - **审查结论**：严格对齐《端侧低能耗感知漏斗方案》L0 硬过滤与《移动端GUI方案》Level 1 手势要求，合规与权限完备。
 
 ### Task 0.3: 基于 Ktor 的 BYOK 大模型通信客户端 (SSE + 参数清洗)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-19)
 - **交付内容**：
-  - Ktor HTTP Client 配置 (ContentNegotiation, CIO/OkHttp engine, SSE plugin / parsing)
-  - BYOK (Bring Your Own Key) 配置数据结构与多端点支持 (OpenAI / DeepSeek / Claude / 自定义)
-  - DeepSeek 参数清洗逻辑 (强制清洗 `top_p=0` 陷阱，默认 temp 0.95, presence_penalty 0.25)
-  - 流式 SSE 解析器 (支持 Token 级流式吐出、Tool Calls 增量组装与错误恢复)
-  - 100% 单元测试覆盖
-- **测试证据**：待执行
-- **变异验证**：待执行
-- **审查结论**：待审查
+  - 建立大模型通信数据契约（`LlmConfig`, `LlmProvider`, `ChatMessage`, `ChatCompletionRequest`, `ChatCompletionChunk`, `LlmStreamEvent`）
+  - 落地 DeepSeek 采样参数清洗器（`LlmParamSanitizer`）：物理剔除 `top_p <= 0` 的 400 报错陷阱，自适应注入 `temperature = 0.95` 与 `presence_penalty = 0.25` 维持角色生命感与鲜活度
+  - 落地 SSE 流式增量解析器（`SseStreamParser`）与 Tool Calls 增量组装器（`ToolCallAssembler`），完整支持 Token 级流式发射与函数调用拆装
+  - 落地基于 Ktor 的 BYOK 异步非阻塞客户端（`XiaoxiLlmClient`）：支持流式 POST 请求、SSE 解码、HTTP 状态码（401/429）友好拦截与自定义异常 `LlmApiException`
+  - 编写与运行 `LlmClientTest`，包含真实 MockEngine 端到端流式响应、DeepSeek 陷阱清洗断言与 401 拦截单测
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 12 tests completed, 0 failed, `BUILD SUCCESSFUL in 3s`
+  - `./gradlew test`: 12 tests completed, 0 failed, `BUILD SUCCESSFUL in 3s`
+- **变异验证**：
+  - 故意改坏 `LlmParamSanitizer.kt` 中的清洗逻辑，取消对 `top_p <= 0.0` 的过滤，运行 `./gradlew testDebugUnitTest`，两个核心单测均变红报错（`AssertionError: DeepSeek top_p <= 0 必须被清洗为 null` 与 `请求体中严禁包含 top_p: 0`），恢复逻辑后重新全绿通过。
+- **审查结论**：100% Native Kotlin 异步协程 Flow，无内存泄漏，无 AI 客服腔，遵循参数规范与错误熔断。
 
 ### Task 0.4: 标准 SillyTavern V2/V3 PNG 角色卡元数据二进制解码器
 - [ ] 状态：待开始
