@@ -136,10 +136,19 @@
 
 ### Task 1.3: PHI 语气重锚中间件与 8 轮抗漂移调度器
 - [ ] 状态：待开始 (首要接手任务)
+- **前置必读资料**：`docs/主方案——小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md`（第 5.1 节 人格稳定性核心：PHI 语气重锚 + 8轮漂移防护）
+- **参考代码**：`backend/agent/soul.py`（小汐 1.0 的 PHI 提示词模板、语气约束与抗客服腔沉淀）
 - **交付内容**：
-  - 严格将 `post_history_instructions` 置于 Prompt 历史的最尾端、LLM 预测之前，压制注意力遗忘
-  - 对话轮数计数器与 8 轮周期强注入压缩版核心设定与约束
-  - 单元测试与变异验证（长对话尾部重锚位置断言、8 轮周期注入触发断言）
+  - `PhiMiddleware`（或 `PhiPromptAssembler`）：
+    - 严格遵循上下文装配流顺序：`[System Prompt / 角色卡基础设定] -> [动态环境与记忆槽] -> [对话历史] -> [Post-History Instructions (PHI)]`
+    - 利用 Transformer 模型的近因偏置（Recency Bias），将核心反 AI 客服腔口吻约束与 Task 1.2 的即时情绪文风（`MoodState.styleHint`）锚定于消息数组的最末尾（LLM 生成前的最后一条系统/开发者指令），杜绝注意力稀释
+  - `DriftShieldScheduler`（8轮抗漂移调度器）：
+    - 维护会话轮次计数器（支持会话隔离与轮次追踪）
+    - 周期性判定（`turnCount % 8 == 0`）：在第 8、16、24... 轮触发时，自动激活并注入压缩版核心人格约束清单（Drift Shield Payload）
+  - 单元测试与变异验证（`PhiMiddlewareTest`）：
+    - 断言尾部 PHI 指令在 Prompt 序列中的绝对位置（必须紧跟在用户最新输入之后）
+    - 断言 8 轮周期触发边界（1~7 轮未触发，第 8 轮与第 16 轮精准触发）
+    - 变异验证（破坏周期判定或重锚插入位置，确认测试变红）
 
 ### Task 1.4: 反 AI 腔过滤器 (Humanness Gap Filter)
 - [ ] 状态：待开始
@@ -163,5 +172,8 @@
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
    - 当前工作区分支：`master`，Working Tree 干净（Clean）。
-   - 最近提交：`2f3fdea` (`feat(database): 完成 Task 1.1 Room 数据库落地与双轨记忆表结构`)。
+   - 最新提交：`3a7d721` (`feat(emotion): 完成 Task 1.2 Russell 情绪空间 (Valence-Arousal) 2D 动力学状态机`)。
+4. **接手第一动作**：
+   - 阅读 `docs/PROGRESS_TRACKER.md` 中 Task 1.3 规范。
+   - 直接启动 Task 1.3：TDD 编写 `PhiMiddlewareTest.kt`，实现 `PhiMiddleware` 与 `DriftShieldScheduler`。
 
