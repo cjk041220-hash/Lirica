@@ -715,10 +715,50 @@
 
 ---
 
+## 第二轮优化·Milestone 2.1 执行态基建与坐标断层缝合 (M2.1 达成)
+
+> **核心使命**：彻底缝合《主方案2.0》指出的 P0 级感知-接地坐标鸿沟，为 Phase 5 自动化操控体系打通 L0 极速无障碍直达路径，并交付剪贴板快照恢复、弱引用服务代理、双通道截帧规范、任务代行前台保活与 R8 混淆加固。
+
+### 交付内容清单
+1. **执行态高保真树契约与坐标桥接 (Task 1 - ExecutionTreeModels)**：
+   - `ExecutionNode`：定义携带物理屏幕绝对像素坐标矩形 `ElementBounds`、优先级评分（0~5）与大容器标记的高保真执行节点模型；
+   - `TreeDumpResult`：显式状态密封接口（`Ok`、`Empty`、`Failed`），消除隐式空列表，精确诊断 `ZERO_WINDOW_TIMED_OUT`、`PRIVACY_BLACKOUT`、`ROOT_NODE_NULL`；
+   - `toUiElementNodes()`：桥接扩展函数，过滤不可见与大容器节点，输出接地引擎所需模型；
+   - `ElementBounds`：增补 `area` 属性；
+   - `ExecutionTreeModelsTest` 3 个测试用例全绿通过，变异验证通过。
+2. **执行态高保真树抽取与双轮自愈中枢 (Task 2 - ExecutionTreeExtractor)**：
+   - `ExecutionTreeExtractor`：预算扩展至 400 节点与 12 层深度；
+   - 大容器抑制（面积 > 50% 且可滚动标记 `isLargeContainer = true`，priority 降为 1 抑制误触）；
+   - 600ms 双轮 Dump 自愈取优机制（有效可交互节点 <= 2 时延迟 600ms 二次抓取取优，抵抗切屏竞态空树）；
+   - `PrivacyBreaker.isSensitiveApp` 金融敏感包名整屏物理熔断；
+   - `ExecutionTreeExtractorTest` 5 个测试用例全绿通过，变异验证通过。
+3. **无障碍服务实例代理 (Task 3 - AccessibilityServiceHolder)**：
+   - `AccessibilityServiceHolder`：弱引用单例托管运行中的 `XiaoxiAccessibilityService` 实例，彻底打通 `GestureExecutor` 物理手势调度能力；
+   - 挂载无障碍服务生命周期（`onServiceConnected`、`onUnbind`、`onDestroy`）；
+   - `AccessibilityServiceHolderTest` 与 `XiaoxiAccessibilityServiceTest` 全绿通过。
+4. **剪贴板安全文字注入器 (Task 4 - TextInputExecutor)**：
+   - `TextInputExecutor`：优先调用标准无障碍 `ACTION_SET_TEXT`；
+   - 降级剪贴板时实施毫秒级快照还原铁律（备份 -> 写入 -> 点击对齐光标 -> 粘贴 -> finally 块 100% 恢复原剪贴板）；
+   - `TextInputExecutorTest` 3 个测试用例全绿通过，变异验证通过。
+5. **双通道截帧规范契约 (Task 5 - ScreenCaptureManager & FrameCaptureResult)**：
+   - `FrameCaptureResult`：定义未降采样物理屏幕帧模型，严守坐标一致性铁律；
+   - `ScreenCaptureManager`：规范 Android 11+ (API 30+) 无障碍原生截帧与 MediaProjection 降级契约；
+   - `ScreenCaptureManagerTest` 2 个测试用例全绿通过。
+6. **任务代行前台保活与构建配置加固 (Task 6 - P7, P3, P9)**：
+   - `CompanionOverlayService`：新增 `promoteToForeground` 与 `demoteFromForeground`，在长程任务代行执行期间以 `specialUse` 前台服务等级锁定进程优先级；
+   - `app/proguard-rules.pro`：补齐 Room、kotlinx-serialization、Ktor/OkHttp 与自动化领域模型的 Keep 规则；
+   - `gradle.properties`：开启 `org.gradle.configuration-cache=true`、`org.gradle.parallel=true`、`org.gradle.caching=true`。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 270 tests completed, 0 failed, 100% pass (测试套件从 249 扩充至 270)
+  - `./gradlew assembleDebug`: BUILD SUCCESSFUL in 8s (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第二轮优化第一里程碑（Milestone 2.1）全绿达成！
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，259 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，270 tests passed）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
@@ -727,12 +767,13 @@
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
-   - 当前工作区分支：`feat/round2-step0-guardrails`。
-   - 最新进展：第二轮优化第 0 步先期护栏（P1, P6, P2）全绿验收达成，259 个单测 100% 通过。
+   - 当前工作区分支：`feat/round2-m21-execution-infra`。
+   - 最新进展：Milestone 2.1（执行态基建与坐标断层缝合）全绿验收达成，270 个单测 100% 通过。
 4. **整体系统现状**：
    - Phase 0 ~ Phase 5 全部达成 (249 tests 基线)
    - 第二轮优化第 0 步先期护栏达成 (259 tests，P1, P6, P2 就位)
-   - 下一阶段：Milestone 2.1 执行态基建与工程化加固 (M2.1 + M1 + P3 + P7 + P9)
+   - 第二轮优化 Milestone 2.1 达成 (270 tests，执行态树抽取/坐标桥接/剪贴板恢复/弱引用代理/截帧/前台保活/混淆)
+   - 下一阶段：Milestone 2.2 Helix-GUI 任务代行总控与执行态 UI (M2.2 + M2 + P4 + P5)
 
 
 

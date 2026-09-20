@@ -35,7 +35,7 @@
   - `EmptyReason`
   - `List<ExecutionNode>.toUiElementNodes(): List<UiElementNode>`
 
-- [ ] **Step 1: 编写红灯单测 `ExecutionTreeModelsTest`**
+- [x] **Step 1: 编写红灯单测 `ExecutionTreeModelsTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeModelsTest.kt` 编写测试：
 ```kotlin
@@ -148,14 +148,14 @@ class ExecutionTreeModelsTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.grounding.ExecutionTreeModelsTest"
 ```
 预期：编译错误（找不到 `ExecutionNode`, `TreeDumpResult`, `toUiElementNodes`）。
 
-- [ ] **Step 3: 实现 `ExecutionTreeModels.kt`**
+- [x] **Step 3: 实现 `ExecutionTreeModels.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeModels.kt` 编写实现：
 ```kotlin
@@ -235,18 +235,18 @@ fun List<ExecutionNode>.toUiElementNodes(): List<UiElementNode> {
 }
 ```
 
-- [ ] **Step 4: 运行单测验证跑绿**
+- [x] **Step 4: 运行单测验证跑绿**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.grounding.ExecutionTreeModelsTest"
 ```
 预期：3 个测试全部 PASSED。
 
-- [ ] **Step 5: 变异测试验证**
+- [x] **Step 5: 变异测试验证**
 
 故意将 `toUiElementNodes()` 中 `!it.isLargeContainer` 过滤条件去除，重新运行测试，确认 `testToUiElementNodes_filtersInvisibleAndLargeContainers` 报错红灯。恢复后重新全绿。
 
-- [ ] **Step 6: 提交原子 Commit**
+- [x] **Step 6: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeModels.kt \
@@ -269,7 +269,7 @@ git commit -m "feat(automation): 建立执行态高保真树契约与坐标桥�
 - Produces:
   - `ExecutionTreeExtractor.dumpTree(rootNode, screenWidth, screenHeight, packageName, activityName): TreeDumpResult`
 
-- [ ] **Step 1: 编写红灯单测 `ExecutionTreeExtractorTest`**
+- [x] **Step 1: 编写红灯单测 `ExecutionTreeExtractorTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeExtractorTest.kt` 编写单测（使用 Robolectric）：
 ```kotlin
@@ -418,14 +418,14 @@ class ExecutionTreeExtractorTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.grounding.ExecutionTreeExtractorTest"
 ```
 预期：编译错误（找不到 `ExecutionTreeExtractor`）。
 
-- [ ] **Step 3: 实现 `ExecutionTreeExtractor.kt`**
+- [x] **Step 3: 实现 `ExecutionTreeExtractor.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeExtractor.kt` 编写实现：
 ```kotlin
@@ -587,18 +587,18 @@ class ExecutionTreeExtractor(
 }
 ```
 
-- [ ] **Step 4: 运行单测验证跑绿**
+- [x] **Step 4: 运行单测验证跑绿**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.grounding.ExecutionTreeExtractorTest"
 ```
 预期：全部 5 个测试用例 PASSED。
 
-- [ ] **Step 5: 变异测试验证**
+- [x] **Step 5: 变异测试验证**
 
 故意将 `ExecutionTreeExtractor.kt` 中两轮自愈判定条件从 `if (interactableCount1 <= 2)` 改坏为 `if (false)`，重新运行单测，确认 `testDumpTree_twoRoundRetryRecovery` 失败变红。恢复后重新全绿。
 
-- [ ] **Step 6: 提交原子 Commit**
+- [x] **Step 6: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/automation/grounding/ExecutionTreeExtractor.kt \
@@ -623,7 +623,7 @@ git commit -m "feat(automation): 实现400节点高保真树抽取与双轮自�
   - `AccessibilityServiceHolder.get(): XiaoxiAccessibilityService?`
   - `AccessibilityServiceHolder.isConnected: Boolean`
 
-- [ ] **Step 1: 编写红灯单测 `AccessibilityServiceHolderTest`**
+- [x] **Step 1: 编写红灯单测 `AccessibilityServiceHolderTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/perception/AccessibilityServiceHolderTest.kt` 编写单测：
 ```kotlin
@@ -662,14 +662,14 @@ class AccessibilityServiceHolderTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.perception.AccessibilityServiceHolderTest"
 ```
 预期：编译错误（找不到 `AccessibilityServiceHolder`）。
 
-- [ ] **Step 3: 实现 `AccessibilityServiceHolder.kt`**
+- [x] **Step 3: 实现 `AccessibilityServiceHolder.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/perception/AccessibilityServiceHolder.kt` 编写实现：
 ```kotlin
@@ -702,13 +702,13 @@ object AccessibilityServiceHolder {
 }
 ```
 
-- [ ] **Step 4: 挂载到 `XiaoxiAccessibilityService.kt`**
+- [x] **Step 4: 挂载到 `XiaoxiAccessibilityService.kt`**
 
 在 `XiaoxiAccessibilityService.kt` 的生命周期方法中挂载：
 - `onServiceConnected()` 调用 `AccessibilityServiceHolder.register(this)`
 - `onDestroy()` 与 `onUnbind(intent)` 调用 `AccessibilityServiceHolder.unregister()`
 
-- [ ] **Step 5: 运行相关单测验证跑绿**
+- [x] **Step 5: 运行相关单测验证跑绿**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.perception.AccessibilityServiceHolderTest" && \
@@ -716,7 +716,7 @@ object AccessibilityServiceHolder {
 ```
 预期：全部 PASSED。
 
-- [ ] **Step 6: 提交原子 Commit**
+- [x] **Step 6: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/perception/AccessibilityServiceHolder.kt \
@@ -739,7 +739,7 @@ git commit -m "feat(perception): 落地无障碍服务弱引用代理 Accessibil
 - Produces:
   - `TextInputExecutor.injectText(node: AccessibilityNodeInfo?, targetBounds: ElementBounds, text: String): Boolean`
 
-- [ ] **Step 1: 编写红灯单测 `TextInputExecutorTest`**
+- [x] **Step 1: 编写红灯单测 `TextInputExecutorTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/automation/gesture/TextInputExecutorTest.kt` 编写：
 ```kotlin
@@ -832,14 +832,14 @@ class TextInputExecutorTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.gesture.TextInputExecutorTest"
 ```
 预期：编译错误（找不到 `TextInputExecutor`）。
 
-- [ ] **Step 3: 实现 `TextInputExecutor.kt`**
+- [x] **Step 3: 实现 `TextInputExecutor.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/automation/gesture/TextInputExecutor.kt` 编写实现：
 ```kotlin
@@ -896,18 +896,18 @@ class TextInputExecutor(
 }
 ```
 
-- [ ] **Step 4: 运行单测验证跑绿**
+- [x] **Step 4: 运行单测验证跑绿**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.gesture.TextInputExecutorTest"
 ```
 预期：3 个测试全部 PASSED。
 
-- [ ] **Step 5: 变异测试验证**
+- [x] **Step 5: 变异测试验证**
 
 故意在 `TextInputExecutor.kt` 中注释掉 `finally` 块里的还原代码，重新运行单测，确认 `testInjectText_fallbackClipboard_restoresOriginalClip` 变红失败。恢复后重新全绿。
 
-- [ ] **Step 6: 提交原子 Commit**
+- [x] **Step 6: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/automation/gesture/TextInputExecutor.kt \
@@ -928,7 +928,7 @@ git commit -m "feat(automation): 实现带剪贴板快照还原的安全文字�
   - `FrameCaptureResult(bytes: ByteArray, widthPx: Int, heightPx: Int, timestamp: Long)`
   - `ScreenCaptureManager.captureScreen(): FrameCaptureResult?`
 
-- [ ] **Step 1: 编写红灯单测 `ScreenCaptureManagerTest`**
+- [x] **Step 1: 编写红灯单测 `ScreenCaptureManagerTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/automation/capture/ScreenCaptureManagerTest.kt` 编写单测：
 ```kotlin
@@ -964,13 +964,13 @@ class ScreenCaptureManagerTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.capture.ScreenCaptureManagerTest"
 ```
 
-- [ ] **Step 3: 实现 `ScreenCaptureManager.kt`**
+- [x] **Step 3: 实现 `ScreenCaptureManager.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/automation/capture/ScreenCaptureManager.kt` 编写：
 ```kotlin
@@ -1017,13 +1017,13 @@ class ScreenCaptureManager(
 }
 ```
 
-- [ ] **Step 4: 运行单测验证跑绿**
+- [x] **Step 4: 运行单测验证跑绿**
 
 ```bash
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.automation.capture.ScreenCaptureManagerTest"
 ```
 
-- [ ] **Step 5: 提交原子 Commit**
+- [x] **Step 5: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/automation/capture/ScreenCaptureManager.kt \
@@ -1040,7 +1040,7 @@ git commit -m "feat(automation): 建立双通道截帧数据契约与屏幕捕�
 - Modify: `app/proguard-rules.pro`
 - Modify: `gradle.properties`
 
-- [ ] **Step 1: 在 `CompanionOverlayService.kt` 增加前台提升与降级控制**
+- [x] **Step 1: 在 `CompanionOverlayService.kt` 增加前台提升与降级控制**
 
 添加：
 ```kotlin
@@ -1058,7 +1058,7 @@ git commit -m "feat(automation): 建立双通道截帧数据契约与屏幕捕�
     }
 ```
 
-- [ ] **Step 2: 完善 `app/proguard-rules.pro`**
+- [x] **Step 2: 完善 `app/proguard-rules.pro`**
 
 补齐 Room、Serialization、Ktor keep 规则，防止 release 构建反射类被 R8 误裁：
 ```proguard
@@ -1087,7 +1087,7 @@ git commit -m "feat(automation): 建立双通道截帧数据契约与屏幕捕�
 -dontwarn okhttp3.**
 ```
 
-- [ ] **Step 3: 更新 `gradle.properties` 启用构建提速参数**
+- [x] **Step 3: 更新 `gradle.properties` 启用构建提速参数**
 
 ```properties
 org.gradle.caching=true
@@ -1095,14 +1095,14 @@ org.gradle.parallel=true
 org.gradle.configuration-cache=true
 ```
 
-- [ ] **Step 4: 运行全量单测与打包验证**
+- [x] **Step 4: 运行全量单测与打包验证**
 
 ```bash
 ./gradlew testDebugUnitTest && ./gradlew assembleDebug
 ```
 预期：全部单元测试 100% 绿灯，打包成功。
 
-- [ ] **Step 5: 提交原子 Commit**
+- [x] **Step 5: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/overlay/CompanionOverlayService.kt \
