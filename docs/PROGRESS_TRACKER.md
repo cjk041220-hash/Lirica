@@ -13,7 +13,7 @@
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
-| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 进行中 | 1/4 |
+| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 进行中 | 2/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
@@ -344,10 +344,27 @@
 - **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，严格遵循低能耗息屏门控，单测覆盖完备。
 
 ### Task 3.2: 全局通知捕获与低能耗关键信息过滤 (XiaoxiNotificationListenerService & NotificationFilter)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 完善 `XiaoxiNotificationListenerService`，捕获系统 `StatusBarNotification`
-  - 落地 `NotificationFilter`（过滤系统常驻、下载进度、已读静音，提取社交通讯/日程关键有效通知）
+  - `NotificationCategory` & `NotificationEvent`：定义通知语义分类（`COMMUNICATION`, `SCHEDULE`, `TRAVEL_LOGISTICS`, `SECURITY`, `SYSTEM_ALERT`, `OTHER`）与限长结构化载荷模型
+  - `NotificationFilter`：端侧低能耗通知漏斗，严格过滤 `isOngoing` 系统常驻广播与下载进度条（`EXTRA_PROGRESS_MAX > 0` / `EXTRA_PROGRESS_INDETERMINATE`），实施标题 (128字符) 与主体内容 (256字符) 截断，支持知名社交/外卖/日程/验证码包名与语义关键词快速分类
+  - `XiaoxiNotificationListenerService`：完善系统通知监听服务，安全捕获 `StatusBarNotification`，防崩溃异常沙箱隔离，维护 `isServiceConnected` 伴生状态，提供具备背压保护（`BufferOverflow.DROP_OLDEST`）的 `SharedFlow<NotificationEvent>` 与最新状态流 `latestNotification`，暴露授权设置跳转 Intent 与权限检测工具
+  - `NotificationFilterTest`：9 个测试用例验证常驻过滤、进度条过滤、空通知过滤、通讯/出行外卖/日程/验证码精准分类与字符限长截断
+  - `XiaoxiNotificationListenerServiceTest`：5 个测试用例验证服务连接生命周期、合法通知捕获发射、常驻通知忽略、权限跳转 Intent 与启用状态判定
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 120 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `NotificationFilter.kt` 中 `isOngoing` 常驻过滤逻辑反转（从 `if (sbn.isOngoing)` 改坏为 `if (!sbn.isOngoing)`）
+  - 单测红灯证据：运行单测触发红灯报错：
+    `NotificationFilterTest > testFilterOngoingNotification_isDropped FAILED: java.lang.AssertionError at NotificationFilterTest.kt:76`
+    `NotificationFilterTest > testFilterCommunicationApp_isAccepted FAILED: java.lang.AssertionError at NotificationFilterTest.kt:120`
+    `NotificationFilterTest > testFilterTravelLogistics_isAccepted FAILED: java.lang.AssertionError at NotificationFilterTest.kt:135`
+    `NotificationFilterTest > testFilterScheduleAndReminders_isAccepted FAILED: java.lang.AssertionError at NotificationFilterTest.kt:148`
+    `NotificationFilterTest > testFilterSecurityOtp_isAccepted FAILED: java.lang.AssertionError at NotificationFilterTest.kt:160`
+    `NotificationFilterTest > testTextTruncation_limitsMaxLengthTo256 FAILED: java.lang.AssertionError at NotificationFilterTest.kt:173`
+  - 恢复全绿：恢复过滤逻辑后重新全量 120 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，严格遵循低能耗过滤与背压截断，单测覆盖完备。
 
 ### Task 3.3: 无障碍前台节点轻量抽取与焦点感知 (XiaoxiAccessibilityService Node Extractor)
 - [ ] 状态：待开始
