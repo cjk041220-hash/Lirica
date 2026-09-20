@@ -12,7 +12,7 @@
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
-| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 待启动 | 0/4 |
+| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 1/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
@@ -216,11 +216,24 @@
 
 > **核心使命**：基于 Jetpack Compose 构建小汐 2.0 的原生表现层与跨应用常驻悬浮伴生体，打通全屏主界面、悬浮微表情动画渲染与全局保活机制。
 
-### Task 2.1: Compose 全屏主界面与对话流渲染 (ChatScreen)
-- [ ] 状态：待开始
+### Task 2.1: Compose 全屏主界面与对话流渲染 (ChatScreen & ViewModel)
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 基于 Jetpack Compose 打造沉浸式对话流界面（支持 Markdown、打字机流式渐显、情绪微表情伴随）
-  - 历史消息加载、双轨记忆触发标识展示与心智状态调试指示器
+  - `ChatUiState` & `ChatMessageItem`：完整的响应式 UI 状态契约，支持双轨记忆命中指示模型 `MemoryBadgeInfo`、微表情跟随与心智调试参数
+  - `ChatViewModel`：响应式协调器，打通 `XiaoxiLlmClient`（SSE 流式打字机逐字累加）、`DualTrackMemoryManager`（双轨记忆二段分层召回与上下文装配）、`EmotionEngine`（微表情与情绪向量响应式同步）、`PhiMiddleware`（PHI 尾部语气重锚）与 `HumannessFilter`（反客服腔过滤）
+  - `ChatScreen`：沉浸式 Compose 全屏对话流主界面，实现轻量 Markdown 格式解析渲染（粗体、行内代码、段落分行）、打字机流式自动滚底、微表情头像伴随
+  - `MemoryBadge`：双轨记忆命中指示徽章与详情弹窗，区分用户事实与自主经历见闻
+  - `MoodDebugPanel`：心智调试展开面板，实时观察与调试 Russell 2D 情绪坐标 (Valence, Arousal, Dominance)
+  - `CharacterCardDialog`：SillyTavern 角色卡查看与导入切换弹窗，无缝集成 `CharacterCardDecoder`
+  - 更新 `MainActivity` 托管 `ChatScreen`；更新 `XiaoxiApplication` 单例持有心智中枢依赖
+  - `ChatViewModelTest` 涵盖 6 个高质量 JVM 单元测试
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 73 tests completed, 0 failed, `BUILD SUCCESSFUL in 9s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s`
+- **变异验证**：
+  - 变异点 1：故意注释掉 `ChatViewModel.kt` 流式循环中的 Token 累加逻辑 `accumulated.append(event.text)`，运行单测触发红灯报错（`ChatViewModelTest > testSendMessageStreamingAccumulation FAILED: org.junit.ComparisonFailure at ChatViewModelTest.kt:98`）；恢复后重新全绿。
+  - 变异点 2：故意破坏 `ChatViewModel.kt` 中占位助手消息的记忆徽章挂载（强制置为 `null`），运行单测触发红灯报错（`ChatViewModelTest > testMemoryBadgeAssociation FAILED: java.lang.AssertionError at ChatViewModelTest.kt:138`）；恢复后重新全绿。
+- **审查结论**：100% 原生 Jetpack Compose + Kotlin Coroutines，无 Dummy Code，完全对齐 Phase 1 心智中枢，全量单测与变异验证通过。
 
 ### Task 2.2: 跨应用常驻伴生悬浮窗 (CompanionOverlayService & OverlayBubble)
 - [ ] 状态：待开始

@@ -24,11 +24,14 @@ class EmotionEngine(
     private val _stateFlow = MutableStateFlow(baseline)
     val stateFlow: StateFlow<EmotionVector> = _stateFlow.asStateFlow()
 
+    private val _moodFlow = MutableStateFlow(MoodState.fromVector(baseline))
+    val moodFlow: StateFlow<MoodState> = _moodFlow.asStateFlow()
+
     val currentVector: EmotionVector
         get() = _stateFlow.value
 
     val currentMood: MoodState
-        get() = MoodState.fromVector(currentVector)
+        get() = _moodFlow.value
 
     /**
      * 接收外部事件冲激并更新情绪状态：
@@ -40,6 +43,7 @@ class EmotionEngine(
         val delta = (stimulus * sensitivityAlpha) - ((current - baseline) * dampingBeta)
         val next = (current + delta).clamped()
         _stateFlow.value = next
+        _moodFlow.value = MoodState.fromVector(next)
     }
 
     /**
@@ -53,6 +57,7 @@ class EmotionEngine(
             current = (current - delta).clamped()
         }
         _stateFlow.value = current
+        _moodFlow.value = MoodState.fromVector(current)
     }
 
     /**
@@ -60,6 +65,7 @@ class EmotionEngine(
      */
     fun resetToBaseline() {
         _stateFlow.value = baseline
+        _moodFlow.value = MoodState.fromVector(baseline)
     }
 
     /**

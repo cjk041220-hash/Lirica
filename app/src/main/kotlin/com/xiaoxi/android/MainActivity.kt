@@ -3,34 +3,43 @@ package com.xiaoxi.android
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.xiaoxi.android.ui.chat.ChatScreen
+import com.xiaoxi.android.ui.chat.ChatViewModel
 
 class MainActivity : ComponentActivity() {
+
+    private val chatViewModel: ChatViewModel by viewModels {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val app = application as XiaoxiApplication
+                return ChatViewModel(
+                    llmClient = app.llmClient,
+                    memoryManager = app.memoryManager,
+                    emotionEngine = app.emotionEngine,
+                    phiMiddleware = app.phiMiddleware,
+                    humannessFilter = app.humannessFilter,
+                    chatDialogueDao = app.database.chatDialogueDao()
+                ) as T
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    Greeting("小汐 2.0")
+                    ChatScreen(viewModel = chatViewModel)
                 }
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text = "Hello, $name!")
     }
 }
