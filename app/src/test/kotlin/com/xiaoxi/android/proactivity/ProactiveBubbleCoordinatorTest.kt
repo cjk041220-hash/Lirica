@@ -1,0 +1,188 @@
+package com.xiaoxi.android.proactivity
+
+import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
+import com.xiaoxi.android.emotion.EmotionEngine
+import com.xiaoxi.android.emotion.model.EmotionVector
+import com.xiaoxi.android.perception.model.ForegroundAppInfo
+import com.xiaoxi.android.perception.model.NotificationCategory
+import com.xiaoxi.android.perception.model.NotificationEvent
+import com.xiaoxi.android.perception.model.PerceptionSnapshot
+import com.xiaoxi.android.perception.model.ScreenState
+import com.xiaoxi.android.perception.model.ScreenStateSnapshot
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+
+class ProactiveBubbleCoordinatorTest {
+
+    private lateinit var emotionEngine: EmotionEngine
+    private lateinit var thoughtManager: UnspokenThoughtManager
+    private lateinit var decisionEngine: SilenceDecisionEngine
+    private lateinit var coordinator: ProactiveBubbleCoordinator
+
+    @Before
+    fun setUp() {
+        emotionEngine = mockk(relaxed = true)
+        thoughtManager = mockk(relaxed = true)
+        decisionEngine = mockk(relaxed = true)
+
+        every { emotionEngine.currentVector } returns EmotionVector(0f, 0f)
+
+        coordinator = ProactiveBubbleCoordinatorImpl(
+            thoughtManager = thoughtManager,
+            decisionEngine = decisionEngine,
+            emotionEngine = emotionEngine
+        )
+    }
+
+    private fun createSnapshot(
+        packageName: String = "com.android.launcher",
+        screenState: ScreenState = ScreenState.UNLOCKED,
+        notification: NotificationEvent? = null
+    ): PerceptionSnapshot {
+        return PerceptionSnapshot(
+            timestamp = 100_000L,
+            foregroundApp = ForegroundAppInfo(
+                packageName = packageName,
+                timestamp = 100_000L,
+                dwellDurationMs = 10_000L
+            ),
+            screenState = ScreenStateSnapshot(
+                state = screenState,
+                lastStateChangeTimestamp = 90_000L,
+                totalInteractiveDurationMs = 10_000L
+            ),
+            latestNotification = notification,
+            pageContent = null,
+            isPrivacyFusing = false,
+            perceivedSummary = "Normal"
+        )
+    }
+
+    @Test
+    fun testCoordinate_silentWhenMotivationLow_producesL0() = runTest {
+        val snapshot = createSnapshot()
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 2.0 // Low motivation
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.SILENT,
+            innerMotivation = 2.0,
+            interruptCost = 1.0,
+            effectiveMotivation = 2.0,
+            breakpoint = BreakpointResult(false, BreakpointType.NONE),
+            reason = "Motivation too low"
+        )
+
+        val result = coordinator.coordinate(snapshot, nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L0_SILENT, result.level)
+        assertEquals(0, result.bubblesShownToday)
+    }
+
+    @Test
+    fun testCoordinate_innerThoughtOnly_producesL1AndStimulatesEmotion() = runTest {
+        val snapshot = createSnapshot()
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 3.8
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.INNER_THOUGHT_ONLY,
+            innerMotivation = 3.8,
+            interruptCost = 3.0,
+            effectiveMotivation = 3.8,
+            breakpoint = BreakpointResult(false, BreakpointType.NONE),
+            reason = "High cost"
+        )
+
+        val result = coordinator.coordinate(snapshot, nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L1_MICRO_EXPRESSION, result.level)
+        // Should stimulate EmotionEngine with mild awakening
+        verify(atLeast = 1) { emotionEngine.applyStimulus(any()) }
+    }
+
+    @Test
+    fun testCoordinate_proactiveInterrupt_producesL2BubbleAndConsumesQuota() = runTest {
+        val snapshot = createSnapshot()
+        val mockThought = UnspokenThoughtEntity(
+            id = "thought-1",
+            thought = "看你在桌面发呆，要不要聊聊天？",
+            createdAt = 100_000L
+        )
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 4.8
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(mockThought)
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.PROACTIVE_INTERRUPT,
+            innerMotivation = 4.8,
+            interruptCost = 1.0,
+            effectiveMotivation = 4.8,
+            breakpoint = BreakpointResult(true, BreakpointType.RETURN_TO_LAUNCHER),
+            reason = "Ready to interrupt"
+        )
+
+        val result = coordinator.coordinate(snapshot, nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, result.level)
+        assertNotNull(result.thought)
+        assertEquals("thought-1", result.thought?.id)
+        assertEquals(1, result.bubblesShownToday)
+    }
+
+    @Test
+    fun testCoordinate_dailyQuotaExhausted_downgradesToL1() = runTest {
+        val snapshot = createSnapshot()
+        val mockThought = UnspokenThoughtEntity(
+            id = "thought-quota",
+            thought = "想说的话",
+            createdAt = 100_000L
+        )
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 4.8
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(mockThought)
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.PROACTIVE_INTERRUPT,
+            innerMotivation = 4.8,
+            interruptCost = 1.0,
+            effectiveMotivation = 4.8,
+            breakpoint = BreakpointResult(true, BreakpointType.RETURN_TO_LAUNCHER),
+            reason = "Ready"
+        )
+
+        // Consume 2 quotas
+        val r1 = coordinator.coordinate(snapshot, nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, r1.level)
+        assertEquals(1, r1.bubblesShownToday)
+
+        val r2 = coordinator.coordinate(snapshot, nowMs = 101_000L)
+        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, r2.level)
+        assertEquals(2, r2.bubblesShownToday)
+
+        // 3rd attempt on same day must be rejected by quota limit (DAILY_BUBBLE_QUOTA = 2)
+        val r3 = coordinator.coordinate(snapshot, nowMs = 102_000L)
+        assertEquals(ProactivityLevel.L1_MICRO_EXPRESSION, r3.level)
+        assertTrue("Reason should mention quota: ${r3.reason}", r3.reason.contains("配额"))
+    }
+
+    @Test
+    fun testFeedback_dismissed_increasesBackoffPenalty() = runTest {
+        val now = 100_000L
+        val initialPenalty = coordinator.getBackoffPenalty()
+        assertEquals(0.0, initialPenalty, 0.001)
+
+        coordinator.onUserFeedback(UserFeedback.DISMISSED, thoughtId = "t-1", nowMs = now)
+
+        val updatedPenalty = coordinator.getBackoffPenalty()
+        assertTrue("Dismissed feedback should increase backoff penalty: $updatedPenalty", updatedPenalty > initialPenalty)
+        coVerify(atLeast = 1) { thoughtManager.consumeThought("t-1", now) }
+    }
+
+    @Test
+    fun testFeedback_clicked_consumesThoughtAndResetsSatiety() = runTest {
+        val now = 100_000L
+        coordinator.onUserFeedback(UserFeedback.CLICKED, thoughtId = "t-2", nowMs = now)
+
+        coVerify(exactly = 1) { thoughtManager.consumeThought("t-2", now) }
+        coVerify(exactly = 1) { thoughtManager.markExpressed(now) }
+    }
+}

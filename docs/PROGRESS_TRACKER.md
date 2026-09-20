@@ -1,6 +1,6 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：Phase 4 准备阶段 (Phase 3 感知中枢已全绿达成 M3 里程碑，待启动 Phase 4 主动性裁决器与自主生活)  
+> **当前阶段**：Phase 5 准备阶段 (Phase 4 主动性裁决器与自主生活已全绿达成 M4 里程碑，待启动 Phase 5 手机操控与任务代行)  
 > **最后更新**：2026-09-20  
 > **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines
 
@@ -14,7 +14,7 @@
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | **已全绿验收** | 4/4 |
-| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 进行中 | 3/4 |
+| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | **已全绿验收** | 4/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
 ---
@@ -505,29 +505,94 @@
 - **审查结论**：APPROVED。100% Native Kotlin + WorkManager，严密约束绝无后台常驻电量偷跑与 WakeLock 泄露，自叙经历活水反哺逻辑完整，单测覆盖完备。
 
 ### Task 4.4: 悬浮窗主动破冰气泡与防打扰退避总线整合 (ProactiveBubbleCoordinator)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 分级表达映射：L0(静默更新) -> L1(伴生体微表情/光效) -> L2(非阻塞 IcebreakerBubble) -> L3(轻提示通知)；严格封禁伴生内容滥用 L4；
-  - 每日配额硬限制（主动破冰 ≤ 2 次/天）；
-  - 用户反馈自适应退避：监听气泡点击/划掉/忽略，动态调整用户可中断性偏好；
-  - 整合总线：串联 Perception -> Decision -> Thought -> Overlay 完整闭环。
+  - `ProactivityLevel`：分级表达映射协议：
+    - `L0_SILENT`：静默更新，动力学带泄漏积分与感知状态更新，界面无任何显式打扰；
+    - `L1_MICRO_EXPRESSION`：内心独白触发，对 `EmotionEngine` 施加轻微情绪唤醒刺激 (`EmotionVector(0.05f, 0.05f)`)，伴生体微表情光效微调，无气泡打扰；
+    - `L2_ICEBREAKER_BUBBLE`：满足打断阈值且每日配额充足时，在伴生体头顶浮现非阻塞 `IcebreakerBubble` 破冰小气泡；
+    - `L3_LIGHT_NOTIFICATION`：轻提示通知渠道；
+    - **严厉封禁**伴生内容滥用全屏阻塞式弹窗（L4 物理剔除）；
+  - `UserFeedback` & 自适应退避机制：
+    - `CLICKED`（正向交互）：消耗念头，标记已表达（Satiety 抑制），扣减退避惩罚 (`-0.5`)；
+    - `DISMISSED`（强负向）：关闭念头，记录打扰冷却，大幅增加退避惩罚 (`+1.0`)，压制后续主动打断；
+    - `IGNORED`（超时弱负向）：轻度增加退避惩罚 (`+0.3`)；
+  - `ProactiveBubbleCoordinator` & `ProactiveBubbleCoordinatorImpl`：整合协调中枢：
+    - 每日硬配额（`DAILY_BUBBLE_QUOTA = 2` 次/天），跨天基于真实日期自动重置配额并衰减 50% 退避惩罚；
+    - 串联完整闭环：`PerceptionSnapshot` -> `UnspokenThoughtManager` 动力学计算 -> 退避惩罚抵扣 -> `SilenceDecisionEngine` 双门控裁决 -> 配额校验 -> L0/L1/L2 分级输出；
+  - `ProactiveBubbleCoordinatorTest`：6 个测试用例验证低动机静默 (L0)、高代价微表情 (L1)、主动破冰消耗配额 (L2)、每日配额耗尽自动降级 (L1)、用户关闭气泡加重退避惩罚与用户点击消费念头
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 184 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意在 `ProactiveBubbleCoordinator.kt` 中将每日配额硬约束守门逻辑破坏性关闭（`if (false)` 替代 `if (bubblesShownToday >= DAILY_BUBBLE_QUOTA)`）
+  - 单测红灯证据：运行单测触发红灯报错：
+    `ProactiveBubbleCoordinatorTest > testCoordinate_dailyQuotaExhausted_downgradesToL1 FAILED: java.lang.AssertionError at ProactiveBubbleCoordinatorTest.kt:134`
+  - 恢复全绿：恢复配额约束逻辑后全量 184 个单测重新 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，分级映射严密，每日配额硬限制防骚扰，反馈自适应退避闭环完整，单测覆盖完备。
+
+---
+
+## 阶段验收里程碑 M4 (Phase 4 全绿达成)
+- **验收时间**：2026-09-20
+- **核心成果**：
+  1. **沉默裁决器与可中断性门控 (Task 4.1)**：
+     - `InterruptibilityEstimator`：可中断性打扰代价模型 Cost_int(t)，集成应用类型（Launcher 优惠、游戏/会议重度惩罚）、屏幕状态（息屏/亮屏锁屏）、60分钟冷却不应期线性衰减与金融隐私熔断硬封顶；
+     - `BreakpointDetector`：任务断点探测器，高敏感捕获屏幕解锁边沿、应用退出回桌面、应用切换与桌面长闲置；
+     - `SilenceDecisionEngine`：基于 CHI'25 Inner Thoughts 双门控（内隐动机阈值 3.6，打断阈值 4.5），严格拦截不可打扰场景。
+  2. **未完成念头池生命周期与动机动力学 (Task 4.2)**：
+     - `MotivationDynamics`：好奇心、无聊感、关怀度、紧急度四维带泄漏积分动力学模型，支持主动表达后抑制 (Satiety) 与 60 分钟冷却不应期；
+     - `ThoughtSynthesizer`：外卖物流、日程提醒、即时通讯、安全验证码、超长盯屏疲劳与桌面发呆等第一人称内心独白转译；
+     - `UnspokenThoughtManager`：统筹动力学更新、Room DAO 持久化、过期批量物理清理与消费流转。
+  3. **闲时经历沉淀与自主日记生成 (Task 4.3)**：
+     - `AutonomousLifeWorker`：原生 Android WorkManager 周期后台任务，严密限制在充电中 + 待机空闲 + 已联网环境执行，严禁常驻 WakeLock；
+     - `DiaryEngine`：在夜间充电长期待机时，自动提炼当日对话情感与使用轨迹，生成第一人称生动感悟日记，存入 `SelfExperienceDao`，提供后续活水反哺。
+  4. **悬浮窗主动破冰气泡与防打扰退避总线整合 (Task 4.4)**：
+     - `ProactiveBubbleCoordinator`：完整打通 Perception -> Decision -> Thought -> Overlay 全链路；
+     - 分级映射 L0(静默) -> L1(微表情) -> L2(非阻塞气泡) -> L3(轻通知)，严禁 L4 全屏阻塞；
+     - 每日硬配额（<= 2 次/天）与用户反馈自适应退避（点击接茬奖赏，划掉关闭惩罚冷却）。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 184 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s` (0 error, 0 warning)
+- **验收结论**：Phase 4 所有 4 个任务（Task 4.1 ~ 4.4）全部通过 TDD 与变异验证，无任何 Chaquopy/Python 遗留，完全满足 100% Native 原生工业级标准，正式达成 **Phase 4 (M4 里程碑)** 全绿验收！具备随时切入 **Phase 5（手机操控与任务代行）** 条件。
+
+---
+
+## Phase 5 任务拆解与对接指引 (Next Session Action Plan)
+
+> **核心使命**：落地手机自动化操控与任务代行体系，实现从自然语言意图到 Android 原生操作的完整代行（Intent 直达 / 无障碍手势 / 端侧视觉接地 / 执行自愈 / 金融安全守门）。
+
+### Task 5.1: 意图直达与系统 Intent 快捷代行 (IntentActionDispatcher)
+- **目标**：针对发微信、打电话、导航、发邮件、设闹钟、打开特定系统设置等高频操作，跳过繁琐 UI 点按，直接构造显式/隐式 Intent 直达目标组件。
+
+### Task 5.2: 无障碍手势注入与多点触控自动化 (GestureExecutor)
+- **目标**：基于 `XiaoxiAccessibilityService.dispatchGesture()`，实现点击、长按、滑动、拖拽、连续轨迹等手势的异步分发与执行确认机制。
+
+### Task 5.3: 基于端侧 VLM 的屏幕元素混合接地 (HybridGroundingEngine)
+- **目标**：融合 Task 3.3 无障碍节点树结构化信息与端侧视觉模型 (VLM) 坐标预测，在纯 Canvas/Flutter/游戏等无无障碍节点界面的精准元素定位。
+
+### Task 5.4: 执行自愈与死循环检测 (SelfHealingWatchdog)
+- **目标**：监控自动化执行过程中的界面状态转移，检测卡死、弹窗阻断、循环点击，通过退回上一页、重新接地或求助用户实现自愈。
+
+### Task 5.5: 金融敏感操作多重二次确认守门人 (FinancialGatekeeper)
+- **目标**：针对涉及支付、转账、密码输入、权限授权、数据删除等高危操作，实施物理拦截与强二次确认流程，确保自动化绝对受控。
 
 ---
 
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，146 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，184 tests passed）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
 2. **严守铁律**：
-   - **绝不使用 Chaquopy**：100% Native Kotlin + Coroutines + Room + Compose。
+   - **绝不使用 Chaquopy**：100% Native Kotlin + Coroutines + Room + Compose + WorkManager。
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
    - 当前工作区分支：`master`。
-   - 最新进展：Phase 3 全绿验收达成（M3 里程碑），146 个单测 100% 通过。
+   - 最新进展：Phase 4 全绿验收达成（M4 里程碑），184 个单测 100% 通过。
 4. **接手第一动作**：
-   - 启动 Phase 4：落地 Task 4.1 沉默裁决器与主动破冰门控。
+   - 启动 Phase 5：落地 Task 5.1 意图直达与系统 Intent 快捷代行 (`IntentActionDispatcher`)。
 
