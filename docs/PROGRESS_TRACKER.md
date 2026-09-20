@@ -683,10 +683,42 @@
 
 ---
 
+## 第二轮优化·第 0 步工程护栏与稳定性兜底 (Step 0)
+
+> **核心使命**：依据《主方案2.0》与《评审报告》，在开展 M2.1 之前先行落地先期护栏（上下文硬预算、双重召回消除、本地崩溃守护与环形日志落盘），堵死长会话爆 Token、算力浪费与异常闪退无迹可循三大隐患。
+
+### Task 0.1 (P1): 对话历史上下文硬预算截断器 (ChatHistoryTrimmer)
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `ChatHistoryTrimmer`：基于中英混合字符估算法（1 token ≈ 1.5 chars）的硬预算截断器，默认 4,000 tokens 上限；
+  - 倒序贪心收集、向 `user` 角色自动对齐裁剪、单条超大消息头尾安全保护与省略占位注入；
+  - 接入 `ChatViewModel.sendMessage` 历史装配链路；
+  - `ChatHistoryTrimmerTest` 6 个单元测试全绿通过，变异验证通过。
+
+### Task 0.2 (P6): 聊天链路双重记忆召回消除 (DualTrackMemoryManager)
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `DualTrackMemoryManager.assembleDynamicContext` 扩展预召回可选参数，保持 100% 向下兼容；
+  - `ChatViewModel` 单次执行 `recallUserMemories`、`recallSelfExperiences`、`recallUnspokenThoughts`，复用于 UI 徽章与提示词装配，消除重复 Bigram 分词与 6 因子全量算分；
+  - `DualTrackMemoryManagerTest` 与 `ChatViewModelTest` 单元测试全绿通过，变异验证通过。
+
+### Task 0.3 (P2): 本地崩溃守护与环形日志落盘 (XiaoxiLog & XiaoxiCrashHandler)
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `XiaoxiLog`：纯原生统一日志门面，提供 LogCat 映射与内存 200 条定长线程安全环形日志快照；
+  - `XiaoxiCrashHandler`：本地私密崩溃守门员，接管未捕获异常，生成带设备信息、堆栈与环形日志上下文的诊断报告，落盘于内部沙盒 `crashes/` 并维护最多 5 份轮转清理，严禁上报云端；
+  - 在 `XiaoxiApplication.onCreate` 挂载，并清理工程内遗留的裸写 `println`；
+  - `XiaoxiLogTest` 与 `XiaoxiCrashHandlerTest` 全绿通过，变异验证通过。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 259 tests completed, 0 failed, 100% pass
+- **验收结论**：APPROVED。第 0 步三大护栏全绿达成，全仓单测扩充至 259 项。
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，234 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，259 tests passed）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
@@ -695,14 +727,12 @@
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
-   - 当前工作区分支：`master`。
-   - 最新进展：Phase 5 全绿验收达成（M5 里程碑），234 个单测 100% 通过。
+   - 当前工作区分支：`feat/round2-step0-guardrails`。
+   - 最新进展：第二轮优化第 0 步先期护栏（P1, P6, P2）全绿验收达成，259 个单测 100% 通过。
 4. **整体系统现状**：
-   - Phase 0: 基础设施搭建 (M0)
-   - Phase 1: 伴生心智基座 (M1)
-   - Phase 2: 界面渲染与全景保活 (M2)
-   - Phase 3: 低能耗视奸感知漏斗 (M3)
-   - Phase 4: 自主性与意图涌现 (M4)
-   - Phase 5: 手机操控与任务代行 Helix-GUI (M5) 全部达成！
+   - Phase 0 ~ Phase 5 全部达成 (249 tests 基线)
+   - 第二轮优化第 0 步先期护栏达成 (259 tests，P1, P6, P2 就位)
+   - 下一阶段：Milestone 2.1 执行态基建与工程化加固 (M2.1 + M1 + P3 + P7 + P9)
+
 
 

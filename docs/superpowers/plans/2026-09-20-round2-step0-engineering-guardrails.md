@@ -32,7 +32,7 @@
   - `ChatHistoryTrimmer.estimateTokens(text: String): Int`
   - `ChatHistoryTrimmer.trim(history: List<ChatMessage>, maxTokens: Int = 4000): List<ChatMessage>`
 
-- [ ] **Step 1: 编写红灯单测 `ChatHistoryTrimmerTest`**
+- [x] **Step 1: 编写红灯单测 `ChatHistoryTrimmerTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/ui/chat/ChatHistoryTrimmerTest.kt` 创建测试：
 ```kotlin
@@ -124,7 +124,7 @@ class ChatHistoryTrimmerTest {
 }
 ```
 
-- [ ] **Step 2: 运行测试验证红灯**
+- [x] **Step 2: 运行测试验证红灯**
 
 运行命令：
 ```bash
@@ -132,7 +132,7 @@ class ChatHistoryTrimmerTest {
 ```
 预期输出：编译报错 `Unresolved reference: ChatHistoryTrimmer`。
 
-- [ ] **Step 3: 实现 `ChatHistoryTrimmer.kt`**
+- [x] **Step 3: 实现 `ChatHistoryTrimmer.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/ui/chat/ChatHistoryTrimmer.kt` 编写最小实现：
 ```kotlin
@@ -230,7 +230,7 @@ object ChatHistoryTrimmer {
 }
 ```
 
-- [ ] **Step 4: 运行单测验证跑绿**
+- [x] **Step 4: 运行单测验证跑绿**
 
 运行命令：
 ```bash
@@ -238,7 +238,7 @@ object ChatHistoryTrimmer {
 ```
 预期输出：`ChatHistoryTrimmerTest` 5 个用例全部 PASSED。
 
-- [ ] **Step 5: 将 `ChatHistoryTrimmer` 接入 `ChatViewModel.kt`**
+- [x] **Step 5: 将 `ChatHistoryTrimmer` 接入 `ChatViewModel.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/ui/chat/ChatViewModel.kt:181-190` 替换原有的无界历史：
 ```kotlin
@@ -261,7 +261,7 @@ val history = ChatHistoryTrimmer.trim(rawHistory)
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.ui.chat.ChatViewModelTest"
 ```
 
-- [ ] **Step 6: 变异测试验证**
+- [x] **Step 6: 变异测试验证**
 
 故意将 `ChatHistoryTrimmer.kt` 中轮次修剪逻辑注释掉（直接 `return retained`），重新运行单测：
 ```bash
@@ -270,7 +270,7 @@ val history = ChatHistoryTrimmer.trim(rawHistory)
 验证触发红灯：`testTrim_alignsToUserMessageStart_whenOldestRemainingIsAssistant FAILED`。  
 恢复代码后重新跑绿。
 
-- [ ] **Step 7: 提交原子 Commit**
+- [x] **Step 7: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/ui/chat/ChatHistoryTrimmer.kt \
@@ -295,7 +295,7 @@ git commit -m "feat(chat): 实现对话历史上下文硬预算截断器 ChatHis
 - Produces:
   - `DualTrackMemoryManager.assembleDynamicContext(query: String, moodValence: Float = 0.0f, charName: String = PhiMiddleware.DEFAULT_CHAR_NAME, nowTs: Long = System.currentTimeMillis(), preRecalledUserMemories: List<UserMemoryEntity>? = null, preRecalledSelfExperiences: List<SelfExperienceEntity>? = null, preRecalledUnspokenThoughts: List<UnspokenThoughtEntity>? = null): String?`
 
-- [ ] **Step 1: 在 `DualTrackMemoryManagerTest` 编写红灯测试**
+- [x] **Step 1: 在 `DualTrackMemoryManagerTest` 编写红灯测试**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/database/memory/DualTrackMemoryManagerTest.kt` 底部增加新用例：
 ```kotlin
@@ -346,7 +346,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
 }
 ```
 
-- [ ] **Step 2: 运行单测验证红灯**
+- [x] **Step 2: 运行单测验证红灯**
 
 运行命令：
 ```bash
@@ -354,7 +354,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
 ```
 预期输出：编译报错 `None of the following functions can be called with the arguments supplied: assembleDynamicContext(...)`。
 
-- [ ] **Step 3: 改造 `DualTrackMemoryManager.kt` 支持预召回入参**
+- [x] **Step 3: 改造 `DualTrackMemoryManager.kt` 支持预召回入参**
 
 修改 `app/src/main/kotlin/com/xiaoxi/android/database/memory/DualTrackMemoryManager.kt:131-145`：
 ```kotlin
@@ -379,7 +379,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
         }
 ```
 
-- [ ] **Step 4: 运行 `DualTrackMemoryManagerTest` 验证跑绿**
+- [x] **Step 4: 运行 `DualTrackMemoryManagerTest` 验证跑绿**
 
 运行命令：
 ```bash
@@ -387,7 +387,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
 ```
 预期输出：全量 7 个用例 100% PASSED。
 
-- [ ] **Step 5: 改造 `ChatViewModel.kt` 将单次召回结果注入 `assembleDynamicContext`**
+- [x] **Step 5: 改造 `ChatViewModel.kt` 将单次召回结果注入 `assembleDynamicContext`**
 
 修改 `app/src/main/kotlin/com/xiaoxi/android/ui/chat/ChatViewModel.kt:132-164`：
 ```kotlin
@@ -434,7 +434,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
 ./gradlew testDebugUnitTest --tests "com.xiaoxi.android.ui.chat.ChatViewModelTest"
 ```
 
-- [ ] **Step 6: 变异测试验证**
+- [x] **Step 6: 变异测试验证**
 
 故意在 `DualTrackMemoryManager.kt` 中忽略 `preRecalledUserMemories`（强行写死 `val userMemories = recallUserMemories(...)`），运行：
 ```bash
@@ -443,7 +443,7 @@ fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runTest {
 确认变红失败：`AssertionError: expected pre_user_1 to be present`。  
 恢复后重新跑绿。
 
-- [ ] **Step 7: 提交原子 Commit**
+- [x] **Step 7: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/database/memory/DualTrackMemoryManager.kt \
@@ -475,7 +475,7 @@ git commit -m "perf(memory): 消除聊天主链路双重记忆召回与算分 (P
   - `XiaoxiCrashHandler.install(context: Context)`
   - `XiaoxiCrashHandler.saveCrashReport(thread: Thread, throwable: Throwable): File?`
 
-- [ ] **Step 1: 编写红灯单测 `XiaoxiLogTest`**
+- [x] **Step 1: 编写红灯单测 `XiaoxiLogTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/common/logging/XiaoxiLogTest.kt` 编写：
 ```kotlin
@@ -524,7 +524,7 @@ class XiaoxiLogTest {
 }
 ```
 
-- [ ] **Step 2: 运行测试验证红灯**
+- [x] **Step 2: 运行测试验证红灯**
 
 运行命令：
 ```bash
@@ -532,7 +532,7 @@ class XiaoxiLogTest {
 ```
 预期输出：编译报错 `Unresolved reference: logging`。
 
-- [ ] **Step 3: 实现 `XiaoxiLog.kt`**
+- [x] **Step 3: 实现 `XiaoxiLog.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/common/logging/XiaoxiLog.kt` 编写实现：
 ```kotlin
@@ -600,7 +600,7 @@ object XiaoxiLog {
 }
 ```
 
-- [ ] **Step 4: 运行 `XiaoxiLogTest` 验证跑绿**
+- [x] **Step 4: 运行 `XiaoxiLogTest` 验证跑绿**
 
 运行命令：
 ```bash
@@ -608,7 +608,7 @@ object XiaoxiLog {
 ```
 预期输出：`XiaoxiLogTest` 全部 PASSED。
 
-- [ ] **Step 5: 编写红灯单测 `XiaoxiCrashHandlerTest`**
+- [x] **Step 5: 编写红灯单测 `XiaoxiCrashHandlerTest`**
 
 在 `app/src/test/kotlin/com/xiaoxi/android/common/logging/XiaoxiCrashHandlerTest.kt` 编写：
 ```kotlin
@@ -688,7 +688,7 @@ class XiaoxiCrashHandlerTest {
 }
 ```
 
-- [ ] **Step 6: 运行测试验证红灯**
+- [x] **Step 6: 运行测试验证红灯**
 
 运行命令：
 ```bash
@@ -696,7 +696,7 @@ class XiaoxiCrashHandlerTest {
 ```
 预期输出：编译报错 `Unresolved reference: XiaoxiCrashHandler`。
 
-- [ ] **Step 7: 实现 `XiaoxiCrashHandler.kt`**
+- [x] **Step 7: 实现 `XiaoxiCrashHandler.kt`**
 
 在 `app/src/main/kotlin/com/xiaoxi/android/common/logging/XiaoxiCrashHandler.kt` 编写实现：
 ```kotlin
@@ -782,7 +782,7 @@ class XiaoxiCrashHandler(
 }
 ```
 
-- [ ] **Step 8: 运行单测验证跑绿**
+- [x] **Step 8: 运行单测验证跑绿**
 
 运行命令：
 ```bash
@@ -790,7 +790,7 @@ class XiaoxiCrashHandler(
 ```
 预期输出：`XiaoxiCrashHandlerTest` 全部 PASSED。
 
-- [ ] **Step 9: 在 `XiaoxiApplication` 挂载并替换全局 `println`**
+- [x] **Step 9: 在 `XiaoxiApplication` 挂载并替换全局 `println`**
 
 1. 修改 `app/src/main/kotlin/com/xiaoxi/android/XiaoxiApplication.kt`：
 ```kotlin
@@ -823,7 +823,7 @@ XiaoxiLog.e("XiaoxiLlmClient", "HTTP stream error: $errorText")
 XiaoxiLog.d("PerceptionPipeline", "PerceptionSnapshot emitted: ${snapshot.naturalSummary}")
 ```
 
-- [ ] **Step 10: 变异测试验证**
+- [x] **Step 10: 变异测试验证**
 
 故意将 `XiaoxiCrashHandler.kt` 中 `MAX_CRASH_FILES` 从 5 改为 999，运行：
 ```bash
@@ -832,7 +832,7 @@ XiaoxiLog.d("PerceptionPipeline", "PerceptionSnapshot emitted: ${snapshot.natura
 确认测试红灯：`AssertionError: expected:<5> but was:<7>`。  
 恢复后重新跑绿。
 
-- [ ] **Step 11: 运行全量单元测试与回归套件**
+- [x] **Step 11: 运行全量单元测试与回归套件**
 
 运行命令：
 ```bash
@@ -840,7 +840,7 @@ XiaoxiLog.d("PerceptionPipeline", "PerceptionSnapshot emitted: ${snapshot.natura
 ```
 预期输出：全量测试（249 基线 + 本次新增用例）全绿通过，0 failed。
 
-- [ ] **Step 12: 提交原子 Commit**
+- [x] **Step 12: 提交原子 Commit**
 
 ```bash
 git add app/src/main/kotlin/com/xiaoxi/android/common/logging/XiaoxiLog.kt \
