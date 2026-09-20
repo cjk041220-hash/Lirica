@@ -12,7 +12,7 @@
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
-| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 1/4 |
+| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 2/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
@@ -236,10 +236,23 @@
 - **审查结论**：100% 原生 Jetpack Compose + Kotlin Coroutines，无 Dummy Code，完全对齐 Phase 1 心智中枢，全量单测与变异验证通过。
 
 ### Task 2.2: 跨应用常驻伴生悬浮窗 (CompanionOverlayService & OverlayBubble)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 基于 `WindowManager` 的跨应用常驻悬浮气泡，自适应贴边吸附与拖拽手势
-  - 情绪向量映射：根据 `EmotionEngine` 暴露的 `StateFlow<MoodState>` 动态切换 16 种情绪帧动画 / 静态 Sprite
+  - `OverlayPositionCalculator`：100% 纯 Kotlin 贴边吸附（左右屏幕边缘自适应目标计算）、可见边界安全钳制与越界弹性阻尼数学算法
+  - `OverlayBubble`：跨应用悬浮伴生体 Compose 组件，自适应渲染 16 种 Russell 情绪微表情映射（光晕色彩、动态呼吸频率与状态标签），支持实时拖拽手势与平滑吸附
+  - `CompanionOverlayService`：深度完善 `LifecycleService`，严守【WindowManager 挂载 Compose 铁律】（绑定 `ViewTreeLifecycleOwner`、`ServiceSavedStateRegistryOwner`、`DisposeOnDetachedFromWindow`），完善 `SYSTEM_ALERT_WINDOW` 权限防御判定与安全的销毁解绑
+  - `OverlayPositionCalculatorTest`：4 个用例验证贴边吸附分界、边界钳制与阻尼运算
+  - `CompanionOverlayServiceContractTest`：2 个用例验证 Robolectric 悬浮窗属性与 START_STICKY 服务契约
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 79 tests completed, 0 failed, `BUILD SUCCESSFUL in 8s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s`
+- **变异验证**：
+  - 破坏点：故意将 `OverlayPositionCalculator.kt` 中 `calculateSnapTargetX` 的吸附中点判定逻辑从 `< screenWidth / 2` 反转修改为 `> screenWidth / 2`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `OverlayPositionCalculatorTest > testSnapToRightEdgeWhenOnRightHalf FAILED: java.lang.AssertionError at OverlayPositionCalculatorTest.kt:39`
+    `OverlayPositionCalculatorTest > testSnapToLeftEdgeWhenOnLeftHalf FAILED: java.lang.AssertionError at OverlayPositionCalculatorTest.kt:22`
+  - 恢复全绿：恢复判定条件后运行 `./gradlew testDebugUnitTest` 重新 79 个单测全绿通过
+- **审查结论**：严格遵循 WindowManager Compose 挂载生命周期铁律，算法纯粹解耦，全量单测与变异验证通过。
 
 ### Task 2.3: 悬浮窗半展开与快速交互面板 (OverlayExpandPanel)
 - [ ] 状态：待开始
