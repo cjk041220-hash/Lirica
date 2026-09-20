@@ -94,18 +94,27 @@ class XiaoxiAccessibilityService : AccessibilityService() {
     public override fun onServiceConnected() {
         super.onServiceConnected()
         isServiceConnected = true
+        AccessibilityServiceHolder.register(this)
         startWorker()
     }
 
     internal fun onServiceConnectedForTest() {
         isServiceConnected = true
+        AccessibilityServiceHolder.register(this)
         startWorker()
     }
 
     override fun onDestroy() {
         isServiceConnected = false
+        AccessibilityServiceHolder.unregister()
         serviceJob.cancel()
         super.onDestroy()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        isServiceConnected = false
+        AccessibilityServiceHolder.unregister()
+        return super.onUnbind(intent)
     }
 
     override fun onInterrupt() {
