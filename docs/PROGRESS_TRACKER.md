@@ -12,7 +12,7 @@
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
-| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 3/4 |
+| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
@@ -273,9 +273,49 @@
 - **审查结论**：严格实现未完成念头破冰与轻量快速输入面板，交互无缝，WindowManager 穿透与焦点切换顺畅，全量单测与变异验证通过。
 
 ### Task 2.4: 进程保活与系统事件唤醒网络 (KeepAlive & Wakeup)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 前台服务通知、`RECEIVE_BOOT_COMPLETED` 开机自启广播与低功耗心跳调度
+  - `KeepAliveService`：Android 14+ 规范前台保活服务，显式绑定 `FOREGROUND_SERVICE_SPECIAL_USE` 与 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`，创建 `IMPORTANCE_LOW` 低能耗静音通知渠道与常驻伴生状态通知，支持直达 `MainActivity` 与启动悬浮伴生体快捷操作
+  - `BootReceiver`：系统唤醒广播接收器，监听 `ACTION_BOOT_COMPLETED` 与 `ACTION_MY_PACKAGE_REPLACED`，实现开机与应用版本覆盖更新后的前台伴生服务自启唤醒；在 `AndroidManifest.xml` 中完成合规静态声明
+  - `BatteryOptimizationHelper`：纯 Kotlin 电池优化与厂商自启动白名单工具，支持小米 (HyperOS/MIUI)、华为 (HarmonyOS/EMUI)、OPPO (ColorOS)、vivo (OriginOS)、魅族、三星等主流定制 ROM 的电池白名单与自启动管理页探测，具备标准 Android 原生电池优化页与应用详情页的健壮优雅降级
+  - `KeepAliveServiceTest`：4 个用例验证通知渠道配置、通知组件属性与 START_STICKY 服务契约
+  - `BootReceiverTest`：3 个用例验证开机/包替换意图拦截与 KeepAliveService 启动
+  - `BatteryOptimizationHelperTest`：4 个用例验证白名单检测逻辑与厂商 Intent 探测列表
+  - `ManifestComponentsTest`：更新并验证 BootReceiver 与对应系统广播权限契约
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 95 tests completed, 0 failed, `BUILD SUCCESSFUL in 8s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s`
+- **变异验证**：
+  - 破坏点：故意在 `BootReceiver.kt` 中注释掉对 `Intent.ACTION_BOOT_COMPLETED` 的匹配与处理
+  - 单测红灯证据：运行单测触发红灯报错：
+    `BootReceiverTest > testBootCompletedStartsKeepAliveService FAILED: java.lang.AssertionError at BootReceiverTest.kt:36`
+  - 恢复全绿：恢复匹配逻辑后全量单测 95/95 重新 100% 全绿通过
+- **审查结论**：严格对齐 Android 14+ 前台服务合规标准与系统广播规范，多厂商定制白名单自适应降级完备，全量单测与变异验证通过。
+
+---
+
+## 阶段验收里程碑 M2 (Phase 2 全绿达成)
+- **验收时间**：2026-09-20
+- **核心成果**：
+  1. **Compose 全屏主界面与对话流渲染 (Task 2.1)**：
+     - 打通 `ChatViewModel` 与 Phase 1 心智引擎四大中枢（`XiaoxiLlmClient` SSE 打字机流式、`DualTrackMemoryManager` 双轨二段分层召回与记忆指示徽章、`EmotionEngine` 2D 情绪实时跟随、`PhiMiddleware` 语气重锚与 `HumannessFilter` 反客服腔过滤）；
+     - 沉浸式 `ChatScreen` 对话流，支持 Markdown 渲染、微表情头像伴随、心智调试面板与 SillyTavern 角色卡弹窗。
+  2. **跨应用常驻伴生悬浮窗 (Task 2.2)**：
+     - 严守【WindowManager 挂载 Compose 铁律】，为 `ComposeView` 正确注入 `ViewTreeLifecycleOwner`、`ServiceSavedStateRegistryOwner`、`ViewModelStoreOwner` 与 `DisposeOnDetachedFromWindow`；
+     - 纯数学算法 `OverlayPositionCalculator` 交付屏幕边缘自适应吸附与拖拽弹性阻尼；
+     - `OverlayBubble` 自适应渲染 16 种 Russell 情绪微表情映射与情绪光晕律动。
+  3. **悬浮窗半展开与快速交互面板 (Task 2.3)**：
+     - `OverlayExpandViewModel` 从 `UnspokenThoughtDao` 筛选最高紧急度未决念头，以 `IcebreakerBubble` 破冰小气泡浮现于伴生体上方，支持自然过期清理；
+     - `OverlayExpandPanel` 半展开轻量面板，支持无需切屏的悬浮窗微型流式气泡对话；
+     - 动态切换 WindowManager 软键盘输入焦点与手势穿透。
+  4. **进程保活与系统事件唤醒网络 (Task 2.4)**：
+     - Android 14+ `FOREGROUND_SERVICE_SPECIAL_USE` 规范前台保活服务与低能耗通知渠道；
+     - `BootReceiver` 开机与更新自启广播；
+     - `BatteryOptimizationHelper` 主流厂商电池不优化白名单跳转工具。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 95 tests completed, 0 failed, `BUILD SUCCESSFUL in 8s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s` (0 error, 0 warning)
+- **验收结论**：Phase 2 所有 4 个任务（Task 2.1 ~ 2.4）全部通过 TDD 与变异验证，无任何 Chaquopy/Python 遗留，完全满足 100% Native 原生工业级标准，正式达成 **Phase 2 (M2 里程碑)** 全绿验收！具备随时切入 **Phase 3（获权“视奸”感知中枢落地）** 条件。
 
 ---
 

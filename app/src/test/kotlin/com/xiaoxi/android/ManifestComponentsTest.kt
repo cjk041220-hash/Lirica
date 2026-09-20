@@ -65,13 +65,15 @@ class ManifestComponentsTest {
         assertTrue(manifestContent.contains("android.permission.FOREGROUND_SERVICE_SPECIAL_USE"))
         assertTrue(manifestContent.contains("android.permission.PACKAGE_USAGE_STATS"))
         assertTrue(manifestContent.contains("android.permission.POST_NOTIFICATIONS"))
+        assertTrue(manifestContent.contains("android.permission.RECEIVE_BOOT_COMPLETED"))
 
-        // Services
+        // Services & Receivers
         assertTrue(manifestContent.contains(".perception.XiaoxiAccessibilityService"))
         assertTrue(manifestContent.contains("android.permission.BIND_ACCESSIBILITY_SERVICE"))
         assertTrue(manifestContent.contains(".perception.XiaoxiNotificationListenerService"))
         assertTrue(manifestContent.contains("android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"))
         assertTrue(manifestContent.contains(".overlay.CompanionOverlayService"))
         assertTrue(manifestContent.contains(".service.KeepAliveService"))
+        assertTrue(manifestContent.contains(".receiver.BootReceiver"))
     }
 }
