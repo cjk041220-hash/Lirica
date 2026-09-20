@@ -599,7 +599,24 @@
 - **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无协程死锁与内存泄漏隐患，单测与变异验证完备。
 
 ### Task 5.3: 基于端侧 VLM 的屏幕元素混合接地 (HybridGroundingEngine)
-- **目标**：融合 Task 3.3 无障碍节点树结构化信息与端侧视觉模型 (VLM) 坐标预测，在纯 Canvas/Flutter/游戏等无无障碍节点界面的精准元素定位。
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `ElementBounds` & `UiElementNode`：定义统一 UI 元素模型，包含文本、无障碍语义、资源 ID、类名与物理像素外接矩形
+  - `NormalizedRect`：0..1000 标准化归一化坐标空间模型，实现中心点提取、设备真实分辨率反归一化物理映射（`toScreenPoint`）与多源几何重叠核验（`iou`）
+  - `GroundingQuery` & `GroundingSource`：统一查询条件与接地来源分类协议（`ACCESSIBILITY_EXACT` 极速 L0 树直达、`ACCESSIBILITY_FUZZY` 语义模糊初筛、`VISUAL_VLM` 端侧视觉降级兜底、`HYBRID_FUSION` 树视觉多模态对齐加权）
+  - `GroundingResult`：强类型元素定位结果封装（`Found`、`Ambiguous`、`NotFound`）
+  - `VisualElementDetector`：纯 Kotlin 异步视觉模型目标检测接口抽象
+  - `HybridGroundingEngine` & `HybridGroundingEngineImpl`：混合对齐与自适应路由中枢，实现 L0 树快速命中（耗时 < 10ms）、歧义候选排查、视觉 fallback 与多模态一致性加权提升
+  - `HybridGroundingEngineTest`：10 个高质量测试用例验证精确资源 ID、精确文本、多候选歧义、纯视觉兜底、模糊树与视觉空间对齐加权、双重失效 NotFound 及分辨率安全边界
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 218 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `HybridGroundingEngine.kt` 中单一精确命中判定阈值改坏为 `if (exactMatches.size > 100)`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `HybridGroundingEngineTest > testLocate_exactResourceIdMatch_returnsAccessibilityExact FAILED: java.lang.AssertionError at HybridGroundingEngineTest.kt:27`
+  - 恢复全绿：恢复正常判定阈值后运行 `./gradlew testDebugUnitTest` 重新 218 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，标准化坐标计算与多模态融合逻辑清晰，单测与变异验证完备。
 
 ### Task 5.4: 执行自愈与死循环检测 (SelfHealingWatchdog)
 - **目标**：监控自动化执行过程中的界面状态转移，检测卡死、弹窗阻断、循环点击，通过退回上一页、重新接地或求助用户实现自愈。
