@@ -8,9 +8,16 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
@@ -21,9 +28,13 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.xiaoxi.android.MainActivity
 import com.xiaoxi.android.XiaoxiApplication
 import com.xiaoxi.android.emotion.model.MoodState
+import com.xiaoxi.android.overlay.ui.IcebreakerBubble
 import com.xiaoxi.android.overlay.ui.OverlayBubble
+import com.xiaoxi.android.overlay.ui.OverlayExpandPanel
+import com.xiaoxi.android.overlay.viewmodel.OverlayExpandViewModel
 
 /**
  * 跨应用常驻伴生悬浮窗服务 (Companion Overlay Service)
@@ -32,7 +43,7 @@ import com.xiaoxi.android.overlay.ui.OverlayBubble
  * 1. 显式配置 ViewCompositionStrategy.DisposeOnDetachedFromWindow
  * 2. 注入 ViewTreeLifecycleOwner
  * 3. 注入 ViewTreeSavedStateRegistryOwner 与 ViewTreeViewModelStoreOwner
- * 4. 健壮防范权限缺失与内存泄露
+ * 4. 动态协调破冰气泡、伴生体气泡、半展开快速交互面板与输入法焦点
  */
 class CompanionOverlayService : LifecycleService() {
 
@@ -41,21 +52,36 @@ class CompanionOverlayService : LifecycleService() {
     private var layoutParams: WindowManager.LayoutParams? = null
 
     private val serviceViewModelStore = ViewModelStore()
+    private var expandViewModel: OverlayExpandViewModel? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        initViewModel()
         setupOverlayView()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        expandViewModel?.refreshIcebreaker()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
+    }
+
+    private fun initViewModel() {
+        val app = application as? XiaoxiApplication ?: return
+        expandViewModel = OverlayExpandViewModel(
+            unspokenThoughtDao = app.database.unspokenThoughtDao(),
+            emotionEngine = app.emotionEngine,
+            llmClient = app.llmClient,
+            memoryManager = app.memoryManager,
+            phiMiddleware = app.phiMiddleware,
+            humannessFilter = app.humannessFilter
+        )
     }
 
     private fun setupOverlayView() {
@@ -78,8 +104,8 @@ class CompanionOverlayService : LifecycleService() {
         val params = createDefaultLayoutParams(
             initialX = initialX,
             initialY = initialY,
-            width = bubbleSizePx,
-            height = bubbleSizePx
+            width = WindowManager.LayoutParams.WRAP_CONTENT,
+            height = WindowManager.LayoutParams.WRAP_CONTENT
         )
         layoutParams = params
 
@@ -99,31 +125,117 @@ class CompanionOverlayService : LifecycleService() {
 
             val app = application as? XiaoxiApplication
             val emotionEngine = app?.emotionEngine
+            val vm = expandViewModel
 
             setContent {
-                val moodState = emotionEngine?.moodFlow?.collectAsState()
-                val currentMood = moodState?.value ?: MoodState.CALM
+                val moodState by (emotionEngine?.moodFlow?.collectAsState()
+                    ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(MoodState.CALM) })
+                val currentMood = moodState
 
-                OverlayBubble(
-                    mood = currentMood,
-                    onClick = {
-                        onOverlayClicked()
-                    },
-                    onDragDelta = { dx, dy ->
-                        updatePosition(dx, dy)
-                    },
-                    onDragEnd = {
-                        snapToEdge()
+                val uiState by (vm?.uiState?.collectAsState()
+                    ?: androidx.compose.runtime.remember {
+                        androidx.compose.runtime.mutableStateOf(
+                            com.xiaoxi.android.overlay.viewmodel.OverlayExpandUiState()
+                        )
+                    })
+
+                Column(
+                    horizontalAlignment = Alignment.End
+                ) {
+                    // 1. 顶部未完成念头破冰小气泡 (当未展开且有念头时)
+                    if (!uiState.isExpanded) {
+                        IcebreakerBubble(
+                            thought = uiState.icebreakerThought,
+                            mood = currentMood,
+                            onThoughtClick = { thought ->
+                                vm?.onIcebreakerClicked(thought)
+                            },
+                            onDismissClick = { thought ->
+                                vm?.dismissIcebreaker(thought)
+                            }
+                        )
                     }
-                )
+
+                    // 2. 半展开轻量快速交互面板
+                    OverlayExpandPanel(
+                        isExpanded = uiState.isExpanded,
+                        mood = currentMood,
+                        inputText = uiState.quickInputText,
+                        isStreaming = uiState.isStreaming,
+                        streamingReply = uiState.streamingReply,
+                        errorMessage = uiState.errorMessage,
+                        onInputChanged = { text ->
+                            vm?.onQuickInputChanged(text)
+                        },
+                        onSendMessage = { text ->
+                            vm?.sendQuickMessage(text)
+                        },
+                        onCloseClick = {
+                            vm?.setExpanded(false)
+                            setWindowFocusable(false)
+                        },
+                        onOpenFullAppClick = {
+                            val intent = Intent(this@CompanionOverlayService, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            }
+                            startActivity(intent)
+                            vm?.setExpanded(false)
+                            setWindowFocusable(false)
+                        },
+                        onFocusChanged = { isFocused ->
+                            setWindowFocusable(isFocused)
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // 3. 常驻悬浮伴生体小球
+                    OverlayBubble(
+                        mood = currentMood,
+                        onClick = {
+                            vm?.toggleExpanded()
+                        },
+                        onDragDelta = { dx, dy ->
+                            updatePosition(dx, dy)
+                        },
+                        onDragEnd = {
+                            snapToEdge()
+                        }
+                    )
+                }
             }
         }
 
         try {
             wm.addView(composeView, params)
             overlayComposeView = composeView
+            expandViewModel?.refreshIcebreaker()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach overlay ComposeView to WindowManager", e)
+        }
+    }
+
+    /**
+     * 协调 WindowManager 是否捕获软键盘焦点
+     */
+    private fun setWindowFocusable(focusable: Boolean) {
+        val wm = windowManager ?: return
+        val view = overlayComposeView ?: return
+        val params = layoutParams ?: return
+
+        val targetFlags = if (focusable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+
+        if (params.flags != targetFlags) {
+            params.flags = targetFlags
+            try {
+                wm.updateViewLayout(view, params)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update focusable flag", e)
+            }
         }
     }
 
@@ -136,11 +248,14 @@ class CompanionOverlayService : LifecycleService() {
         params.y = (params.y + deltaY.toInt())
 
         val displayMetrics = resources.displayMetrics
+        val effectiveWidth = if (params.width > 0) params.width else (72 * displayMetrics.density).toInt()
+        val effectiveHeight = if (params.height > 0) params.height else (72 * displayMetrics.density).toInt()
+
         val clamped = OverlayPositionCalculator.clampToBounds(
             x = params.x,
             y = params.y,
-            bubbleWidth = params.width,
-            bubbleHeight = params.height,
+            bubbleWidth = effectiveWidth,
+            bubbleHeight = effectiveHeight,
             screenWidth = displayMetrics.widthPixels,
             screenHeight = displayMetrics.heightPixels,
             topInset = 48,
@@ -162,9 +277,11 @@ class CompanionOverlayService : LifecycleService() {
         val params = layoutParams ?: return
 
         val displayMetrics = resources.displayMetrics
+        val effectiveWidth = if (params.width > 0) params.width else (72 * displayMetrics.density).toInt()
+
         val targetX = OverlayPositionCalculator.calculateSnapTargetX(
             currentX = params.x,
-            bubbleWidth = params.width,
+            bubbleWidth = effectiveWidth,
             screenWidth = displayMetrics.widthPixels,
             edgeMargin = 16
         )
@@ -175,11 +292,6 @@ class CompanionOverlayService : LifecycleService() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to snap overlay to edge", e)
         }
-    }
-
-    private fun onOverlayClicked() {
-        Log.d(TAG, "Overlay companion clicked")
-        // Task 2.3 将在此唤起 OverlayExpandPanel
     }
 
     override fun onDestroy() {
@@ -203,8 +315,8 @@ class CompanionOverlayService : LifecycleService() {
         fun createDefaultLayoutParams(
             initialX: Int,
             initialY: Int,
-            width: Int,
-            height: Int
+            width: Int = WindowManager.LayoutParams.WRAP_CONTENT,
+            height: Int = WindowManager.LayoutParams.WRAP_CONTENT
         ): WindowManager.LayoutParams {
             return WindowManager.LayoutParams(
                 width,

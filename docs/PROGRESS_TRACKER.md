@@ -12,7 +12,7 @@
 |:---|:---|:---:|:---:|
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
-| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 2/4 |
+| **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | 进行中 | 3/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
@@ -255,9 +255,22 @@
 - **审查结论**：严格遵循 WindowManager Compose 挂载生命周期铁律，算法纯粹解耦，全量单测与变异验证通过。
 
 ### Task 2.3: 悬浮窗半展开与快速交互面板 (OverlayExpandPanel)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 点击悬浮伴生体弹出轻量快速输入框、未完成念头（Unspoken Thoughts）破冰气泡与快捷指令
+  - `OverlayExpandUiState` & `OverlayExpandViewModel`：悬浮窗交互状态机，打通 `UnspokenThoughtDao`（主动破冰念头提取与自然过期清理）、`XiaoxiLlmClient`（轻量流式打字机回复）、`EmotionEngine`（即时情绪微表情同步）与 `HumannessFilter`（反客服腔清洗）
+  - `IcebreakerBubble`：浮现于伴生体上方的内心独白破冰小气泡，带气泡尖角与微型忽略入口，支持点击直接代入对话
+  - `OverlayExpandPanel`：半展开轻量交互面板，集成实时微表情徽章、快速流式打字机对话历史与单行发送输入框，支持一键打开全屏 `MainActivity`
+  - `CompanionOverlayService` 联动：集成 `OverlayExpandViewModel`，实现 WindowManager 尺寸动态更新与根据输入框焦点动态切换 `FLAG_NOT_FOCUSABLE`
+  - `OverlayExpandViewModelTest`：5 个高质量测试用例验证破冰过滤、过期抑制、念头点击代入、面板折叠展开与快速流式累加
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 84 tests completed, 0 failed, `BUILD SUCCESSFUL in 8s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s`
+- **变异验证**：
+  - 破坏点：故意将 `OverlayExpandViewModel.kt` 中 `refreshIcebreaker` 的未完成念头查询改坏为 `limit = 0`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `OverlayExpandViewModelTest > testRefreshIcebreaker_filtersExpiredAndPicksTopUrgent FAILED: java.lang.AssertionError at OverlayExpandViewModelTest.kt:78`
+  - 恢复全绿：恢复 `limit = 1` 后重新全量单测全绿通过
+- **审查结论**：严格实现未完成念头破冰与轻量快速输入面板，交互无缝，WindowManager 穿透与焦点切换顺畅，全量单测与变异验证通过。
 
 ### Task 2.4: 进程保活与系统事件唤醒网络 (KeepAlive & Wakeup)
 - [ ] 状态：待开始
