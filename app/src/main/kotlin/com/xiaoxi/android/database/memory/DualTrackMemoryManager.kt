@@ -133,11 +133,17 @@ class DualTrackMemoryManager(
         query: String = "",
         moodValence: Float? = null,
         charName: String = PhiMiddleware.DEFAULT_CHAR_NAME,
-        nowTs: Long = System.currentTimeMillis()
+        nowTs: Long = System.currentTimeMillis(),
+        preRecalledUserMemories: List<UserMemoryEntity>? = null,
+        preRecalledSelfExperiences: List<SelfExperienceEntity>? = null,
+        preRecalledUnspokenThoughts: List<UnspokenThoughtEntity>? = null
     ): String? {
-        val userMemories = recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)
-        val selfExperiences = recallSelfExperiences(limit = 2, unsharedOnly = true)
-        val unspokenThoughts = recallUnspokenThoughts(limit = 2, currentTs = nowTs)
+        val userMemories = preRecalledUserMemories
+            ?: recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)
+        val selfExperiences = preRecalledSelfExperiences
+            ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
+        val unspokenThoughts = preRecalledUnspokenThoughts
+            ?: recallUnspokenThoughts(limit = 2, currentTs = nowTs)
 
         if (userMemories.isEmpty() && selfExperiences.isEmpty() && unspokenThoughts.isEmpty()) {
             return null

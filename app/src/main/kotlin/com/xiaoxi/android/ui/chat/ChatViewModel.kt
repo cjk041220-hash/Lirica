@@ -158,7 +158,10 @@ class ChatViewModel(
                 val dynamicContext = memoryManager.assembleDynamicContext(
                     query = trimmed,
                     moodValence = currentMood.defaultVector.valence,
-                    charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME
+                    charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
+                    preRecalledUserMemories = userMemories,
+                    preRecalledSelfExperiences = selfExps,
+                    preRecalledUnspokenThoughts = thoughts
                 )
 
                 // 3. 追加占位助手消息

@@ -211,4 +211,50 @@ class DualTrackMemoryManagerTest {
         val context = memoryManager.assembleDynamicContext(query = "随便聊聊")
         assertNull("无记忆与念头时应返回 null，避免 Prompt 产生空标题", context)
     }
+
+    @Test
+    fun testAssembleDynamicContext_usesPreRecalledMemoriesDirectly() = runBlocking {
+        val preRecalledUser = listOf(
+            UserMemoryEntity(
+                id = "pre_user_1",
+                category = "PRE_USER",
+                content = "预召回用户记忆：喜欢喝黑咖啡",
+                importance = 9,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        val preRecalledSelf = listOf(
+            SelfExperienceEntity(
+                id = "pre_self_1",
+                title = "阅读感悟",
+                domainTag = "PRE_SELF",
+                content = "预召回自叙经历：今天看了一本好书",
+                emotionalInsight = "平静且充实",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        val preRecalledThought = listOf(
+            UnspokenThoughtEntity(
+                id = "pre_thought_1",
+                thought = "预召回念头：提醒用户早点休息",
+                urgency = 0.8f,
+                createdAt = System.currentTimeMillis(),
+                expiryTime = System.currentTimeMillis() + 60000
+            )
+        )
+
+        val result = memoryManager.assembleDynamicContext(
+            query = "完全无关的查询关键词",
+            charName = "小汐",
+            preRecalledUserMemories = preRecalledUser,
+            preRecalledSelfExperiences = preRecalledSelf,
+            preRecalledUnspokenThoughts = preRecalledThought
+        )
+
+        assertNotNull(result)
+        assertTrue(result!!.contains("预召回用户记忆：喜欢喝黑咖啡"))
+        assertTrue(result.contains("预召回自叙经历：今天看了一本好书"))
+        assertTrue(result.contains("平静且充实"))
+        assertTrue(result.contains("预召回念头：提醒用户早点休息"))
+    }
 }
