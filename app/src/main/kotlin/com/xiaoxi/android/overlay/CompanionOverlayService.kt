@@ -1,13 +1,17 @@
 package com.xiaoxi.android.overlay
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.core.app.NotificationCompat
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -70,6 +74,43 @@ class CompanionOverlayService : LifecycleService() {
     override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
+    }
+
+    /**
+     * 任务代行执行期前台服务等级提升
+     *
+     * 锁定进程优先级，杜绝切屏至目标第三方 App 期间被系统低内存杀手回收。
+     */
+    fun promoteToForeground(taskDescription: String) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_TASK_EXECUTION,
+                "小汐任务执行通知",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "小汐在前台代行操作时的任务执行状态提示"
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_TASK_EXECUTION)
+            .setContentTitle("小汐正在代行操作")
+            .setContentText(taskDescription)
+            .setSmallIcon(android.R.drawable.ic_menu_agenda)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        startForeground(NOTIFICATION_ID_TASK_EXECUTION, notification)
+    }
+
+    /**
+     * 任务代行完毕后降级为普通后台悬浮服务
+     */
+    fun demoteFromForeground() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun initViewModel() {
@@ -311,6 +352,8 @@ class CompanionOverlayService : LifecycleService() {
 
     companion object {
         private const val TAG = "CompanionOverlayService"
+        const val NOTIFICATION_CHANNEL_TASK_EXECUTION = "xiaoxi_task_execution"
+        const val NOTIFICATION_ID_TASK_EXECUTION = 1002
 
         fun createDefaultLayoutParams(
             initialX: Int,
