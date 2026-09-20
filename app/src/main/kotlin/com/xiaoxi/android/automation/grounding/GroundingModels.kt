@@ -14,6 +14,7 @@ data class ElementBounds(
     val height: Int get() = max(0, bottom - top)
     val centerX: Int get() = (left + right) / 2
     val centerY: Int get() = (top + bottom) / 2
+    val area: Int get() = width * height
 }
 
 data class UiElementNode(
