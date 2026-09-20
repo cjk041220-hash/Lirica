@@ -1,5 +1,6 @@
 package com.xiaoxi.android.network
 
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.network.model.ChatCompletionChunk
 import com.xiaoxi.android.network.model.LlmStreamEvent
 import kotlinx.serialization.json.Json
@@ -54,8 +55,8 @@ object SseStreamParser {
 
             events
         } catch (e: Exception) {
-            // 不再静默丢弃：无法解析的载荷要在 Logcat 可见（tag: System.out），否则用户只会看到"空回复"，无从排查
-            println("[SseStreamParser] 丢弃无法解析的 SSE 载荷: \"$dataPayload\" (error: $e)")
+            // 不再静默丢弃：无法解析的载荷要在日志可见，否则用户只会看到"空回复"，无从排查
+            XiaoxiLog.w("SseStreamParser", "丢弃无法解析的 SSE 载荷: \"$dataPayload\"", e)
             emptyList()
         }
     }

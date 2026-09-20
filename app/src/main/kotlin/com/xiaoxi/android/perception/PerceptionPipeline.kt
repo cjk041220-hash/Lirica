@@ -1,5 +1,6 @@
 package com.xiaoxi.android.perception
 
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.emotion.EmotionEngine
@@ -173,7 +174,7 @@ class PerceptionPipeline(
         try {
             unspokenThoughtDao?.insert(entity)
         } catch (e: Exception) {
-            println("[PerceptionPipeline] 插入感知念头异常: $e")
+            XiaoxiLog.e("PerceptionPipeline", "插入感知念头异常: $e", e)
         }
     }
 

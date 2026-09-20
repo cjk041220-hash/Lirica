@@ -1,5 +1,6 @@
 package com.xiaoxi.android.network
 
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.network.model.ChatCompletionRequest
 import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
@@ -155,7 +156,7 @@ class XiaoxiLlmClient(
                 }
                 attempt++
                 val backoffMs = RETRY_BACKOFF_BASE_MS shl (attempt - 1)
-                println("[XiaoxiLlmClient] SSE 传输中断（尚未收到内容），${backoffMs}ms 后进行第 $attempt 次重试: $e")
+                XiaoxiLog.w("XiaoxiLlmClient", "SSE 传输中断（尚未收到内容），${backoffMs}ms 后进行第 $attempt 次重试: $e")
                 delay(backoffMs)
             } catch (e: Throwable) {
                 emit(LlmStreamEvent.Error(e))

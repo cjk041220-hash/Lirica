@@ -1,6 +1,8 @@
 package com.xiaoxi.android
 
 import android.app.Application
+import com.xiaoxi.android.common.logging.XiaoxiCrashHandler
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.emotion.EmotionEngine
@@ -69,6 +71,9 @@ class XiaoxiApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        XiaoxiCrashHandler.install(this)
+        XiaoxiLog.i("XiaoxiApplication", "小汐 2.0 系统已启动，本地崩溃守护与环形日志已就绪")
 
         database = XiaoxiDatabase.getInstance(this)
         memoryManager = DualTrackMemoryManager(database)
