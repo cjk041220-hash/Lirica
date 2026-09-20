@@ -238,4 +238,42 @@ class LlmClientTest {
             awaitComplete()
         }
     }
+
+    @Test
+    fun testChatConvenienceMethodReturnsAggregatedText() = runTest {
+        val mockEngine = MockEngine { _ ->
+            val responseData = """
+                data: {"id":"1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+
+                data: {"id":"2","choices":[{"index":0,"delta":{"content":"，小汐！"},"finish_reason":"stop"}]}
+
+                data: [DONE]
+            """.trimIndent()
+
+            respond(
+                content = responseData,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) {
+                json(this@LlmClientTest.json)
+            }
+        }
+
+        val client = XiaoxiLlmClient(httpClient = httpClient)
+        val config = LlmConfig(
+            apiKey = "sk-test",
+            baseUrl = "https://api.deepseek.com/v1"
+        )
+
+        val fullText = client.chat(
+            config = config,
+            messages = listOf(ChatMessage(role = "user", content = "Hi"))
+        )
+
+        assertEquals("你好，小汐！", fullText)
+    }
 }

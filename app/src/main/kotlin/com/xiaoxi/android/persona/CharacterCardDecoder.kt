@@ -38,41 +38,45 @@ object CharacterCardDecoder {
             throw IllegalArgumentException("Invalid PNG signature")
         }
 
-        while (dis.available() > 0) {
-            val length = dis.readInt()
-            val typeBytes = ByteArray(4)
-            dis.readFully(typeBytes)
-            val type = String(typeBytes, Charsets.US_ASCII)
-            val data = ByteArray(length)
-            dis.readFully(data)
-            dis.readInt() // Skip CRC
+        try {
+            while (true) {
+                val length = dis.readInt()
+                val typeBytes = ByteArray(4)
+                dis.readFully(typeBytes)
+                val type = String(typeBytes, Charsets.US_ASCII)
+                val data = ByteArray(length)
+                dis.readFully(data)
+                dis.readInt() // Skip CRC
 
-            when (type) {
-                "tEXt" -> {
-                    val nullIndex = data.indexOf(0)
-                    if (nullIndex > 0) {
-                        val keyword = String(data, 0, nullIndex, Charsets.ISO_8859_1)
-                        if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
-                            val rawText = String(data, nullIndex + 1, data.size - nullIndex - 1, Charsets.UTF_8)
-                            return decodeTextPayload(rawText)
+                when (type) {
+                    "tEXt" -> {
+                        val nullIndex = data.indexOf(0)
+                        if (nullIndex > 0) {
+                            val keyword = String(data, 0, nullIndex, Charsets.ISO_8859_1)
+                            if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
+                                val rawText = String(data, nullIndex + 1, data.size - nullIndex - 1, Charsets.UTF_8)
+                                return decodeTextPayload(rawText)
+                            }
                         }
                     }
-                }
-                "zTXt" -> {
-                    val nullIndex = data.indexOf(0)
-                    if (nullIndex > 0 && nullIndex + 2 < data.size) {
-                        val keyword = String(data, 0, nullIndex, Charsets.ISO_8859_1)
-                        if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
-                            // data[nullIndex + 1] is compression method (0 = deflate)
-                            val compressedData = data.copyOfRange(nullIndex + 2, data.size)
-                            val decompressed = InflaterInputStream(ByteArrayInputStream(compressedData)).readBytes()
-                            val rawText = String(decompressed, Charsets.UTF_8)
-                            return decodeTextPayload(rawText)
+                    "zTXt" -> {
+                        val nullIndex = data.indexOf(0)
+                        if (nullIndex > 0 && nullIndex + 2 < data.size) {
+                            val keyword = String(data, 0, nullIndex, Charsets.ISO_8859_1)
+                            if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
+                                // data[nullIndex + 1] is compression method (0 = deflate)
+                                val compressedData = data.copyOfRange(nullIndex + 2, data.size)
+                                val decompressed = InflaterInputStream(ByteArrayInputStream(compressedData)).readBytes()
+                                val rawText = String(decompressed, Charsets.UTF_8)
+                                return decodeTextPayload(rawText)
+                            }
                         }
                     }
+                    "IEND" -> break
                 }
-                "IEND" -> break
             }
+        } catch (e: java.io.EOFException) {
+            // Reached EOF
         }
 
         throw IllegalArgumentException("No SillyTavern character card found in PNG")
@@ -80,8 +84,12 @@ object CharacterCardDecoder {
 
     private fun decodeTextPayload(text: String): CharacterCard {
         val trimmed = text.trim()
+        if (trimmed.startsWith("{")) {
+            return decodeFromJson(trimmed)
+        }
+        val sanitizedBase64 = trimmed.replace("\\s".toRegex(), "")
         val jsonString = try {
-            val decodedBytes = Base64.getDecoder().decode(trimmed)
+            val decodedBytes = Base64.getMimeDecoder().decode(sanitizedBase64)
             String(decodedBytes, Charsets.UTF_8)
         } catch (e: Exception) {
             trimmed
@@ -159,33 +167,37 @@ object CharacterCardDecoder {
         out.write(PNG_SIGNATURE)
 
         // Read and copy all chunks except IEND and old chara/ccv3 tEXt chunks
-        while (dis.available() > 0) {
-            val length = dis.readInt()
-            val typeBytes = ByteArray(4)
-            dis.readFully(typeBytes)
-            val type = String(typeBytes, Charsets.US_ASCII)
-            val data = ByteArray(length)
-            dis.readFully(data)
-            dis.readInt() // CRC
+        try {
+            while (true) {
+                val length = dis.readInt()
+                val typeBytes = ByteArray(4)
+                dis.readFully(typeBytes)
+                val type = String(typeBytes, Charsets.US_ASCII)
+                val data = ByteArray(length)
+                dis.readFully(data)
+                dis.readInt() // CRC
 
-            if (type == "tEXt") {
-                val nullIndex = data.indexOf(0)
-                if (nullIndex > 0) {
-                    val kw = String(data, 0, nullIndex, Charsets.ISO_8859_1)
-                    if (kw.equals("chara", ignoreCase = true) || kw.equals("ccv3", ignoreCase = true)) {
-                        continue // Skip old character card chunk
+                if (type == "tEXt") {
+                    val nullIndex = data.indexOf(0)
+                    if (nullIndex > 0) {
+                        val kw = String(data, 0, nullIndex, Charsets.ISO_8859_1)
+                        if (kw.equals("chara", ignoreCase = true) || kw.equals("ccv3", ignoreCase = true)) {
+                            continue // Skip old character card chunk
+                        }
                     }
                 }
-            }
 
-            if (type == "IEND") {
-                // Insert our new ccv3 tEXt chunk right before IEND
-                writeTextChunk(out, "ccv3", base64Text)
-                writeChunk(out, "IEND", ByteArray(0))
-                break
-            } else {
-                writeChunk(out, type, data)
+                if (type == "IEND") {
+                    // Insert our new ccv3 tEXt chunk right before IEND
+                    writeTextChunk(out, "ccv3", base64Text)
+                    writeChunk(out, "IEND", ByteArray(0))
+                    break
+                } else {
+                    writeChunk(out, type, data)
+                }
             }
+        } catch (e: java.io.EOFException) {
+            // Reached EOF
         }
 
         return out.toByteArray()

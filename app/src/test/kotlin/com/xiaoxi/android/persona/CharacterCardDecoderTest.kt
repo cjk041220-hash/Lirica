@@ -205,8 +205,32 @@ class CharacterCardDecoderTest {
     }
 
     @Test
+    fun testDecodePngWithMimeLineWrappedBase64() {
+        val v2Payload = """{"spec":"chara_card_v2","data":{"name":"LineWrappedBot","personality":"Chill"}}"""
+        // 模拟带换行符的 MIME 格式 Base64
+        val rawBase64 = Base64.getEncoder().encodeToString(v2Payload.toByteArray(Charsets.UTF_8))
+        val lineWrappedBase64 = rawBase64.chunked(16).joinToString("\r\n")
+
+        val pngBytes = createMinimalPngWithTextChunk("chara", lineWrappedBase64)
+        val card = CharacterCardDecoder.decodeFromPng(pngBytes)
+
+        assertEquals("LineWrappedBot", card.name)
+        assertEquals("Chill", card.personality)
+    }
+
+    @Test
+    fun testDecodeDirectJsonWithoutBase64() {
+        val rawJson = """{"spec":"chara_card_v2","data":{"name":"PlainJsonBot","description":"Unencoded"}}"""
+        val pngBytes = createMinimalPngWithTextChunk("ccv3", rawJson)
+
+        val card = CharacterCardDecoder.decodeFromPng(pngBytes)
+        assertEquals("PlainJsonBot", card.name)
+        assertEquals("Unencoded", card.description)
+    }
+
+    @Test
     fun testMacroExpansion() {
-        val template = "你好 {{user}}！我是 {{char}}。当前时间是 {{current_time}}，你正在使用 {{current_app}}，剩余电量 {{battery_level}}。"
+        val template = "你好 <USER>！我是 <CHAR>。当前时间是 {{time}}，你正在使用 {{current_app}}，剩余电量 {{battery_level}}。"
         val expanded = MacroExpander.expand(
             template = template,
             charName = "小汐",

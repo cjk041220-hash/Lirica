@@ -94,6 +94,12 @@ class EmotionEngineTest {
         val clampedOpposite = engine.currentVector
         assertEquals(-1.0f, clampedOpposite.valence, 0.001f)
         assertEquals(1.0f, clampedOpposite.arousal, 0.001f)
+
+        // NaN 异常防护验证
+        val nanVector = EmotionVector(Float.NaN, Float.NaN, Float.NaN).clamped()
+        assertEquals(0.0f, nanVector.valence, 0.001f)
+        assertEquals(0.0f, nanVector.arousal, 0.001f)
+        assertEquals(0.0f, nanVector.dominance, 0.001f)
     }
 
     @Test

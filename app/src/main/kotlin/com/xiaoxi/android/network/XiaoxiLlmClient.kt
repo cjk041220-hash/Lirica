@@ -89,16 +89,19 @@ class XiaoxiLlmClient(
 
                 val channel = response.bodyAsChannel()
                 var hasEmittedDone = false
-                var lastFinishReason: String? = null
+                var capturedFinishReason: String? = null
 
                 while (!channel.isClosedForRead) {
                     val line = channel.readUTF8Line() ?: break
                     val events = SseStreamParser.parseLine(line)
                     for (event in events) {
                         if (event is LlmStreamEvent.Done) {
+                            if (event.finishReason != null) {
+                                capturedFinishReason = event.finishReason
+                            }
                             if (!hasEmittedDone) {
                                 hasEmittedDone = true
-                                emit(LlmStreamEvent.Done(event.finishReason ?: lastFinishReason))
+                                emit(LlmStreamEvent.Done(event.finishReason ?: capturedFinishReason))
                             }
                         } else {
                             emit(event)
@@ -106,11 +109,35 @@ class XiaoxiLlmClient(
                     }
                 }
                 if (!hasEmittedDone) {
-                    emit(LlmStreamEvent.Done(lastFinishReason))
+                    emit(LlmStreamEvent.Done(capturedFinishReason))
                 }
             }
         } catch (e: Throwable) {
             emit(LlmStreamEvent.Error(e))
         }
+    }
+
+    /**
+     * 便捷同步/挂起方法：聚合流式 Token 并返回完整回复文本
+     * 用于自纠重试、念头生成与单轮快速对话
+     */
+    suspend fun chat(
+        config: LlmConfig,
+        messages: List<ChatMessage>,
+        tools: List<ToolDefinition>? = null
+    ): String {
+        val stringBuilder = StringBuilder()
+        var caughtError: Throwable? = null
+        streamChat(config, messages, tools).collect { event ->
+            when (event) {
+                is LlmStreamEvent.Token -> stringBuilder.append(event.text)
+                is LlmStreamEvent.Error -> caughtError = event.throwable
+                else -> {}
+            }
+        }
+        if (caughtError != null) {
+            throw caughtError!!
+        }
+        return stringBuilder.toString()
     }
 }

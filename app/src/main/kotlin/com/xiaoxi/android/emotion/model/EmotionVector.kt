@@ -17,13 +17,16 @@ data class EmotionVector(
     val dominance: Float = 0.0f
 ) {
     /**
-     * 严格限制坐标在 [-1.0, 1.0] 的物理盒内
+     * 严格限制坐标在 [-1.0, 1.0] 的物理盒内，且免疫 NaN 异常值
      */
     fun clamped(): EmotionVector {
+        val safeV = if (valence.isNaN()) 0.0f else max(-1.0f, min(1.0f, valence))
+        val safeA = if (arousal.isNaN()) 0.0f else max(-1.0f, min(1.0f, arousal))
+        val safeD = if (dominance.isNaN()) 0.0f else max(-1.0f, min(1.0f, dominance))
         return EmotionVector(
-            valence = max(-1.0f, min(1.0f, valence)),
-            arousal = max(-1.0f, min(1.0f, arousal)),
-            dominance = max(-1.0f, min(1.0f, dominance))
+            valence = safeV,
+            arousal = safeA,
+            dominance = safeD
         )
     }
 
