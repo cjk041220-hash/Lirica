@@ -619,7 +619,21 @@
 - **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，标准化坐标计算与多模态融合逻辑清晰，单测与变异验证完备。
 
 ### Task 5.4: 执行自愈与死循环检测 (SelfHealingWatchdog)
-- **目标**：监控自动化执行过程中的界面状态转移，检测卡死、弹窗阻断、循环点击，通过退回上一页、重新接地或求助用户实现自愈。
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `AnomalyType` & `HealingAction`：TTIR 反应式自愈异常分类（`STUCK_LOOP` 状态死循环、`POPUP_BLOCKING` 拦截弹窗浮层、`UNEXPECTED_EXIT` 异常跳出桌面、`ACTION_NO_EFFECT` 无效动作）与有界自愈决策动作（`DismissPopup` 浮层关闭、`PhysicalBacktrack` 物理返回、`ReGround` 重新接地、`EscalateToUser` 超限求助）
+  - `ExecutionStep` & `WatchdogVerdict`：执行状态追踪元组与判决结果（`NormalProgress`、`Recoverable`、`Unrecoverable`）
+  - `SelfHealingWatchdog` & `SelfHealingWatchdogImpl`：基于指纹状态机追踪与有界恢复（默认最多重试 3 次），支持主流 Launcher（HyperOS, EMUI, ColorOS, OriginOS, OneUI 等）闪退捕获与弹窗关键词快速切除
+  - `SelfHealingWatchdogTest`：6 个测试用例验证正常推进、死循环连续状态检测、重试升级、弹窗关键词识别切除、意外跳出桌面返回与状态重置
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 224 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `SelfHealingWatchdog.kt` 中死循环连续相同指纹阈值判定改坏为 `if (consecutiveSameFingerprint > 999)`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `SelfHealingWatchdogTest > testInspectStep_stuckLoop_triggersReGroundFirstThenBacktrack FAILED: java.lang.AssertionError at SelfHealingWatchdogTest.kt:41`
+  - 恢复全绿：恢复判定阈值后运行 `./gradlew testDebugUnitTest` 重新 224 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，自愈状态机有界收敛，杜绝无限死循环重试，单测与变异验证完备。
 
 ### Task 5.5: 金融敏感操作多重二次确认守门人 (FinancialGatekeeper)
 - **目标**：针对涉及支付、转账、密码输入、权限授权、数据删除等高危操作，实施物理拦截与强二次确认流程，确保自动化绝对受控。
