@@ -1,6 +1,6 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：Phase 3 · 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断)  
+> **当前阶段**：Phase 4 准备阶段 (Phase 3 感知中枢已全绿达成 M3 里程碑，待启动 Phase 4 主动性裁决器与自主生活)  
 > **最后更新**：2026-09-20  
 > **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines
 
