@@ -14,7 +14,7 @@
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | **已全绿验收** | 4/4 |
-| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 进行中 | 1/4 |
+| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 进行中 | 2/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
 ---
@@ -460,11 +460,26 @@
 - **审查结论**：APPROVED。100% Native Kotlin，算法纯粹解耦，双门控与打扰代价严密防骚扰，全量单测与变异验证通过。
 
 ### Task 4.2: 未完成念头池生命周期与动机动力学 (UnspokenThoughtManager & ThoughtSynthesizer)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 动机动力学：好奇心(C)、无聊感(B)、关怀度(W)、紧急度(U)四维带泄漏累积与饱和上限；
-  - 表达后抑制 (Satiety) 与不应期 (Refractory Period/Cooldown ≥ 60分钟)；
-  - ThoughtSynthesizer：感知事件转未完成念头、动态衰减分 (decay_score) 计算与过期清理。
+  - `MotivationVector` & `MotivationDynamics`：四维动力学带泄漏累积模型（好奇心 Curiosity、无聊感 Boredom、关怀度 Warmth、紧急度 Urgency）：
+    - 好奇心：随时间指数泄漏衰减（半衰期约 10 分钟），感知突变/新通知即时激增；
+    - 无聊感：桌面长时间闲置按积分累积，应用活跃交互即时重置；
+    - 关怀度：单应用超长连续停留（>30分钟）与负面情绪（Russell Valence < -0.1）激发关怀累加；
+    - 紧急度：外卖/快递/日程/验证码外界即时事件强驱动；
+    - 表达后抑制 (Satiety) 与不应期 (Cooldown ≥ 60 分钟)：主动表达后动力学各分量断崖式清零，在不应期内综合动机严格折减抑制；
+  - `ThoughtSynthesizer` & `ThoughtSynthesizerImpl`：将多维感知快照（外卖物流、会议日程、即时通讯、安全验证码、超长盯屏疲劳、游戏专注）转译为符合小汐性格的第一人称生动内心独白，自动分配动态过期时间与紧急度；
+  - `UnspokenThoughtManager` & `UnspokenThoughtManagerImpl`：统筹动力学更新、内心念头持久化写入 `UnspokenThoughtDao`、过期念头物理丢弃清理 (`cleanupExpired`) 与念头消费状态流转；
+  - `UnspokenThoughtManagerTest`：10 个高质量测试用例验证好奇心衰减、无聊感累积与重置、关怀度触发、紧急度激增、表达后抑制与不应期抑制、外卖与关怀念头合成、Dao持久化与过期清理
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 173 tests completed, 0 failed, `BUILD SUCCESSFUL in 16s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 2s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意在 `MotivationDynamics.kt` 的 `onExpressed` 中注释掉表达后抑制清零逻辑 (`// currentVector = MotivationVector(0.0, 0.0, 0.0, 0.0)`)
+  - 单测红灯证据：运行单测触发红灯报错：
+    `UnspokenThoughtManagerTest > testMotivationDynamics_satietyAndCooldownSuppressesMotivation FAILED: java.lang.AssertionError at UnspokenThoughtManagerTest.kt:164`
+  - 恢复全绿：恢复清零重置逻辑后全量 173 个单测重新 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，完全消除对旧 Python 后端的依赖，带泄漏积分模型与表达后抑制严密可靠，单测覆盖完备。
 
 ### Task 4.3: 闲时经历沉淀与自主日记生成 (DiaryEngine & AutonomousLifeWorker)
 - [ ] 状态：待开始
