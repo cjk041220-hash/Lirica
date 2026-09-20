@@ -14,7 +14,7 @@
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
 | **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | **已全绿验收** | 4/4 |
-| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
+| **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 进行中 | 1/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
 ---
@@ -439,18 +439,47 @@
 
 > **核心使命**：落地主动性裁决中枢（沉默裁决 / 自主经历日记 / 未完成念头池深度闭环），赋予小汐在悬浮窗与后台生命中根据感知快照自主思考、自主日记、主动破冰与情绪波动的自主生命感。
 
-### Task 4.1: 沉默裁决器与主动破冰门控 (SilenceDecisionEngine)
-- [ ] 状态：待开始
+### Task 4.1: 沉默裁决器与可中断性门控 (SilenceDecisionEngine & InterruptibilityEstimator)
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 基于当前 `PerceptionSnapshot`（前台应用类型、屏幕状态、交互/待机时长、用户专注状态）的沉默裁决打分模型；
-  - 判定合适说话的窗口（避免在用户打游戏、看视频、开会、高频打字时打扰），计算主动破冰置信度；
-  - 结合 `DriftShield` 与情绪状态输出是否主动破冰决策。
+  - `BreakpointType` & `BreakpointResult`：定义任务断点时机类型（`SCREEN_UNLOCK`, `RETURN_TO_LAUNCHER`, `APP_SWITCH`, `LONG_IDLE`, `NONE`）与断点破冰动机倍率加成（1.1x ~ 1.4x）
+  - `ProactiveAction` & `DecisionResult`：定义动作级别（`SILENT`, `INNER_THOUGHT_ONLY`, `PROACTIVE_INTERRUPT`）与结构化裁决结果契约
+  - `InterruptibilityEstimator` & `InterruptibilityEstimatorImpl`：可中断性打扰代价模型 Cost_int(t)，包含基础代价 (2.0)、应用类型动态惩罚/奖励（Launcher 优惠 -1.0、游戏/会议惩罚 +2.5、视频 +1.5、相机 +2.0）、屏幕物理状态惩罚（息屏 +3.0、亮屏锁屏 +1.0）、60分钟冷却不应期线性衰减与金融隐私熔断硬封顶 (5.0)
+  - `BreakpointDetector` & `BreakpointDetectorImpl`：任务断点时机探测器，精准感知屏幕解锁边沿、离开应用返回桌面、跨应用切换与桌面长停留
+  - `SilenceDecisionEngine` & `SilenceDecisionEngineImpl`：基于 CHI'25 Inner Thoughts 双层门控模型，实现内隐动机阈值 (`IM_THRESHOLD = 3.6`) 与打断阈值 (`INTERRUPT_THRESHOLD = 4.5`) 判定，结合情境打扰代价与断点增益，在金融隐私熔断、息屏或高专注游戏/会议中硬性拦截打扰并降级为内心独白
+  - `SilenceDecisionEngineTest`：17 个高质量单元测试全量覆盖打扰代价计算、断点探测与双门控阈值熔断
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 163 tests completed, 0 failed, `BUILD SUCCESSFUL in 16s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `SilenceDecisionEngine.kt` 中双门控判定逻辑 `effectiveMotivation >= SilenceDecisionEngine.INTERRUPT_THRESHOLD` 反转修改为 `<`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `SilenceDecisionEngineTest > testDecision_highMotivation_lowCost_triggersProactiveInterrupt FAILED: java.lang.AssertionError at SilenceDecisionEngineTest.kt:202`
+    `SilenceDecisionEngineTest > testDecision_breakpointBoostPromotesToProactiveInterrupt FAILED: java.lang.AssertionError at SilenceDecisionEngineTest.kt:218`
+  - 恢复全绿：恢复判定条件后运行 `./gradlew testDebugUnitTest` 重新全量 163 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，算法纯粹解耦，双门控与打扰代价严密防骚扰，全量单测与变异验证通过。
 
-### Task 4.2: 未完成念头池闭环与自主经历日记生成 (ThoughtSynthesizer & DiaryEngine)
+### Task 4.2: 未完成念头池生命周期与动机动力学 (UnspokenThoughtManager & ThoughtSynthesizer)
 - [ ] 状态：待开始
 - **交付内容**：
-  - `ThoughtSynthesizer`：将感知流中的碎片事件沉淀为待表达念头并动态衰减过期；
-  - `DiaryEngine`：在息屏长期待机或夜晚充电时，后台触发一日经历自主总结，将前台使用与对话互动压缩写入 `SelfExperienceDao`。
+  - 动机动力学：好奇心(C)、无聊感(B)、关怀度(W)、紧急度(U)四维带泄漏累积与饱和上限；
+  - 表达后抑制 (Satiety) 与不应期 (Refractory Period/Cooldown ≥ 60分钟)；
+  - ThoughtSynthesizer：感知事件转未完成念头、动态衰减分 (decay_score) 计算与过期清理。
+
+### Task 4.3: 闲时经历沉淀与自主日记生成 (DiaryEngine & AutonomousLifeWorker)
+- [ ] 状态：待开始
+- **交付内容**：
+  - AutonomousLifeWorker：使用 Android WorkManager，设置严密约束（充电中 + Wi-Fi + 空闲/待机），严禁常驻 WakeLock；
+  - DiaryEngine：在夜间充电或长期待机时，自主压缩提炼当日使用与互动，生成第一人称感悟经历，存入 SelfExperienceDao；
+  - 活水反哺机制：为后续对话主动破冰与情绪共鸣提供可检索的 fresh 经历。
+
+### Task 4.4: 悬浮窗主动破冰气泡与防打扰退避总线整合 (ProactiveBubbleCoordinator)
+- [ ] 状态：待开始
+- **交付内容**：
+  - 分级表达映射：L0(静默更新) -> L1(伴生体微表情/光效) -> L2(非阻塞 IcebreakerBubble) -> L3(轻提示通知)；严格封禁伴生内容滥用 L4；
+  - 每日配额硬限制（主动破冰 ≤ 2 次/天）；
+  - 用户反馈自适应退避：监听气泡点击/划掉/忽略，动态调整用户可中断性偏好；
+  - 整合总线：串联 Perception -> Decision -> Thought -> Overlay 完整闭环。
 
 ---
 
