@@ -1,7 +1,7 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：Phase 0 · 新基建确立与通信打通  
-> **最后更新**：2026-09-19  
+> **当前阶段**：Phase 3 · 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断)  
+> **最后更新**：2026-09-20  
 > **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines
 
 ---
@@ -319,11 +319,41 @@
 
 ---
 
+## Phase 3 任务拆解与对接指引 (Next Session Action Plan)
+
+> **核心使命**：落地端侧低能耗“视奸”感知漏斗体系，实现对用户前台 App 状态、全局通知事件与关键无障碍焦点的无感感知，配备银行级隐私熔断器。
+
+### Task 3.1: 前台应用使用追踪与上下文感知 (UsageStatsTracker & ScreenStateWatcher)
+- [ ] 状态：待开始
+- **交付内容**：
+  - 基于 `UsageStatsManager` 的前台应用轮询与切换感知，支持 `PACKAGE_USAGE_STATS` 权限检测与跳转引导
+  - `ScreenStateWatcher`：监听屏幕亮灭（`ACTION_SCREEN_ON` / `ACTION_SCREEN_OFF`）与解锁（`ACTION_USER_PRESENT`），精准统计用户设备活跃/空闲时长
+
+### Task 3.2: 全局通知捕获与低能耗关键信息过滤 (XiaoxiNotificationListenerService & NotificationFilter)
+- [ ] 状态：待开始
+- **交付内容**：
+  - 完善 `XiaoxiNotificationListenerService`，捕获系统 `StatusBarNotification`
+  - 落地 `NotificationFilter`（过滤系统常驻、下载进度、已读静音，提取社交通讯/日程关键有效通知）
+
+### Task 3.3: 无障碍前台节点轻量抽取与焦点感知 (XiaoxiAccessibilityService Node Extractor)
+- [ ] 状态：待开始
+- **交付内容**：
+  - 完善 `XiaoxiAccessibilityService`，实现基于 `AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED` 与 `TYPE_VIEW_FOCUSED` 的轻量文本提取
+  - 深度限高（树深度 <= 4）与字符限长截断，彻底避免全量 dump 造成的卡顿与高功耗
+
+### Task 3.4: 隐私敏感熔断与感知流水线整合 (PerceptionPipeline & PrivacyBreaker)
+- [ ] 状态：待开始
+- **交付内容**：
+  - `PrivacyBreaker`：银行、支付、密码输入框、隐私相册硬编码包名黑名单与无障碍密码框自动熔断清空
+  - `PerceptionPipeline`：汇总前台 App、通知事件、屏幕状态与输入框焦点，汇入事件流并驱动情绪发动机与未完成念头生成
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew test`（当前全绿，49 tests passed）
-   - 验证打包：`./gradlew assembleDebug`
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，95 tests passed）
+   - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
 2. **严守铁律**：
@@ -332,8 +362,8 @@
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
    - 当前工作区分支：`master`。
-   - 最新进展：Phase 1 全绿验收达成（M1 里程碑），49 个单测 100% 通过。
+   - 最新进展：Phase 2 全绿验收达成（M2 里程碑），95 个单测 100% 通过。
 4. **接手第一动作**：
-   - 阅读 `docs/PROGRESS_TRACKER.md` 中 Task 2.1 规范。
-   - 启动 Phase 2：创建 Compose 表现层组件与对应单测。
+   - 阅读 `docs/PROGRESS_TRACKER.md` 中 Task 3.1 规范。
+   - 启动 Phase 3：落地 Task 3.1 前台应用使用追踪与屏幕状态监听。
 
