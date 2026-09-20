@@ -580,7 +580,23 @@
 - **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，标准 Intent 契约规范完备。
 
 ### Task 5.2: 无障碍手势注入与多点触控自动化 (GestureExecutor)
-- **目标**：基于 `XiaoxiAccessibilityService.dispatchGesture()`，实现点击、长按、滑动、拖拽、连续轨迹等手势的异步分发与执行确认机制。
+- [x] 状态：已完成 (2026-09-20)
+- **交付内容**：
+  - `Point2D` & `GestureSpec`：手势规范模型，支持 `Click`（点击与自定义时长）、`LongPress`（长按持续）、`Swipe`（滑动，支持拟人化三阶贝塞尔曲线与直线切换）、`Drag`（长按抓取后拖拽）
+  - `GestureResult`：强类型手势执行结果枚举与模型（`Completed`、`Cancelled`、`ServiceUnavailable`、`TimedOut`、`Error`）
+  - `BezierTrajectoryCalculator`：纯 Kotlin 拟人化三阶贝塞尔随机轨迹规划引擎，计算法线法向偏移（`maxDeviationRatio`）与微扰动，杜绝机械化单一像素直线滑动风控拦截
+  - `GestureExecutor` & `GestureExecutorImpl`：基于 `AccessibilityService.dispatchGesture()` 与协程 `suspendCancellableCoroutine` 的异步手势执行引擎，自带 `withTimeoutOrNull` 超时挂起恢复机制与异常防护
+  - `BezierTrajectoryCalculatorTest`：4 个测试用例验证起点终点精确性、零距离边界与垂直/水平拟人化弯曲度
+  - `GestureExecutorTest`：7 个测试用例验证 Path 构建、无障碍服务未就绪拦截、分发完成回调、系统取消、分发失败与超时守门
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 208 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `GestureExecutor.kt` 中 `onCompleted` 回调结果变异修改为 `resume(GestureResult.Cancelled("Mutated cancellation"))`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `GestureExecutorTest > testExecute_dispatchSuccess_returnsCompleted FAILED: java.lang.AssertionError at GestureExecutorTest.kt:61`
+  - 恢复全绿：恢复正常回调逻辑后运行 `./gradlew testDebugUnitTest` 重新 208 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无协程死锁与内存泄漏隐患，单测与变异验证完备。
 
 ### Task 5.3: 基于端侧 VLM 的屏幕元素混合接地 (HybridGroundingEngine)
 - **目标**：融合 Task 3.3 无障碍节点树结构化信息与端侧视觉模型 (VLM) 坐标预测，在纯 Canvas/Flutter/游戏等无无障碍节点界面的精准元素定位。
