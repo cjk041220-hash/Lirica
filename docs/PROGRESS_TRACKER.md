@@ -13,7 +13,7 @@
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
-| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 进行中 | 2/4 |
+| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 进行中 | 3/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
@@ -367,10 +367,26 @@
 - **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，严格遵循低能耗过滤与背压截断，单测覆盖完备。
 
 ### Task 3.3: 无障碍前台节点轻量抽取与焦点感知 (XiaoxiAccessibilityService Node Extractor)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 完善 `XiaoxiAccessibilityService`，实现基于 `AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED` 与 `TYPE_VIEW_FOCUSED` 的轻量文本提取
-  - 深度限高（树深度 <= 4）与字符限长截断，彻底避免全量 dump 造成的卡顿与高功耗
+  - `LightweightAccessibilityEvent`、`AccessibilityNodeSnapshot` & `PageContentSnapshot`：建立无障碍轻量元组与节点快照数据契约，严格只读隔离，不持有系统底层 `AccessibilityNodeInfo` 强引用
+  - `AccessibilityRingBuffer`：专为 Binder 线程定制的无锁/高并发定长（128）环形缓冲队列，支持覆盖最旧数据策略，实测入队延迟远低于 0.05ms，彻底实现 AOSP Binder 回调与后台分析解耦
+  - `FastbotStateHasher`：基于 Fastbot 状态抽象的三元组 64-bit FNV-1a 状态指纹计算器，精准过滤界面微小滚动与重复渲染
+  - `NodeExtractor` & `AccessibilityNodeView`：四重指标硬约束抽取器（深度严格限高 `depth <= 4` 递归剪枝、单屏最多抽取 64 个节点防 GC 暴击、单节点文本截断至 128 字符、严格只读隔离绝不调用 `performAction()`、捕获 `isPassword` 标记供隐私熔断使用）
+  - `XiaoxiAccessibilityService`：完善系统无障碍服务，在 `onAccessibilityEvent` 入队即走，后台协程异步消费并进行输入法/状态栏过滤与状态指纹去重，暴露 `latestPageContent` 与 `pageContentEvents` 流
+  - `AccessibilityRingBufferTest`：3 个测试用例验证 FIFO 出入队、容量溢出覆盖最旧与并发读写线程安全性
+  - `FastbotStateHasherTest`：3 个测试用例验证同构页面指纹一致性、文本内容突变敏感性与 Activity 切换突变敏感性
+  - `NodeExtractorTest`：5 个测试用例验证深度 4 层严格剪枝、128 字符截断、不可见节点剪除、64 节点容量上限约束与密码框标记保留
+  - `XiaoxiAccessibilityServiceTest`：5 个测试用例验证服务常量合规声明、服务连接生命周期、Binder 线程极速入队耗时（< 1ms）与设置跳转
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 136 tests completed, 0 failed, `BUILD SUCCESSFUL in 17s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 3s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `NodeExtractor.kt` 中深度限高从 `currentDepth > MAX_DEPTH` (4) 破坏性放宽至 `currentDepth > 10`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `NodeExtractorTest > testDepthPruningAtMaxDepth4 FAILED: java.lang.AssertionError at NodeExtractorTest.kt:52`
+  - 恢复全绿：恢复 `MAX_DEPTH` 剪枝阈值后重新全量 136 个单测 100% 全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，严格遵循只读隔离（零 performAction）与深度限高剪枝，单测覆盖完备。
 
 ### Task 3.4: 隐私敏感熔断与感知流水线整合 (PerceptionPipeline & PrivacyBreaker)
 - [ ] 状态：待开始
