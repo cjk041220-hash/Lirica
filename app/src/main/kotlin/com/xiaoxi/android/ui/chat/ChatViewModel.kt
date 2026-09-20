@@ -179,7 +179,7 @@ class ChatViewModel(
 
                 // 4. 装配上下文消息
                 val currentMessages = _uiState.value.messages
-                val history = currentMessages
+                val rawHistory = currentMessages
                     .dropLast(1)
                     .map { item ->
                         ChatMessage(
@@ -187,6 +187,9 @@ class ChatViewModel(
                             content = item.text
                         )
                     }
+
+                // 接入 P1 上下文硬预算截断器，防止长程会话溢出大模型上下文
+                val history = ChatHistoryTrimmer.trim(rawHistory)
 
                 // 防漂移护盾：记录本轮对话轮次并传入装配（驱动 PhiMiddleware 内部触发器）
                 val turnCount = phiMiddleware.recordTurn(sessionId)
