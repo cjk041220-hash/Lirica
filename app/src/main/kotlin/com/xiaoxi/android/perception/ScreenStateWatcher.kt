@@ -1,0 +1,116 @@
+package com.xiaoxi.android.perception
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import com.xiaoxi.android.perception.model.ScreenState
+import com.xiaoxi.android.perception.model.ScreenStateSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * 屏幕物理状态监听器与待机/交互时长统计器
+ * 纯原生广播监听，零高频轮询开销
+ */
+class ScreenStateWatcher {
+
+    private val _screenState = MutableStateFlow(ScreenStateSnapshot())
+    val screenState: StateFlow<ScreenStateSnapshot> = _screenState.asStateFlow()
+
+    @Volatile
+    private var isRegistered: Boolean = false
+
+    val isWatching: Boolean
+        get() = isRegistered
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            handleScreenAction(action, System.currentTimeMillis())
+        }
+    }
+
+    /**
+     * 启动广播监听
+     */
+    @Synchronized
+    fun start(context: Context) {
+        if (isRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        context.registerReceiver(receiver, filter)
+        isRegistered = true
+    }
+
+    /**
+     * 停止广播监听
+     */
+    @Synchronized
+    fun stop(context: Context) {
+        if (!isRegistered) return
+        try {
+            context.unregisterReceiver(receiver)
+        } catch (_: IllegalArgumentException) {
+            // 避免未注册时可能抛出的异常
+        } finally {
+            isRegistered = false
+        }
+    }
+
+    /**
+     * 核心状态转移机与时长积分
+     */
+    fun handleScreenAction(action: String, currentTimeMs: Long) {
+        synchronized(this) {
+            val current = _screenState.value
+            val lastTime = current.lastStateChangeTimestamp
+            val delta = if (lastTime > 0L) (currentTimeMs - lastTime).coerceAtLeast(0L) else 0L
+
+            when (action) {
+                Intent.ACTION_SCREEN_ON -> {
+                    val newStandby = if (current.state == ScreenState.OFF) {
+                        current.totalStandbyDurationMs + delta
+                    } else {
+                        current.totalStandbyDurationMs
+                    }
+                    _screenState.value = current.copy(
+                        state = ScreenState.ON,
+                        lastStateChangeTimestamp = currentTimeMs,
+                        totalStandbyDurationMs = newStandby
+                    )
+                }
+
+                Intent.ACTION_USER_PRESENT -> {
+                    val newInteractive = if (current.state == ScreenState.ON) {
+                        current.totalInteractiveDurationMs + delta
+                    } else {
+                        current.totalInteractiveDurationMs
+                    }
+                    _screenState.value = current.copy(
+                        state = ScreenState.UNLOCKED,
+                        lastStateChangeTimestamp = currentTimeMs,
+                        totalInteractiveDurationMs = newInteractive
+                    )
+                }
+
+                Intent.ACTION_SCREEN_OFF -> {
+                    val newInteractive = if (current.state == ScreenState.ON || current.state == ScreenState.UNLOCKED) {
+                        current.totalInteractiveDurationMs + delta
+                    } else {
+                        current.totalInteractiveDurationMs
+                    }
+                    _screenState.value = current.copy(
+                        state = ScreenState.OFF,
+                        lastStateChangeTimestamp = currentTimeMs,
+                        totalInteractiveDurationMs = newInteractive
+                    )
+                }
+            }
+        }
+    }
+}

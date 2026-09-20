@@ -13,7 +13,7 @@
 | **Phase 0** | 新基建确立与通信打通 (Native骨架 / 权限声明 / Ktor BYOK客户端 / ST角色卡解码) | **已全绿验收** | 4/4 |
 | **Phase 1** | 心智引擎与记忆系统原生化 (Russell情绪 / 双轨记忆 / PHI重锚 / 8轮防漂移 / 反AI腔过滤) | **已全绿验收** | 4/4 |
 | **Phase 2** | 原生表现层与常驻悬浮伴生体 (Compose主界面 / 悬浮伴生体 / 气泡交互 / 保活) | **已全绿验收** | 4/4 |
-| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 待启动 | 0/4 |
+| **Phase 3** | 获权“视奸”感知中枢落地 (前台追踪 / 通知监听 / 无障碍轻量提取 / 隐私熔断) | 进行中 | 1/4 |
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | 待启动 | 0/4 |
 | **Phase 5** | 手机操控与任务代行 (Intent直达 / 无障碍手势 / VLM Grounding / 安全守门) | 待启动 | 0/5 |
 
@@ -324,10 +324,24 @@
 > **核心使命**：落地端侧低能耗“视奸”感知漏斗体系，实现对用户前台 App 状态、全局通知事件与关键无障碍焦点的无感感知，配备银行级隐私熔断器。
 
 ### Task 3.1: 前台应用使用追踪与上下文感知 (UsageStatsTracker & ScreenStateWatcher)
-- [ ] 状态：待开始
+- [x] 状态：已完成 (2026-09-20)
 - **交付内容**：
-  - 基于 `UsageStatsManager` 的前台应用轮询与切换感知，支持 `PACKAGE_USAGE_STATS` 权限检测与跳转引导
-  - `ScreenStateWatcher`：监听屏幕亮灭（`ACTION_SCREEN_ON` / `ACTION_SCREEN_OFF`）与解锁（`ACTION_USER_PRESENT`），精准统计用户设备活跃/空闲时长
+  - `ScreenState` & `ScreenStateSnapshot`：定义屏幕 `OFF` (待机)、`ON` (亮屏未解锁)、`UNLOCKED` (交互态) 三态模型及累计待机/交互时长积分契约
+  - `ScreenStateWatcher`：纯原生动态广播接收器监听 `ACTION_SCREEN_ON`、`ACTION_SCREEN_OFF` 与 `ACTION_USER_PRESENT`，精确统计待机/亮屏交互时间戳与时长流，支持生命周期幂等注册/注销
+  - `ForegroundAppInfo`：前台应用活跃与连续停留时长数据模型
+  - `UsageStatsTracker`：基于 `AppOpsManager` 的 `PACKAGE_USAGE_STATS` 权限判定与跳转引导 Intent，通过 `UsageStatsManager.queryEvents` 实时捕获前台应用与顶层组件，结合 `ScreenState.OFF` 低能耗息屏门控，实现无锁 `StateFlow` 停留时长统计流
+  - `ScreenStateWatcherTest`：5 个测试用例验证初始态、状态转移、待机/交互时长累计及注册/注销幂等性
+  - `UsageStatsTrackerTest`：6 个测试用例验证权限判定、引导跳转、UsageEvents 捕获、停留时长积分、应用切换重置与息屏门控休眠
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: 106 tests completed, 0 failed, `BUILD SUCCESSFUL in 16s` (100% pass)
+  - `./gradlew assembleDebug`: `BUILD SUCCESSFUL in 13s` (0 error, 0 warning)
+- **变异验证**：
+  - 破坏点：故意将 `ScreenStateWatcher.kt` 中 `ACTION_SCREEN_ON` 状态转移逻辑改坏为 `state = ScreenState.OFF`
+  - 单测红灯证据：运行单测触发红灯报错：
+    `ScreenStateWatcherTest > testScreenCycleAndDurationAccumulation FAILED: java.lang.AssertionError at ScreenStateWatcherTest.kt:68`
+    `ScreenStateWatcherTest > testScreenOnTransition FAILED: java.lang.AssertionError at ScreenStateWatcherTest.kt:43`
+  - 恢复全绿：恢复逻辑后运行 `./gradlew testDebugUnitTest` 重新 106 个单测全绿通过
+- **审查结论**：APPROVED。100% Native Kotlin，无 Dummy Code/TODO，无 ANR/OOM 泄漏隐患，严格遵循低能耗息屏门控，单测覆盖完备。
 
 ### Task 3.2: 全局通知捕获与低能耗关键信息过滤 (XiaoxiNotificationListenerService & NotificationFilter)
 - [ ] 状态：待开始
