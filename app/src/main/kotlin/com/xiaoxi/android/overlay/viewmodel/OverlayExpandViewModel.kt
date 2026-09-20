@@ -2,6 +2,7 @@ package com.xiaoxi.android.overlay.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.xiaoxi.android.BuildConfig
 import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
@@ -15,6 +16,7 @@ import com.xiaoxi.android.network.model.LlmProvider
 import com.xiaoxi.android.network.model.LlmStreamEvent
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +34,7 @@ class OverlayExpandViewModel(
     private val phiMiddleware: PhiMiddleware = PhiMiddleware(),
     private val humannessFilter: HumannessFilter = HumannessFilter(),
     private val llmConfig: LlmConfig = LlmConfig(
-        apiKey = "local-key",
+        apiKey = BuildConfig.DEEPSEEK_API_KEY,
         provider = LlmProvider.DEEPSEEK,
         model = "deepseek-chat"
     )
@@ -163,6 +165,9 @@ class OverlayExpandViewModel(
 
                 // 微冲激情绪引擎
                 emotionEngine.applyStimulus(EmotionVector(0.05f, 0.05f))
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isStreaming = false) }
+                throw e
             } catch (e: Throwable) {
                 _uiState.update {
                     it.copy(

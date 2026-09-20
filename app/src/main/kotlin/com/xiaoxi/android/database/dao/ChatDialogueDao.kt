@@ -30,10 +30,22 @@ interface ChatDialogueDao {
     @Query("SELECT * FROM chat_dialogues WHERE id = :id LIMIT 1")
     suspend fun getDialogueById(id: Long): ChatDialogueEntity?
 
-    @Query("SELECT * FROM chat_dialogues WHERE session_id = :sessionId ORDER BY timestamp ASC, id ASC LIMIT :limit")
+    // 注意：必须用子查询先按时间倒序取"最新 limit 条"，再正序输出。
+    // 若直接 ORDER BY timestamp ASC + LIMIT，会话超过 limit 条后永远只加载最旧的一批，新消息永久丢失。
+    @Query(
+        "SELECT * FROM (" +
+            "SELECT * FROM chat_dialogues WHERE session_id = :sessionId " +
+            "ORDER BY timestamp DESC, id DESC LIMIT :limit" +
+            ") ORDER BY timestamp ASC, id ASC"
+    )
     suspend fun getRecentBySession(sessionId: String, limit: Int = 50): List<ChatDialogueEntity>
 
-    @Query("SELECT * FROM chat_dialogues WHERE session_id = :sessionId ORDER BY timestamp ASC, id ASC LIMIT :limit")
+    @Query(
+        "SELECT * FROM (" +
+            "SELECT * FROM chat_dialogues WHERE session_id = :sessionId " +
+            "ORDER BY timestamp DESC, id DESC LIMIT :limit" +
+            ") ORDER BY timestamp ASC, id ASC"
+    )
     fun getRecentBySessionFlow(sessionId: String, limit: Int = 50): Flow<List<ChatDialogueEntity>>
 
     @Query("SELECT COUNT(*) FROM chat_dialogues WHERE session_id = :sessionId")

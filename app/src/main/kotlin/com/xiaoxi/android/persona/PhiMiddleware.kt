@@ -20,6 +20,13 @@ class PhiMiddleware(
 ) {
 
     /**
+     * 记录一轮对话并返回当前轮次计数。
+     * 调用方在 assemble 前调用，并将返回值经 turnCount 参数传回，
+     * 以驱动内部漂移护盾触发器（否则计数器无人递增，护盾永不触发）。
+     */
+    fun recordTurn(sessionId: String): Int = scheduler.recordTurn(sessionId)
+
+    /**
      * 按照标准 4 阶段装配流生成完整的 LLM 上下文消息列表
      *
      * 1. System Prompt / 角色卡基础设定

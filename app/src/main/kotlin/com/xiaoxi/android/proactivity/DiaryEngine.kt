@@ -5,6 +5,7 @@ import com.xiaoxi.android.database.dao.SelfExperienceDao
 import com.xiaoxi.android.database.entity.ChatDialogueEntity
 import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -25,15 +26,33 @@ class DiaryEngineImpl(
 ) : DiaryEngine {
 
     override suspend fun generateDailyDiary(nowMs: Long): SelfExperienceEntity {
-        // 1. 搜集当日多轮会话记录
+        // 1. 搜集当日会话记录
         val sessions = chatDialogueDao.getAllSessions()
         val allRecentDialogues = mutableListOf<ChatDialogueEntity>()
         for (sessionId in sessions) {
-            val messages = chatDialogueDao.getRecentBySession(sessionId, limit = 20)
+            val messages = chatDialogueDao.getRecentBySession(sessionId, limit = 50)
             allRecentDialogues.addAll(messages)
         }
 
-        val userMessages = allRecentDialogues.filter { it.role == ChatDialogueEntity.ROLE_USER }
+        val calendar = Calendar.getInstance().apply {
+            timeInMillis = nowMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startOfDayMs = calendar.timeInMillis
+
+        // 优先筛选当日的用户消息，若当日无消息则回退到近期用户消息
+        val todayUserMessages = allRecentDialogues.filter {
+            it.role == ChatDialogueEntity.ROLE_USER && it.timestamp >= startOfDayMs
+        }
+        val userMessages = if (todayUserMessages.isNotEmpty()) {
+            todayUserMessages
+        } else {
+            allRecentDialogues.filter { it.role == ChatDialogueEntity.ROLE_USER }
+        }
+
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(nowMs))
 
         // 2. 提炼情感与主题，生成第一人称感悟日记
@@ -73,8 +92,9 @@ class DiaryEngineImpl(
             }
         }
 
+        // L6 修复：按日期生成确定性 ID（diary_YYYY-MM-DD），配合 REPLACE 策略实现幂等覆盖，避免重复插入
         val entity = SelfExperienceEntity(
-            id = UUID.randomUUID().toString(),
+            id = "diary_$dateStr",
             title = title,
             content = content,
             sourceUrl = null,

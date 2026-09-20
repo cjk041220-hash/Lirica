@@ -1,8 +1,8 @@
 package com.xiaoxi.android.perception
 
 /**
- * 专为无障碍 Binder 线程定制的定长环形缓冲队列
- * 入队耗时 <= 0.05ms，满容量时自动覆盖最旧数据，保证 Binder 线程绝对零阻塞
+ * 专为无障碍 Binder 线程定制的定长环形缓冲队列（基于内置监视器锁 @Synchronized 实现轻量线程安全）
+ * 入队极简拷贝，耗时 <= 0.05ms，满容量时自动覆盖最旧数据，保证 Binder 线程极速返回
  */
 class AccessibilityRingBuffer<T>(val capacity: Int = 128) {
 

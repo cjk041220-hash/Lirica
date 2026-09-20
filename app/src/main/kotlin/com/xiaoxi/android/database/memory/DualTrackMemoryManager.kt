@@ -4,6 +4,7 @@ import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.entity.UserMemoryEntity
+import com.xiaoxi.android.persona.PhiMiddleware
 
 /**
  * 原生双轨记忆协调器 (Dual-Track Memory Manager)
@@ -97,16 +98,15 @@ class DualTrackMemoryManager(
         return if (unsharedOnly) {
             selfExperienceDao.getUnsharedExperiences(limit = limit)
         } else {
-            // 获取新鲜经历，若不足由近期经历补充
+            // 获取新鲜经历，若不足由近期活跃经历（排除 archived，覆盖所有 domain）补充
             val fresh = selfExperienceDao.getUnsharedExperiences(limit = limit)
             if (fresh.size < limit) {
                 val needed = limit - fresh.size
                 val freshIds = fresh.map { it.id }.toSet()
-                // 从所有经历中取出补充
-                val searched = selfExperienceDao.searchByDomain("日常感悟")
+                val active = selfExperienceDao.getActiveExperiences(limit = limit + fresh.size)
                     .filter { !freshIds.contains(it.id) }
                     .take(needed)
-                fresh + searched
+                fresh + active
             } else {
                 fresh
             }
@@ -132,7 +132,7 @@ class DualTrackMemoryManager(
     suspend fun assembleDynamicContext(
         query: String = "",
         moodValence: Float? = null,
-        charName: String = "小汐",
+        charName: String = PhiMiddleware.DEFAULT_CHAR_NAME,
         nowTs: Long = System.currentTimeMillis()
     ): String? {
         val userMemories = recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)

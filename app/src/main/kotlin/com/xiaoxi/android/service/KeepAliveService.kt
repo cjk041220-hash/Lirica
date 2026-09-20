@@ -38,6 +38,13 @@ class KeepAliveService : LifecycleService() {
 
         if (action == ACTION_STOP_SERVICE) {
             Log.i(TAG, "Stopping KeepAliveService foreground")
+            // 同步停止伴生悬浮窗服务：否则用户点"停止伴生"后悬浮球残留屏幕，
+            // 且进程被系统回收后 START_STICKY 复活时悬浮窗可能随机重现
+            try {
+                stopService(Intent(this, CompanionOverlayService::class.java))
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to stop CompanionOverlayService", e)
+            }
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY

@@ -2,9 +2,11 @@ package com.xiaoxi.android.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.xiaoxi.android.BuildConfig
 import com.xiaoxi.android.database.dao.ChatDialogueDao
 import com.xiaoxi.android.database.entity.ChatDialogueEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
+import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
@@ -15,11 +17,13 @@ import com.xiaoxi.android.network.model.LlmStreamEvent
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
 import com.xiaoxi.android.persona.model.CharacterCard
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.util.UUID
 
 class ChatViewModel(
@@ -29,7 +33,8 @@ class ChatViewModel(
     private val phiMiddleware: PhiMiddleware = PhiMiddleware(),
     private val humannessFilter: HumannessFilter = HumannessFilter(),
     private val chatDialogueDao: ChatDialogueDao? = null,
-    private val llmConfig: LlmConfig = LlmConfig(apiKey = "default-key"),
+    private val memoryExtractor: MemoryExtractor? = null,
+    private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
     private val sessionId: String = "default_session"
 ) : ViewModel() {
 
@@ -134,6 +139,16 @@ class ChatViewModel(
                 val selfExps = memoryManager.recallSelfExperiences(limit = 2, unsharedOnly = true)
                 val thoughts = memoryManager.recallUnspokenThoughts(limit = 2)
 
+                // 记忆命中回写：本轮被召回的用户记忆立即更新按日去重命中统计与使用标记
+                if (userMemories.isNotEmpty()) {
+                    val todayDate = LocalDate.now().toString()
+                    val nowTs = System.currentTimeMillis()
+                    userMemories.forEach { memory ->
+                        memoryManager.recordMemoryHit(memory.id, todayDate, nowTs)
+                        memoryManager.markMemoryUsed(memory.id)
+                    }
+                }
+
                 val badgeInfo = MemoryBadgeInfo(
                     userMemories = userMemories.map { it.content },
                     selfExperiences = selfExps.map { it.content },
@@ -143,7 +158,7 @@ class ChatViewModel(
                 val dynamicContext = memoryManager.assembleDynamicContext(
                     query = trimmed,
                     moodValence = currentMood.defaultVector.valence,
-                    charName = _uiState.value.activeCharacterCard?.name ?: "小汐"
+                    charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME
                 )
 
                 // 3. 追加占位助手消息
@@ -173,13 +188,17 @@ class ChatViewModel(
                         )
                     }
 
+                // 防漂移护盾：记录本轮对话轮次并传入装配（驱动 PhiMiddleware 内部触发器）
+                val turnCount = phiMiddleware.recordTurn(sessionId)
+
                 val assembledMessages = phiMiddleware.assemble(
                     characterCard = _uiState.value.activeCharacterCard,
                     dynamicContext = dynamicContext,
                     historyMessages = history,
                     moodState = currentMood,
                     sessionId = sessionId,
-                    charName = _uiState.value.activeCharacterCard?.name ?: "小汐"
+                    charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
+                    turnCount = turnCount
                 )
 
                 // 5. 流式打字机累积
@@ -204,9 +223,19 @@ class ChatViewModel(
                     }
                 }
 
-                // 6. 流式完成：反 AI 腔过滤与手术式改写
+                // 6. 流式完成：反 AI 腔过滤与二次自纠环改写
                 val rawResponse = accumulated.toString()
-                val filterResult = humannessFilter.filter(rawResponse, currentMood)
+                val filterResult = humannessFilter.filterWithCorrectionLoop(
+                    text = rawResponse,
+                    moodState = currentMood,
+                    maxRetries = 1
+                ) { instruction ->
+                    val correctionMessages = assembledMessages + listOf(
+                        ChatMessage(role = "assistant", content = rawResponse),
+                        ChatMessage(role = "user", content = instruction)
+                    )
+                    runCatching { llmClient.chat(llmConfig, correctionMessages) }.getOrDefault("")
+                }
                 val finalText = filterResult.filteredText
 
                 _uiState.update { state ->
@@ -226,9 +255,23 @@ class ChatViewModel(
                     )
                 )
 
+                // 7.1 消费型记忆回写：本轮实际使用的念头与自我经历标记为已消费/已分享
+                thoughts.forEach { thought ->
+                    memoryManager.consumeUnspokenThought(thought.id)
+                }
+                selfExps.forEach { exp ->
+                    memoryManager.markSelfExperienceShared(exp.id)
+                }
+
+                // 7.2 异步触发长期记忆抽取：LLM 结构化提取，失败静默不影响对话
+                memoryExtractor?.maybeExtract(trimmed, finalText)
+
                 // 8. 情绪微调冲激（交互产生正向共鸣）
                 emotionEngine.applyStimulus(EmotionVector(valence = 0.05f, arousal = 0.05f))
 
+            } catch (e: CancellationException) {
+                _uiState.update { state -> state.copy(isStreaming = false) }
+                throw e
             } catch (e: Throwable) {
                 _uiState.update { state ->
                     state.copy(

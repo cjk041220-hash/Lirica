@@ -42,6 +42,12 @@ interface SelfExperienceDao {
         limit: Int = 10
     ): List<SelfExperienceEntity>
 
+    @Query("SELECT * FROM self_experiences WHERE status != :excludeStatus ORDER BY created_at DESC LIMIT :limit")
+    suspend fun getActiveExperiences(
+        excludeStatus: String = SelfExperienceEntity.STATUS_ARCHIVED,
+        limit: Int = 20
+    ): List<SelfExperienceEntity>
+
     @Query("""
         UPDATE self_experiences
         SET status = :sharedStatus,

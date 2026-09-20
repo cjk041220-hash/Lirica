@@ -20,13 +20,21 @@ interface ThoughtSynthesizer {
 
 class ThoughtSynthesizerImpl : ThoughtSynthesizer {
 
+    private var lastSynthesizedNotificationId: String? = null
+
     override fun synthesize(
         snapshot: PerceptionSnapshot,
         emotion: EmotionVector,
         motivationScore: Double
     ): UnspokenThoughtEntity? {
         val now = snapshot.timestamp
-        val notif = snapshot.latestNotification
+        val rawNotif = snapshot.latestNotification
+        // M16 修复：若同一通知已被合成过，避免重复合成；防止快照中最新通知未被清除导致后续轮次反复生成同一念头
+        val notif = if (rawNotif != null && rawNotif.id != lastSynthesizedNotificationId) {
+            rawNotif
+        } else {
+            null
+        }
         val dwellMs = snapshot.foregroundApp?.dwellDurationMs ?: 0L
         val pkg = snapshot.foregroundApp?.packageName?.lowercase() ?: ""
 
@@ -96,6 +104,10 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
             }
 
             else -> return null
+        }
+
+        if (notif != null) {
+            lastSynthesizedNotificationId = notif.id
         }
 
         val calculatedUrgency = ((motivationScore / 5.0).toFloat() * 0.4f + urgencyFactor * 0.6f).coerceIn(0.1f, 1.0f)

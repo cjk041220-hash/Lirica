@@ -10,6 +10,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.ui.chat.ChatScreen
 import com.xiaoxi.android.ui.chat.ChatViewModel
 
@@ -26,7 +27,12 @@ class MainActivity : ComponentActivity() {
                     emotionEngine = app.emotionEngine,
                     phiMiddleware = app.phiMiddleware,
                     humannessFilter = app.humannessFilter,
-                    chatDialogueDao = app.database.chatDialogueDao()
+                    chatDialogueDao = app.database.chatDialogueDao(),
+                    memoryExtractor = MemoryExtractor(
+                        llmClient = app.llmClient,
+                        userMemoryDao = app.database.userMemoryDao(),
+                        llmConfig = app.backgroundLlmConfig
+                    )
                 ) as T
             }
         }

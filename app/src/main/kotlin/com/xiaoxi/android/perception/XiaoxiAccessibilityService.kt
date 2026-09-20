@@ -13,7 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -80,11 +80,16 @@ class XiaoxiAccessibilityService : AccessibilityService() {
     }
 
     val ringBuffer = AccessibilityRingBuffer<LightweightAccessibilityEvent>(capacity = 128)
+    private val eventSignal = Channel<Unit>(Channel.CONFLATED)
     private val nodeExtractor = NodeExtractor()
+    private val privacyBreaker = PrivacyBreaker()
 
     private var serviceJob = SupervisorJob()
     private var serviceScope = CoroutineScope(Dispatchers.Default + serviceJob)
     private var lastFingerprint = 0L
+    private var lastContentChangeTime = 0L
+    private var lastContentChangePkg = ""
+    private var lastContentChangeClass = ""
 
     public override fun onServiceConnected() {
         super.onServiceConnected()
@@ -125,6 +130,7 @@ class XiaoxiAccessibilityService : AccessibilityService() {
         )
 
         ringBuffer.offer(lightEvent)
+        eventSignal.trySend(Unit)
     }
 
     private fun startWorker() {
@@ -134,16 +140,16 @@ class XiaoxiAccessibilityService : AccessibilityService() {
         }
 
         serviceScope.launch {
-            while (isActive) {
-                val event = ringBuffer.poll()
-                if (event == null) {
-                    delay(50L) // 队列为空时让出 CPU，避免死循环空转
-                    continue
+            // L2 优化：改用 Channel 挂起唤醒机制，队列为空时彻底挂起，
+            // 避免每秒 20 次 delay(50ms) 轮询唤醒消耗 CPU 与电量
+            for (signal in eventSignal) {
+                while (isActive) {
+                    val event = ringBuffer.poll() ?: break
+                    processBackgroundEvent(event)
                 }
-
-                processBackgroundEvent(event)
             }
         }
+        eventSignal.trySend(Unit)
     }
 
     private fun processBackgroundEvent(event: LightweightAccessibilityEvent) {
@@ -162,6 +168,19 @@ class XiaoxiAccessibilityService : AccessibilityService() {
 
         if (event.eventType and interestingEvents == 0) {
             return
+        }
+
+        // M10 前置事件级轻量去重：对于高频内容变动事件（打字、滚动等），
+        // 若同页面在 300ms 内已处理过，直接跳过昂贵的跨进程 root 节点树抽取
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            val now = System.currentTimeMillis()
+            val className = event.className.orEmpty()
+            if (pkg == lastContentChangePkg && className == lastContentChangeClass && (now - lastContentChangeTime) < 300L) {
+                return
+            }
+            lastContentChangePkg = pkg
+            lastContentChangeClass = className
+            lastContentChangeTime = now
         }
 
         try {
@@ -187,8 +206,11 @@ class XiaoxiAccessibilityService : AccessibilityService() {
                 focusedText = focusedNodeText
             )
 
-            _latestPageContent.value = snapshot
-            _pageContentEvents.tryEmit(snapshot)
+            // 出口统一脱敏：敏感 App 整屏清空、密码框覆写、PII 正则脱敏后再发布
+            val sanitized = privacyBreaker.sanitizePageSnapshot(snapshot)
+
+            _latestPageContent.value = sanitized
+            _pageContentEvents.tryEmit(sanitized)
         } catch (_: Exception) {
             // 防御性保护，避免极端情况底层 IPC 异常影响常驻服务
         }

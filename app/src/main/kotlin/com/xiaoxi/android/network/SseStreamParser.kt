@@ -54,6 +54,8 @@ object SseStreamParser {
 
             events
         } catch (e: Exception) {
+            // 不再静默丢弃：无法解析的载荷要在 Logcat 可见（tag: System.out），否则用户只会看到"空回复"，无从排查
+            println("[SseStreamParser] 丢弃无法解析的 SSE 载荷: \"$dataPayload\" (error: $e)")
             emptyList()
         }
     }

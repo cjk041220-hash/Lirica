@@ -172,8 +172,8 @@ class PerceptionPipeline(
 
         try {
             unspokenThoughtDao?.insert(entity)
-        } catch (_: Exception) {
-            // 防御性异常隔离
+        } catch (e: Exception) {
+            println("[PerceptionPipeline] 插入感知念头异常: $e")
         }
     }
 

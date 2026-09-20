@@ -86,6 +86,11 @@ class NotificationFilter {
         // 5. 语义分类判定
         val category = classifyCategory(sbn.packageName, title, content)
 
+        // 5.1 安全与验证码类通知物理丢弃：小汐仅做生活感知，绝不接触任何凭证类信息
+        if (category == NotificationCategory.SECURITY) {
+            return null
+        }
+
         val eventId = "${sbn.packageName}_${sbn.id}_${sbn.postTime}"
 
         return NotificationEvent(

@@ -6,6 +6,10 @@ import com.xiaoxi.android.network.model.ToolCallFunction
 
 class ToolCallAssembler {
 
+    companion object {
+        private const val MAX_TOOL_CALL_INDEX = 32
+    }
+
     private class InProgressToolCall(
         var id: String = "",
         var name: String = "",
@@ -15,6 +19,7 @@ class ToolCallAssembler {
     private val inProgress = mutableMapOf<Int, InProgressToolCall>()
 
     fun appendChunk(chunk: LlmStreamEvent.ToolCallChunk) {
+        if (chunk.index < 0 || chunk.index > MAX_TOOL_CALL_INDEX) return
         val target = inProgress.getOrPut(chunk.index) { InProgressToolCall() }
         if (!chunk.id.isNullOrEmpty()) {
             target.id = chunk.id
@@ -30,6 +35,7 @@ class ToolCallAssembler {
     fun getCompletedToolCalls(): List<ToolCall> {
         return inProgress.entries
             .sortedBy { it.key }
+            .filter { (_, call) -> call.name.isNotBlank() }
             .map { (_, call) ->
                 ToolCall(
                     id = call.id,

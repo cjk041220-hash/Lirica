@@ -31,9 +31,14 @@ class SelfHealingWatchdogImpl(
             "com.sec.android.app.launcher"
         )
 
+        /**
+         * 弹窗关闭/跳过候选词表：
+         * 严格排除「同意/允许/确定/allow/ok」等赋权授权类词汇，
+         * 绝不自动代行系统权限授予或用户服务协议同意。
+         */
         val POPUP_KEYWORDS = listOf(
-            "跳过", "关闭", "知道了", "同意", "残忍离开", "取消", "确定", "允许", "拒绝",
-            "close", "skip", "dismiss", "cancel", "ok", "allow", "deny"
+            "跳过", "关闭", "知道了", "残忍离开", "取消", "拒绝",
+            "close", "skip", "dismiss", "cancel", "deny"
         )
     }
 
@@ -64,20 +69,26 @@ class SelfHealingWatchdogImpl(
             )
         }
 
-        // Check 2: Popup Blocking
-        val matchedPopupKeyword = pageTexts.firstOrNull { text ->
-            POPUP_KEYWORDS.any { keyword -> text.equals(keyword, ignoreCase = true) || text.contains(keyword, ignoreCase = true) }
-        }
-        if (matchedPopupKeyword != null && currentStep > 1) {
-            val attempts = recoveryAttempts.getOrDefault(AnomalyType.POPUP_BLOCKING, 0)
-            if (attempts >= maxRecoveryAttempts) {
-                return WatchdogVerdict.Unrecoverable("Exceeded max recovery attempts ($maxRecoveryAttempts) for POPUP_BLOCKING")
+        // Check 2: Popup Blocking (严格豁免系统权限控制器与安装器，绝不自动操作权限对话框)
+        val isSystemSecurityOrPermission = currentPackage.contains("permissioncontroller") ||
+            currentPackage.contains("packageinstaller") ||
+            currentPackage == "com.miui.securitycenter"
+
+        if (!isSystemSecurityOrPermission) {
+            val matchedPopupKeyword = pageTexts.firstOrNull { text ->
+                POPUP_KEYWORDS.any { keyword -> text.equals(keyword, ignoreCase = true) || text.contains(keyword, ignoreCase = true) }
             }
-            return WatchdogVerdict.Recoverable(
-                anomaly = AnomalyType.POPUP_BLOCKING,
-                suggestedAction = HealingAction.DismissPopup(matchedPopupKeyword),
-                attemptCount = attempts + 1
-            )
+            if (matchedPopupKeyword != null && currentStep > 1) {
+                val attempts = recoveryAttempts.getOrDefault(AnomalyType.POPUP_BLOCKING, 0)
+                if (attempts >= maxRecoveryAttempts) {
+                    return WatchdogVerdict.Unrecoverable("Exceeded max recovery attempts ($maxRecoveryAttempts) for POPUP_BLOCKING")
+                }
+                return WatchdogVerdict.Recoverable(
+                    anomaly = AnomalyType.POPUP_BLOCKING,
+                    suggestedAction = HealingAction.DismissPopup(matchedPopupKeyword),
+                    attemptCount = attempts + 1
+                )
+            }
         }
 
         // Check 3: Consecutive Identical Fingerprints (Stuck Loop)

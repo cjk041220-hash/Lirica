@@ -38,6 +38,7 @@ class EmotionEngine(
      * ΔE = α · Stimulus - β · (E - E_0)
      * E_new = clamp(E + ΔE)
      */
+    @Synchronized
     fun applyStimulus(stimulus: EmotionVector) {
         val current = _stateFlow.value
         val delta = (stimulus * sensitivityAlpha) - ((current - baseline) * dampingBeta)
@@ -50,6 +51,7 @@ class EmotionEngine(
      * 模拟时间流逝下的长程静默阻尼衰减（向人格基线回归）：
      * E_next = E - β · (E - E_0)
      */
+    @Synchronized
     fun stepDamping(steps: Int = 1) {
         var current = _stateFlow.value
         repeat(steps) {
@@ -63,6 +65,7 @@ class EmotionEngine(
     /**
      * 重置到人格基线（用于早晨锚定或新会话周期初始化）
      */
+    @Synchronized
     fun resetToBaseline() {
         _stateFlow.value = baseline
         _moodFlow.value = MoodState.fromVector(baseline)

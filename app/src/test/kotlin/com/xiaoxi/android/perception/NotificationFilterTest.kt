@@ -150,15 +150,23 @@ class NotificationFilterTest {
     }
 
     @Test
-    fun testFilterSecurityOtp_isAccepted() {
+    fun testFilterSecurityOtp_isDropped() {
         val sbn = createMockSbn(
             packageName = "com.android.mms",
             title = "95588",
             text = "【工商银行】您的验证码为 829103，切勿泄露给他人。"
         )
-        val event = filter.filterAndExtract(sbn)
-        assertNotNull(event)
-        assertEquals(NotificationCategory.SECURITY, event?.category)
+        assertNull(filter.filterAndExtract(sbn))
+    }
+
+    @Test
+    fun testFilterEnglishOtp_isDropped() {
+        val sbn = createMockSbn(
+            packageName = "com.google.android.gms",
+            title = "Google",
+            text = "Your verification code is 482913. Do not share it."
+        )
+        assertNull(filter.filterAndExtract(sbn))
     }
 
     @Test

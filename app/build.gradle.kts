@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
 }
+
+// 从 local.properties 读取 DEEPSEEK_API_KEY（该文件不入库），缺失时退回占位符保持构建通过。
+// 使用说明：在项目根目录 local.properties 中添加一行 `DEEPSEEK_API_KEY=sk-xxxx`
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val deepseekApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY") ?: "default-key"
 
 android {
     namespace = "com.xiaoxi.android"
@@ -21,6 +31,8 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        buildConfigField("String", "DEEPSEEK_API_KEY", "\"$deepseekApiKey\"")
     }
 
     buildTypes {
@@ -48,6 +60,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -111,6 +124,12 @@ dependencies {
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+ksp {
+    // Room schema 导出：配合 @Database(exportSchema = true)，
+    // 每次构建生成 app/schemas/<FQCN>/<version>.json，作为编写 Migration 的依据
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 android {

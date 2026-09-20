@@ -16,6 +16,10 @@ import java.util.zip.InflaterInputStream
 
 object CharacterCardDecoder {
 
+    /** 角色卡 Chunk/JSON 最大允许大小（8MB），防止解压炸弹与 OOM */
+    private const val MAX_CHUNK_LENGTH = 8 * 1024 * 1024 // 8MB
+    private const val MAX_PAYLOAD_SIZE = 8 * 1024 * 1024 // 8MB
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -41,6 +45,9 @@ object CharacterCardDecoder {
         try {
             while (true) {
                 val length = dis.readInt()
+                if (length < 0 || length > MAX_CHUNK_LENGTH) {
+                    throw IllegalArgumentException("PNG chunk length invalid or exceeds limit: $length")
+                }
                 val typeBytes = ByteArray(4)
                 dis.readFully(typeBytes)
                 val type = String(typeBytes, Charsets.US_ASCII)
@@ -66,7 +73,7 @@ object CharacterCardDecoder {
                             if (keyword.equals("chara", ignoreCase = true) || keyword.equals("ccv3", ignoreCase = true)) {
                                 // data[nullIndex + 1] is compression method (0 = deflate)
                                 val compressedData = data.copyOfRange(nullIndex + 2, data.size)
-                                val decompressed = InflaterInputStream(ByteArrayInputStream(compressedData)).readBytes()
+                                val decompressed = safeDecompress(compressedData)
                                 val rawText = String(decompressed, Charsets.UTF_8)
                                 return decodeTextPayload(rawText)
                             }
@@ -80,6 +87,23 @@ object CharacterCardDecoder {
         }
 
         throw IllegalArgumentException("No SillyTavern character card found in PNG")
+    }
+
+    private fun safeDecompress(compressedData: ByteArray): ByteArray {
+        val inflaterStream = InflaterInputStream(ByteArrayInputStream(compressedData))
+        val buffer = ByteArray(8192)
+        val out = ByteArrayOutputStream()
+        var totalRead = 0
+        while (true) {
+            val read = inflaterStream.read(buffer)
+            if (read == -1) break
+            totalRead += read
+            if (totalRead > MAX_PAYLOAD_SIZE) {
+                throw IllegalArgumentException("Decompressed character card payload exceeds maximum allowed size (8MB)")
+            }
+            out.write(buffer, 0, read)
+        }
+        return out.toByteArray()
     }
 
     private fun decodeTextPayload(text: String): CharacterCard {
@@ -98,6 +122,9 @@ object CharacterCardDecoder {
     }
 
     fun decodeFromJson(jsonString: String): CharacterCard {
+        if (jsonString.length > MAX_PAYLOAD_SIZE) {
+            throw IllegalArgumentException("Character card JSON exceeds maximum allowed size (8MB)")
+        }
         return try {
             val envelope = json.decodeFromString<CharacterCardEnvelope>(jsonString)
             if (envelope.data != null) {

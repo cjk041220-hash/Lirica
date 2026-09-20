@@ -30,7 +30,7 @@ import com.xiaoxi.android.database.entity.UserMemoryEntity
         ChatDialogueEntity::class
     ],
     version = 1,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class XiaoxiDatabase : RoomDatabase() {
 
@@ -57,7 +57,7 @@ abstract class XiaoxiDatabase : RoomDatabase() {
                 XiaoxiDatabase::class.java,
                 DATABASE_NAME
             )
-                .fallbackToDestructiveMigration()
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
         }
 
