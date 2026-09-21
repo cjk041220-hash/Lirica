@@ -50,7 +50,9 @@ class MemoryExtractorTest {
             llmClient = XiaoxiLlmClient(httpClient = httpClient),
             userMemoryDao = userMemoryDao,
             llmConfig = LlmConfig(apiKey = "test-key"),
-            json = testJson
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 1
         )
     }
 

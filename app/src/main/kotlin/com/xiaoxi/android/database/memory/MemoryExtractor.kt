@@ -12,17 +12,19 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
- * 长期记忆抽取器（Track A 写入端）
+ * 长期记忆抽取器（Track A 写入端 - 带节流门控与水位线管理）
  *
- * 对话结束后异步调用：将本轮用户发言交给 LLM 做结构化事实抽取，
- * 解析 JSON 结果并写入 user_memories 表，补齐记忆系统"只读不写"的缺口。
+ * 遵循 P8 规范：加"距上次抽取 >3 分钟或积攒 ≥3 轮"的节流门，抽取时附带最近 N 条未抽取消息的批量上下文，
+ * 抽取成功后记录 watermark 并重置累积状态。
  * 任何环节失败均静默返回，绝不影响对话主链路。
  */
 class MemoryExtractor(
     private val llmClient: XiaoxiLlmClient,
     private val userMemoryDao: UserMemoryDao,
     private val llmConfig: LlmConfig,
-    private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
+    val throttleIntervalMs: Long = 180_000L,
+    val minTurnsAccumulated: Int = 3
 ) {
 
     companion object {
@@ -44,6 +46,20 @@ class MemoryExtractor(
         """.trimIndent()
     }
 
+    private val pendingTurns = mutableListOf<String>()
+    private var batchStartTimestamp: Long = 0L
+    private var lastExtractionTimestamp: Long = 0L
+
+    fun getPendingTurnCount(): Int = synchronized(this) { pendingTurns.size }
+
+    fun getLastExtractionTime(): Long = synchronized(this) { lastExtractionTimestamp }
+
+    fun resetWatermark() = synchronized(this) {
+        pendingTurns.clear()
+        batchStartTimestamp = 0L
+        lastExtractionTimestamp = 0L
+    }
+
     @Serializable
     data class ExtractedMemory(
         val content: String,
@@ -57,15 +73,51 @@ class MemoryExtractor(
     )
 
     /**
-     * 抽取并入库。返回本次成功写入的条数（测试与调试用）。
-     * 用户文本过短、LLM 失败、解析失败时返回 0，静默不影响调用方。
+     * 抽取并入库。
+     * 支持节流判定：仅当 force = true、积攒轮次 >= minTurnsAccumulated 或超出 throttleIntervalMs 冷却期时真正发起 LLM 请求。
+     * 用户文本过短且无历史积攒、未达节流条件、LLM 失败、解析失败时返回 0，静默不影响调用方。
      */
-    suspend fun maybeExtract(userText: String, assistantText: String = ""): Int {
+    suspend fun maybeExtract(
+        userText: String,
+        assistantText: String = "",
+        nowMs: Long = System.currentTimeMillis(),
+        force: Boolean = false
+    ): Int {
         val trimmed = userText.trim()
-        if (trimmed.length < MIN_USER_TEXT_LENGTH) return 0
+        if (trimmed.isEmpty() && !force) return 0
+        if (trimmed.length < MIN_USER_TEXT_LENGTH && pendingTurns.isEmpty() && !force) return 0
+
+        val batchContext: String
+        synchronized(this) {
+            if (trimmed.isNotEmpty()) {
+                if (pendingTurns.isEmpty()) {
+                    batchStartTimestamp = nowMs
+                }
+                pendingTurns.add(trimmed)
+            }
+
+            val count = pendingTurns.size
+            val timeElapsed = if (batchStartTimestamp > 0) nowMs - batchStartTimestamp else 0L
+            val shouldTrigger = force ||
+                (count >= minTurnsAccumulated) ||
+                (batchStartTimestamp > 0 && timeElapsed >= throttleIntervalMs && count > 0)
+
+            if (shouldTrigger && pendingTurns.isNotEmpty()) {
+                batchContext = pendingTurns.joinToString("\n---\n")
+                pendingTurns.clear()
+                batchStartTimestamp = 0L
+                lastExtractionTimestamp = nowMs
+            } else {
+                batchContext = ""
+            }
+        }
+
+        if (batchContext.isEmpty()) {
+            return 0
+        }
 
         return try {
-            val response = requestExtraction(trimmed)
+            val response = requestExtraction(batchContext)
             parseAndStore(response)
         } catch (e: CancellationException) {
             throw e
@@ -74,10 +126,10 @@ class MemoryExtractor(
         }
     }
 
-    private suspend fun requestExtraction(userText: String): String {
+    private suspend fun requestExtraction(batchContext: String): String {
         val messages = listOf(
             ChatMessage(role = "system", content = EXTRACTION_SYSTEM_PROMPT),
-            ChatMessage(role = "user", content = "用户本轮发言：\n$userText")
+            ChatMessage(role = "user", content = "用户近期发言内容：\n$batchContext")
         )
         val sb = StringBuilder()
         llmClient.streamChat(llmConfig, messages).collect { event ->
