@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- 严防用户亲密双轨记忆库、BYOK 密钥与私密崩溃日志外流至云端备份 -->
+        <exclude path="databases/xiaoxi_database" />
+        <exclude path="databases/xiaoxi_database-shm" />
+        <exclude path="databases/xiaoxi_database-wal" />
+        <exclude path="shared_prefs/xiaoxi_byok_prefs.xml" />
+        <exclude path="files/crashes" />
+    </cloud-backup>
+    <device-to-device-transfer>
+        <exclude path="files/crashes" />
+    </device-to-device-transfer>
+</data-extraction-rules>
