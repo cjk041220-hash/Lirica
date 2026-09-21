@@ -1,7 +1,7 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第二轮系统级架构演进 · Milestone 2.2 准备阶段 (第 0 步先期护栏与 M2.1 执行态基建已全绿达成，当前基线 270 tests 全过，待启动 M2.2 Helix-GUI 任务代行总控)  
-> **最后更新**：2026-09-20  
+> **当前阶段**：第二轮系统级架构演进 · Milestone 2.3 准备阶段 (第 0 步先期护栏、M2.1 执行态基建、M2.2 Helix-GUI 代行总控与工具闭环已全绿达成，当前基线 293 tests 全过，待启动 M2.3 自叙梦系统与记忆地图化重构)  
+> **最后更新**：2026-09-21  
 > **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager
 
 ---
@@ -18,8 +18,8 @@
 | **Phase 5** | 手机操控与任务代行基座 (Intent直达 / 无障碍手势 / 混合接地 / 执行自愈 / 金融守门) | **已全绿验收** | 5/5 |
 | **Round 2 · Step 0** | 先期工程护栏与稳定性兜底 (P1 上下文硬预算 / P6 召回去重 / P2 本地崩溃守护与环形日志) | **已全绿验收** | 3/3 |
 | **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活 / R8) | **已全绿验收** | 6/6 |
-| **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | 待启动 | 0/4 |
-| **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | 待规划 | 0/5 |
+| **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | **已全绿验收** | 4/4 |
+| **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | 待启动 | 0/5 |
 | **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | 待规划 | 0/5 |
 
 ---
@@ -760,10 +760,56 @@
 
 ---
 
+## 第二轮优化·Milestone 2.2 Helix-GUI 任务代行总控与执行态闭环 (M2.2 达成)
+
+> **核心使命**：落地端到端任务代行状态机总控中枢 `HelixGuiCoordinator`，打通系统工具调用路由器 `NativeToolAgent` 与函数调用闭环，攻关流式打字机 60fps 渲染性能治理（P4），并交付亲密数据备份隔离规则与 BYOK 存储抽象（P5）。
+
+### 交付内容清单
+1. **Helix-GUI 任务代行总控中枢与状态机 (Task 1 - HelixGuiCoordinator)**：
+   - `TaskExecutionState`：定义完整的代行生命周期密封状态（`Idle`、`Planning`、`ExecutingStep`、`AwaitingUserConfirmation`、`Completed`、`Failed`）；
+   - `HelixGuiCoordinator` & `HelixGuiCoordinatorImpl`：
+     - L0 极速通道：单步标准 Intent 预检直达 (≤15ms 极速下发)；
+     - 多步有界执行循环（严格封顶 `MAX_STEPS = 12` 步，杜绝死循环）；
+     - 高保真树抽取（`ExecutionTreeExtractor`）与元素物理绝对坐标接地（`HybridGroundingEngine`）；
+     - 零信任高危护栏深度审查（`FinancialGatekeeper`）：密码与支付关键词 100.0% 物理熔断、高危操作一次性令牌二次确认挂起等待；
+     - 拟人化动作分发（`GestureExecutor` 贝塞尔随机曲线手势与 `TextInputExecutor` 剪贴板毫秒级快照还原安全输入）；
+     - 反应式自愈与弹窗切除集成（`SelfHealingWatchdog`）：遭遇弹窗阻断时自动识别关闭候选词切除并重试；
+     - 隐私黑名单整屏物理熔断保护（`PRIVACY_BLACKOUT` 优雅中断）；
+   - `HelixGuiCoordinatorTest`：8 个测试用例全绿通过，单步 Intent、长程多步操作、密码物理熔断、高危订单二次确认、弹窗自愈切除、步数超限熔断与银行应用黑名单全覆盖，变异验证全红转全绿。
+2. **原生系统工具路由器与函数调用闭环 (Task 2 - NativeToolAgent)**：
+   - `NativeToolAgent`：
+     - 声明 5 大核心端侧工具清单（`open_app`、`click_element`、`input_text`、`swipe`、`task_finish`），配备合规 JSONSchema 参数规范；
+     - 健壮的 JSON 参数解码与异常安全兜底，杜绝非结构化输出导致的崩溃；
+     - 意图路由分发至 `IntentActionDispatcher` 与 `HelixGuiCoordinator`；
+     - 输出统一结构化结果 `ToolExecutionResult`，支持一键转译为 `ChatMessage(role = "tool", toolCallId = id, content = output)`，与 Phase 0/1 的大模型通讯层形成端到端闭环；
+   - `NativeToolAgentTest`：8 个测试用例全绿通过，工具声明契约、Intent 启动、Coordinator 点击/键入代行、任务完成总结与异常 JSON 容错全覆盖，变异验证全红转全绿。
+3. **流式打字机渲染性能治理与 Compose 稳定性加固 (Task 3 - P4)**：
+   - `ChatUiState`、`MemoryBadgeInfo` 与 `ChatMessageItem`：显式标注 `@Immutable`，消除 Compose 编译器对动态集合的重组穿透，确保历史气泡在流式接收期间跳过重组；
+   - `ChatViewModel`：流式打字机更新重构为 O(1) 尾部替换，杜绝逐 Token 触发 `messages.map` 产生全列表遍历与对象暴击；
+   - `ChatScreen`：
+     - 引入 `derivedStateOf { isAtBottom }` 状态检测；
+     - 消息条数变动（新消息）时保留平滑滚动动画 `animateScrollToItem`；
+     - 尾部流式文字累加时，若用户正处于底部，采用瞬时无动画 `scrollToItem`，彻底解决逐 Token 动画重入导致的流式掉帧与发热；
+   - `ChatUiPerformanceTest`：2 个测试用例全绿通过，变异验证全红转全绿。
+4. **亲密数据备份隔离规则与 BYOK 存储抽象 (Task 4 - P5)**：
+   - `data_extraction_rules.xml` (Android 12+) 与 `backup_rules.xml` (Android <12)：严格物理排除 `databases/xiaoxi_database*`、`shared_prefs/xiaoxi_byok_prefs.xml` 与 `files/crashes` 参与云端同步与备份，筑牢用户隐私红线；
+   - `AndroidManifest.xml`：规范声明 `android:dataExtractionRules` 与 `android:fullBackupContent`；
+   - `ByokSettingsRepository` & `ByokSettingsRepositoryImpl`：
+     - 专有存储抽象，支持安全读写与清空用户自定义 API Key、Base URL 与 Model；
+     - 未自定义时安全回退至 `BuildConfig.DEEPSEEK_API_KEY` 与默认端点，0 破坏现有功能；
+     - 暴露 `StateFlow<ByokSettings>` 支持响应式 UI 绑定；
+   - `BackupAndByokTest`：5 个测试用例全绿通过，变异验证全红转全绿。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 293 tests completed, 0 failed, 100% pass (测试套件从 270 扩充至 293，新增 23 个测试)
+  - `./gradlew assembleDebug`: BUILD SUCCESSFUL in 9s (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第二轮优化第二里程碑（Milestone 2.2）全绿达成！
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，270 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，293 tests passed）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
@@ -772,13 +818,15 @@
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
-   - 当前工作区分支：`feat/round2-m21-execution-infra`。
-   - 最新进展：Milestone 2.1（执行态基建与坐标断层缝合）全绿验收达成，270 个单测 100% 通过。
+   - 当前工作区分支：`feat/round2-m22-helix-coordinator`。
+   - 最新进展：Milestone 2.2（Helix-GUI 任务代行总控与执行态接线）全绿验收达成，293 个单测 100% 通过。
 4. **整体系统现状**：
    - Phase 0 ~ Phase 5 全部达成 (249 tests 基线)
    - 第二轮优化第 0 步先期护栏达成 (259 tests，P1, P6, P2 就位)
-   - 第二轮优化 Milestone 2.1 达成 (270 tests，执行态树抽取/坐标桥接/剪贴板恢复/弱引用代理/截帧/前台保活/混淆)
-   - 下一阶段：Milestone 2.2 Helix-GUI 任务代行总控与执行态 UI (M2.2 + M2 + P4 + P5)
+   - 第二轮优化 Milestone 2.1 达成 (270 tests，执行态基建与坐标断层缝合)
+   - 第二轮优化 Milestone 2.2 达成 (293 tests，Coordinator状态机 / Tool路由 / 流式性能 / 备份隔离)
+   - 下一阶段：Milestone 2.3 自叙梦系统与 5 层记忆地图化重构 (SubconsciousDreamWorker / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff)
+
 
 
 
