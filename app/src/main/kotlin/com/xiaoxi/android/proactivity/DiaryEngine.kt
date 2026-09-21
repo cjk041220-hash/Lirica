@@ -105,7 +105,8 @@ class DiaryEngineImpl(
             createdAt = nowMs,
             accessCount = 0,
             lastSharedAt = null,
-            status = SelfExperienceEntity.STATUS_FRESH
+            status = SelfExperienceEntity.STATUS_FRESH,
+            isPlaceholder = userMessages.isEmpty()
         )
 
         selfExperienceDao.insert(entity)

@@ -55,7 +55,10 @@ data class SelfExperienceEntity(
     val lastSharedAt: Long? = null,
 
     @ColumnInfo(name = "status")
-    val status: String = STATUS_FRESH
+    val status: String = STATUS_FRESH,
+
+    @ColumnInfo(name = "is_placeholder", defaultValue = "0")
+    val isPlaceholder: Boolean = false
 ) {
     companion object {
         const val STATUS_FRESH = "fresh"
