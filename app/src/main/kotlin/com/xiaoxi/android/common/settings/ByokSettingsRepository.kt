@@ -16,6 +16,14 @@ data class ByokSettings(
     val isCustomKeyConfigured: Boolean get() = !customApiKey.isNullOrBlank()
 }
 
+/**
+ * BYOK（用户自备 API Key）存储抽象。
+ *
+ * [EXPERIMENTAL / 未接线]：当前无 Application 装配、无 UI 配置入口，
+ * LLM 配置消费方仍直取 BuildConfig.DEEPSEEK_API_KEY —— 本仓库为零消费死代码。
+ * 接通方案见 docs/优化方案——外部报告核对与合并修复计划_2026-09-21.md #10；
+ * 在接线完成前，请勿在文档或对外口径中将 BYOK 宣称为已交付能力。
+ */
 interface ByokSettingsRepository {
     val settings: StateFlow<ByokSettings>
 

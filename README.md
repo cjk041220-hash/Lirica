@@ -14,7 +14,7 @@
 2. **获权情境感知（Ambient Sensing）**：在用户授权下，常驻感知前台应用、停留时长、屏幕文本结构与第三方系统通知，如同趴在屏幕边的伴侣。
 3. **真实手机操控（Device Manipulation）**：结合 Android 无障碍服务（`AccessibilityService`）与多模态视觉定位（AutoGLM / UI-TARS），实现原子手势模拟与跨应用自动化代行。
 4. **自主生活与主动性（Proactive Living）**：具备“关于自己”的独立记忆轨（Self-Track），闲时自主上网阅读趣闻，结合情境感知在合适时机主动搭话与吐槽。
-5. **本地优先与隐私安全（BYOK & Local-First）**：无中心化服务器，用户自备 Key（BYOK），所有记忆与屏幕数据端侧闭环，具备金融与密码框物理熔断防护。
+5. **本地优先与隐私安全（Local-First）**：无中心化服务器，所有记忆与屏幕数据端侧闭环，具备金融与密码框物理熔断防护。用户自备 Key（BYOK）为 experimental 能力，尚未开放配置入口。
 
 ---
 
@@ -23,7 +23,7 @@
 项目当前正处于 2.0 基础重构阶段：
 * **核心开发蓝图**：详见 [`小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md`](./小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md)
 * **执行规划**：
-  * **Phase 0**：原生基建确立、权限与 BYOK 通信打通、SillyTavern 卡解析
+  * **Phase 0**：原生基建确立、权限与 BYOK 通信客户端打通、SillyTavern 卡解析
   * **Phase 1**：心智引擎与双轨记忆原生化（移植 8 轮重锚与 Russell 情绪状态机）
   * **Phase 2**：Jetpack Compose 主界面与跨应用伴生悬浮窗（Floating Overlay）
   * **Phase 3**：获权感知中枢（应用追踪、无障碍轻量读屏、通知捕获）
@@ -44,6 +44,21 @@ xiaoxi-android/
 │   └── tests/                                          # 核心心智与记忆回归测试套件
 └── app/                                                # [Phase 0 启动] Android 原生工程（Kotlin + Compose）
 ```
+
+---
+
+## 🔑 API Key 配置（构建必需）
+
+自 2026-09-21 起，缺失 `DEEPSEEK_API_KEY` 时构建会**直接失败**（不再回退占位符，防止占位 Key 烘进 APK）。三种配置方式，按优先级：
+
+1. **本机开发（推荐）**：项目根目录 `local.properties` 添加一行（该文件不入库）：
+   ```
+   DEEPSEEK_API_KEY=sk-xxxxxxxx
+   ```
+2. **命令行临时传参**：`./gradlew assembleDebug -PDEEPSEEK_API_KEY=sk-xxxxxxxx`
+3. **CI / 环境变量**：设置同名环境变量 `DEEPSEEK_API_KEY`。
+
+> 注意：Key 会编译期注入 `BuildConfig` 并随 APK 分发，**请勿将打出的 APK 分发给他人**；运行时自备 Key（BYOK）能力见上方核心能力第 5 条（experimental）。
 
 ---
 

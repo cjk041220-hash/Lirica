@@ -17,11 +17,11 @@
 | **Phase 4** | 主动性裁决器与自主生活上线 (沉默裁决 / 自主经历日记 / 未完成念头池) | **已全绿验收** | 4/4 |
 | **Phase 5** | 手机操控与任务代行基座 (Intent直达 / 无障碍手势 / 混合接地 / 执行自愈 / 金融守门) | **已全绿验收** | 5/5 |
 | **Round 2 · Step 0** | 先期工程护栏与稳定性兜底 (P1 上下文硬预算 / P6 召回去重 / P2 本地崩溃守护与环形日志) | **已全绿验收** | 3/3 |
-| **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活 / R8) | **已全绿验收** | 6/6 |
+| **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活) | **已全绿验收**（原列的 R8 实际未启用，2026-09-21 后补完成，见优化方案 #6/P1-6） | 5/6 |
 | **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | **已全绿验收** | 4/4 |
 | **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **已全绿验收** | 5/5 |
-| **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收** | 5/5 |
+| **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收**（goAsync 仅修了 finish() 时序，协程异常兜底 2026-09-21 后补，见优化方案 #15/P1-8） | 5/5 |
 
 ---
 
@@ -800,6 +800,7 @@
      - 未自定义时安全回退至 `BuildConfig.DEEPSEEK_API_KEY` 与默认端点，0 破坏现有功能；
      - 暴露 `StateFlow<ByokSettings>` 支持响应式 UI 绑定；
    - `BackupAndByokTest`：5 个测试用例全绿通过，变异验证全红转全绿。
+   - **BYOK 状态标注（2026-09-21 修订）**：上述 ByokSettingsRepository 仅为存储**抽象**，当前为 **experimental 且未接线**——无 Application 装配、无 UI 配置入口、三处 LlmConfig 默认值仍直取 `BuildConfig.DEEPSEEK_API_KEY`，"用户自备 Key"不构成已交付能力；接通方案见《优化方案——外部报告核对与合并修复计划_2026-09-21》#10。
 - **全量测试与打包证据**：
   - `./gradlew testDebugUnitTest`: 293 tests completed, 0 failed, 100% pass (测试套件从 270 扩充至 293，新增 23 个测试)
   - `./gradlew assembleDebug`: BUILD SUCCESSFUL in 9s (0 error, 0 warning)
@@ -882,8 +883,8 @@
    - `HelixGuiCoordinator`：深度支持 `AwaitingUserConfirmation` 携带 `draftContent`，并在确认时注入用户修改后的安全草稿；
    - `CompanionOverlayService`：挂载 `helixCoordinator.state` 监听，执行中自动提权前台服务（`promoteToForeground`），完成自动降级（`demoteFromForeground`），动态调度输入法焦点；
    - `CompanionOverlayExecutionUiTest` 3 个测试用例与 `HelixGuiCoordinatorTest` 9 个测试用例全绿通过，变异验证全红转全绿。
-5. **全系统真机场景联调压测与端到端自动化验收 (Task 5 - P10 & E2E Verification)**：
-   - `EndToEndMilestone24VerificationTest` 落地 5 大复杂真机复合场景用例：
+5. **全系统 JVM 模拟场景端到端自动化验收 (Task 5 - P10 & E2E Verification；真机联调压测未执行，待后补)**：
+   - `EndToEndMilestone24VerificationTest` 落地 5 大复杂复合场景用例（Robolectric JVM 模拟，非真机）：
      1. 微信草稿起草确认门与用户微调代发模拟；
      2. 高德地图导航直达与多步代行模拟；
      3. `schedule_wake` 自定闹钟约定到期唤醒至清晨活水全链路；

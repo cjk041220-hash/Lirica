@@ -14,7 +14,14 @@ val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-val deepseekApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY") ?: "default-key"
+// 三者皆缺失时构建直接失败——禁止把占位符 Key 烘进 APK（防止静态提取，见评审报告严重#3）。
+val deepseekApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY")
+    ?: (project.findProperty("DEEPSEEK_API_KEY") as String?)
+    ?: System.getenv("DEEPSEEK_API_KEY")
+    ?: error(
+        "DEEPSEEK_API_KEY 未配置：请在项目根目录 local.properties 添加一行 DEEPSEEK_API_KEY=sk-xxxx（该文件不入库），" +
+            "或在 CI 中通过 -PDEEPSEEK_API_KEY=xxx / 环境变量 DEEPSEEK_API_KEY 提供。"
+    )
 
 android {
     namespace = "com.xiaoxi.android"
@@ -37,7 +44,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 混淆与资源收缩：release 包启用代码最小化（真机冒烟待验收：无障碍 / 悬浮窗 / Room / SSE）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
