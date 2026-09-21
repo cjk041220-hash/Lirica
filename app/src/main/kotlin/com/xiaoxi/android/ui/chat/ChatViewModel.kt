@@ -207,7 +207,7 @@ class ChatViewModel(
                     turnCount = turnCount
                 )
 
-                // 5. 流式打字机累积
+                // 5. 流式打字机累积（O(1) 尾部替换，杜绝逐 Token 全列表映射深拷贝）
                 val accumulated = StringBuilder()
                 llmClient.streamChat(llmConfig, assembledMessages).collect { event ->
                     when (event) {
@@ -215,8 +215,16 @@ class ChatViewModel(
                             accumulated.append(event.text)
                             val currentText = accumulated.toString()
                             _uiState.update { state ->
-                                val updated = state.messages.map { msg ->
-                                    if (msg.id == assistantMessageId) msg.copy(text = currentText) else msg
+                                val list = state.messages
+                                val lastIdx = list.lastIndex
+                                val updated = if (lastIdx >= 0 && list[lastIdx].id == assistantMessageId) {
+                                    val mutable = list.toMutableList()
+                                    mutable[lastIdx] = list[lastIdx].copy(text = currentText)
+                                    mutable
+                                } else {
+                                    list.map { msg ->
+                                        if (msg.id == assistantMessageId) msg.copy(text = currentText) else msg
+                                    }
                                 }
                                 state.copy(messages = updated)
                             }
@@ -245,8 +253,16 @@ class ChatViewModel(
                 val finalText = filterResult.filteredText
 
                 _uiState.update { state ->
-                    val updated = state.messages.map { msg ->
-                        if (msg.id == assistantMessageId) msg.copy(text = finalText) else msg
+                    val list = state.messages
+                    val lastIdx = list.lastIndex
+                    val updated = if (lastIdx >= 0 && list[lastIdx].id == assistantMessageId) {
+                        val mutable = list.toMutableList()
+                        mutable[lastIdx] = list[lastIdx].copy(text = finalText)
+                        mutable
+                    } else {
+                        list.map { msg ->
+                            if (msg.id == assistantMessageId) msg.copy(text = finalText) else msg
+                        }
                     }
                     state.copy(messages = updated, isStreaming = false)
                 }

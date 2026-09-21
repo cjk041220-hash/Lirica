@@ -1,5 +1,6 @@
 package com.xiaoxi.android.ui.chat
 
+import androidx.compose.runtime.Immutable
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
 import com.xiaoxi.android.persona.model.CharacterCard
@@ -9,6 +10,7 @@ enum class MessageSender {
     ASSISTANT
 }
 
+@Immutable
 data class MemoryBadgeInfo(
     val userMemories: List<String> = emptyList(),
     val selfExperiences: List<String> = emptyList(),
@@ -18,6 +20,7 @@ data class MemoryBadgeInfo(
     val isEmpty: Boolean get() = totalCount == 0
 }
 
+@Immutable
 data class ChatMessageItem(
     val id: String,
     val sender: MessageSender,
@@ -27,6 +30,7 @@ data class ChatMessageItem(
     val mood: MoodState? = null
 )
 
+@Immutable
 data class ChatUiState(
     val messages: List<ChatMessageItem> = emptyList(),
     val inputText: String = "",

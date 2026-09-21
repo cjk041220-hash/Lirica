@@ -34,6 +34,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -56,9 +57,29 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text) {
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            if (totalItems == 0) true
+            else {
+                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                lastVisible >= totalItems - 2
+            }
+        }
+    }
+
+    // 当有新消息进入时平滑滚动到底部
+    LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.messages.size - 1)
+        }
+    }
+
+    // 当流式文字逐 Token 累加时，若用户正处于底部，采用瞬时 scrollToItem，消除逐 Token 动画重入掉帧
+    LaunchedEffect(uiState.messages.lastOrNull()?.text) {
+        if (uiState.messages.isNotEmpty() && isAtBottom) {
+            listState.scrollToItem(uiState.messages.size - 1)
         }
     }
 
