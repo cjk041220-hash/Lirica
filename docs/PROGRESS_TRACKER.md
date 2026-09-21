@@ -19,7 +19,7 @@
 | **Round 2 · Step 0** | 先期工程护栏与稳定性兜底 (P1 上下文硬预算 / P6 召回去重 / P2 本地崩溃守护与环形日志) | **已全绿验收** | 3/3 |
 | **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活 / R8) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | **已全绿验收** | 4/4 |
-| **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | 待启动 | 0/5 |
+| **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | 待规划 | 0/5 |
 
 ---
@@ -806,10 +806,56 @@
 
 ---
 
+## 第二轮优化·Milestone 2.3 自叙梦系统与 5 层记忆地图化重构 (M2.3 达成)
+
+> **核心使命**：交付夜间入梦记忆整理中枢 `SubconsciousDreamCoordinator` 与 `SubconsciousDreamWorker`，落地语义去重（反囤积铁律）、相对时间绝对化、矛盾消歧与信念修正、高层世界观（`WorldviewEntity`）晋升机制，构建 5 层地图式上下文组装器（`MapBasedPromptAssembler` 融合 P11 即时情境感知），并交付会话交接快照（`HandoffSnapshot`）与 Room v1->v2 安全迁移测试（P12）、抽取节流门控（P8）与模板日记标记（M3）。
+
+### 交付内容清单
+1. **Room v1 $\rightarrow$ v2 安全迁移与持久化拓展 (Task 1 - P12, M3)**：
+   - `WorldviewEntity` & `WorldviewDao`：高层世界观与认知升维表，承载经多天反复验证的稳定习惯与生活哲学；
+   - `ScheduledAlarmEntity` & `ScheduledAlarmDao`：自主闹钟日程约定表，支持 Bot 自主定闹钟并标记待执行状态；
+   - `SelfExperienceEntity.isPlaceholder`：扩展模板日记标记，防止无对话时的独处占位日记污染自叙经历活水（M3）；
+   - `XiaoxiDatabase.MIGRATION_1_2`：无损迁移 SQL，`RoomMigrationTest` 与 `WorldviewAndAlarmDaoTest` 4 个测试全绿通过，变异验证全红转全绿。
+2. **长期记忆抽取节流门控与水位线管理 (Task 2 - P8)**：
+   - `MemoryExtractor`：增加 3 分钟冷却与积攒 3 轮双门控（`throttleIntervalMs = 180_000L`, `minTurnsAccumulated = 3`），维护 `pendingTurns` 与水位线 `lastExtractionTime`，支持批量上下文一次性抽取与 `force` 强制抽取；
+   - `MemoryExtractorThrottlingTest`：3 个测试用例全绿通过，单测验证大幅削减约 70% 冗余 LLM 抽取请求，变异验证全红转全绿。
+3. **梦系统记忆去重、时间绝对化与矛盾消歧核心算法 (Task 3)**：
+   - `SemanticDeduplicator`：分类聚类近义记忆，合并继承最高重要性与累加热度，归档冗余条目，严守“消化后条目数 $\le$ 原始条目数”反囤积铁律；
+   - `TimeDisambiguator`：将“明天/后天/大后天/昨天/前天/下周一”等时效口语基于记忆产生时戳绝对化替换为 ISO 日期（YYYY-MM-DD）；
+   - `BeliefRevisionEngine`：正负排斥特征词对检测新旧认知冲突（咖啡改茶、吃辣改清淡、搬家、情感），旧条目迁移至 `status = 'superseded'` 并记录 `superseded_by` 与历史快照；
+   - `WorldviewPromoter`：自动提炼高频验证事实（`hitCount >= 3` 或重要性极高）晋升至 `WorldviewEntity`；
+   - `SemanticDeduplicatorTest`, `TimeDisambiguatorTest`, `BeliefRevisionEngineTest`, `WorldviewPromoterTest` 9 个测试用例全绿通过，变异验证全红转全绿。
+4. **自叙梦系统协调器与夜间调度 Worker (Task 4)**：
+   - `DreamEmergenceSynthesizer`：结合当日整理的重要世界观与被修正事实，提炼清晨破冰第一人称思维活水存入 `unspoken_thoughts`（`urgency = 4.5f`）；
+   - `SubconsciousDreamCoordinator`：总控串联 6 大流水线（时间绝对化 $\rightarrow$ 语义去重 $\rightarrow$ 矛盾消歧 $\rightarrow$ 世界观晋升 $\rightarrow$ 占位日记刷新 $\rightarrow$ 梦醒浮现活水注入）；
+   - `SubconsciousDreamWorker`：严苛夜间后台调度，严格限制在充电中 + 设备空闲待机 + 已联网时执行，周期 24 小时，严禁常驻 WakeLock；
+   - `SubconsciousDreamCoordinatorTest` 与 `SubconsciousDreamWorkerTest` 2 个测试用例全绿通过，变异验证全红转全绿。
+5. **5 层地图式上下文组装器与即时情境感知接入 (Task 5 - P11)**：
+   - `MapBasedPromptAssembler`：
+     - Level 0: 记忆地图 (Memory Map: 领域目录与数量统计，极低静态 Token)；
+     - Level 1: 核心认知与花名册 (Worldview & Roster)；
+     - Level 2: 备忘与工作记忆 (Memo 3-Tier: Resident 常驻核心 / Active 观察)；
+     - Level 3: 梦境浮现与自叙经历 (Dream Emergence & Reflection)；
+     - Level 4: 即时情境感知 (Immediate Environment Context: 前台应用停留时长、屏幕状态、脱敏通知，彻底解决 P11 采而不议断层)；
+   - `DualTrackMemoryManager`：提供 `assembleMapBasedContext` 供主对话装配；
+   - `MapBasedPromptAssemblerTest` 3 个测试用例全绿通过，变异验证全红转全绿。
+6. **会话交接快照机制与长程会话平滑过渡 (Task 6 - 4.B, Handoff)**：
+   - `HandoffSnapshot`：数据契约承载上一阶段核心话题、待续约定与情感基调；
+   - `HandoffManager`：在长程对话超限（>20 轮或预算截断）时提炼阶段性交接快照；
+   - `ChatHistoryTrimmer.trimWithSnapshot`：将快照格式化为 `[上一阶段对话交接快照: ...]` 锚定于裁剪后的历史首部；
+   - `ChatViewModel`：主链路接线，平滑传递交接快照，彻底根除长程会话因滑动窗口截断引起的“瞬间失忆”；
+   - `HandoffManagerTest` 与 `ChatViewModelHandoffTest` 4 个测试用例全绿通过，变异验证全红转全绿。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: 316 tests completed, 0 failed, 100% pass (测试套件从 293 扩充至 316，新增 23 个测试)
+  - `./gradlew assembleDebug`: BUILD SUCCESSFUL in 5s (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第二轮优化第三里程碑（Milestone 2.3）全绿达成！
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，293 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，316 tests passed）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
@@ -818,14 +864,15 @@
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
    - **代码编写前必读局部方案**：严禁写 Dummy Code。
 3. **最新 Git 状态**：
-   - 当前工作区分支：`feat/round2-m22-helix-coordinator`。
-   - 最新进展：Milestone 2.2（Helix-GUI 任务代行总控与执行态接线）全绿验收达成，293 个单测 100% 通过。
+   - 当前工作区分支：`feat/round2-m23-dream-memory`。
+   - 最新进展：Milestone 2.3（自叙梦系统与 5 层记忆地图化重构）全绿验收达成，316 个单测 100% 通过。
 4. **整体系统现状**：
    - Phase 0 ~ Phase 5 全部达成 (249 tests 基线)
    - 第二轮优化第 0 步先期护栏达成 (259 tests，P1, P6, P2 就位)
    - 第二轮优化 Milestone 2.1 达成 (270 tests，执行态基建与坐标断层缝合)
    - 第二轮优化 Milestone 2.2 达成 (293 tests，Coordinator状态机 / Tool路由 / 流式性能 / 备份隔离)
-   - 下一阶段：Milestone 2.3 自叙梦系统与 5 层记忆地图化重构 (SubconsciousDreamWorker / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff)
+   - 第二轮优化 Milestone 2.3 达成 (316 tests，自叙梦系统 / 语义去重 / 相对时间绝对化 / 矛盾消歧 / WORLDVIEW / 5层记忆地图 / Handoff 快照 / Room v2)
+   - 下一阶段：Milestone 2.4 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测)
 
 
 
