@@ -14,6 +14,7 @@ import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.network.model.LlmStreamEvent
+import com.xiaoxi.android.persona.HandoffManager
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
 import com.xiaoxi.android.persona.model.CharacterCard
@@ -34,8 +35,9 @@ class ChatViewModel(
     private val humannessFilter: HumannessFilter = HumannessFilter(),
     private val chatDialogueDao: ChatDialogueDao? = null,
     private val memoryExtractor: MemoryExtractor? = null,
+    val handoffManager: HandoffManager = HandoffManager(),
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
-    private val sessionId: String = "default_session"
+    val sessionId: String = "default_session"
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -155,7 +157,16 @@ class ChatViewModel(
                     thoughts = thoughts.map { it.thought }
                 )
 
-                val dynamicContext = memoryManager.assembleDynamicContext(
+                val mapContext = memoryManager.assembleMapBasedContext(
+                    query = trimmed,
+                    moodValence = currentMood.defaultVector.valence,
+                    charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
+                    preRecalledUserMemories = userMemories,
+                    preRecalledSelfExperiences = selfExps,
+                    preRecalledUnspokenThoughts = thoughts
+                )
+
+                val dynamicContext = mapContext ?: memoryManager.assembleDynamicContext(
                     query = trimmed,
                     moodValence = currentMood.defaultVector.valence,
                     charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
@@ -191,8 +202,16 @@ class ChatViewModel(
                         )
                     }
 
-                // 接入 P1 上下文硬预算截断器，防止长程会话溢出大模型上下文
-                val history = ChatHistoryTrimmer.trim(rawHistory)
+                // 接入 Handoff 快照与上下文硬预算截断器，防止长程会话溢出大模型上下文
+                val latestSnapshot = handoffManager.getLatestSnapshot(sessionId)
+                val history = ChatHistoryTrimmer.trimWithSnapshot(rawHistory, latestSnapshot)
+
+                // 若产生截断出局的消息，更新交接快照
+                if (rawHistory.size > history.size) {
+                    val droppedCount = rawHistory.size - history.size
+                    val droppedMessages = rawHistory.take(droppedCount)
+                    handoffManager.maybeCreateSnapshot(sessionId, droppedMessages, currentMood.displayName)
+                }
 
                 // 防漂移护盾：记录本轮对话轮次并传入装配（驱动 PhiMiddleware 内部触发器）
                 val turnCount = phiMiddleware.recordTurn(sessionId)

@@ -1,9 +1,10 @@
 package com.xiaoxi.android.ui.chat
 
 import com.xiaoxi.android.network.model.ChatMessage
+import com.xiaoxi.android.persona.model.HandoffSnapshot
 
 /**
- * 对话历史有界硬预算截断器
+ * 对话历史有界硬预算截断器 (带 Handoff 快照重锚支持)
  *
  * 杜绝长程会话消息体无界膨胀触发大模型 400 报错或账单失控。
  */
@@ -24,6 +25,29 @@ object ChatHistoryTrimmer {
     fun estimateTokens(text: String?): Int {
         if (text.isNullOrEmpty()) return 0
         return (text.length / CHARS_PER_TOKEN).toInt().coerceAtLeast(1)
+    }
+
+    /**
+     * 支持携带 Handoff 快照的智能截断：
+     * 若提供了 snapshot，预留 snapshot 预算，并将 snapshot 格式化后作为头部锚定注入消息列表首部
+     */
+    fun trimWithSnapshot(
+        history: List<ChatMessage>,
+        snapshot: HandoffSnapshot?,
+        maxTokens: Int = DEFAULT_MAX_HISTORY_TOKENS
+    ): List<ChatMessage> {
+        if (snapshot == null) {
+            return trim(history, maxTokens)
+        }
+
+        val anchorText = snapshot.toAnchorPrompt()
+        val anchorTokens = estimateTokens(anchorText)
+        val remainingBudget = (maxTokens - anchorTokens).coerceAtLeast(100)
+
+        val trimmed = trim(history, remainingBudget)
+        val anchorMessage = ChatMessage(role = "system", content = anchorText)
+
+        return listOf(anchorMessage) + trimmed
     }
 
     /**
