@@ -4,6 +4,10 @@ import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.entity.UserMemoryEntity
+import com.xiaoxi.android.database.entity.WorldviewEntity
+import com.xiaoxi.android.perception.model.PerceptionSnapshot
+import com.xiaoxi.android.persona.MapBasedPromptAssembler
+import com.xiaoxi.android.persona.MapContextInput
 import com.xiaoxi.android.persona.PhiMiddleware
 
 /**
@@ -14,6 +18,7 @@ import com.xiaoxi.android.persona.PhiMiddleware
  * 2. Track B: 自叙轨 (Agent Self-Experiences) - 自主经历与新鲜见闻
  * 3. 念头池: Unspoken Thoughts - 碎片念头、自然衰减与紧急度优先
  * 4. 会话轨: Chat Dialogues - 多轮历史归档
+ * 5. 世界观轨: Worldview Entities - 高层综合认知
  *
  * 为 PhiMiddleware 动态上下文装配提供完备的高质量认知活水。
  */
@@ -24,6 +29,7 @@ class DualTrackMemoryManager(
     private val selfExperienceDao = database.selfExperienceDao()
     private val unspokenThoughtDao = database.unspokenThoughtDao()
     private val chatDialogueDao = database.chatDialogueDao()
+    private val worldviewDao = database.worldviewDao()
 
     /**
      * 用户轨记忆二段分层召回 (Two-Tier Recall)
@@ -124,6 +130,50 @@ class DualTrackMemoryManager(
         unspokenThoughtDao.discardExpiredThoughts(currentTs)
         // 提取紧急度最高的 pending 念头
         return unspokenThoughtDao.getTopUrgentPendingThoughts(limit = limit)
+    }
+
+    /**
+     * 高层世界观认知召回
+     */
+    suspend fun recallWorldviews(limit: Int = 5): List<WorldviewEntity> {
+        return worldviewDao.getTopConfirmed(limit = limit)
+    }
+
+    /**
+     * 5层地图式动态上下文装配
+     */
+    suspend fun assembleMapBasedContext(
+        query: String = "",
+        moodValence: Float? = null,
+        charName: String = PhiMiddleware.DEFAULT_CHAR_NAME,
+        nowTs: Long = System.currentTimeMillis(),
+        perceptionSnapshot: PerceptionSnapshot? = null,
+        preRecalledUserMemories: List<UserMemoryEntity>? = null,
+        preRecalledSelfExperiences: List<SelfExperienceEntity>? = null,
+        preRecalledUnspokenThoughts: List<UnspokenThoughtEntity>? = null,
+        preRecalledWorldviews: List<WorldviewEntity>? = null
+    ): String? {
+        val userMemories = preRecalledUserMemories
+            ?: recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)
+        val selfExperiences = preRecalledSelfExperiences
+            ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
+        val unspokenThoughts = preRecalledUnspokenThoughts
+            ?: recallUnspokenThoughts(limit = 3, currentTs = nowTs)
+        val worldviews = preRecalledWorldviews ?: recallWorldviews(limit = 5)
+
+        val dreamEmergence = unspokenThoughts.firstOrNull { it.triggerContext == "subconscious_dream_consolidation" }
+
+        val input = MapContextInput(
+            worldviews = worldviews,
+            activeMemories = userMemories,
+            archivedMemoryCount = 0,
+            dreamEmergence = dreamEmergence,
+            selfExperiences = selfExperiences,
+            perceptionSnapshot = perceptionSnapshot,
+            charName = charName
+        )
+
+        return MapBasedPromptAssembler().assemble(input)
     }
 
     /**
