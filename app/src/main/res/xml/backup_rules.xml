@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <!-- Android <12 云备份排除规则：防止亲密记忆、自定义 Key 与崩溃日志随备份同步 -->
-    <exclude domain="database" path="xiaoxi_database" />
-    <exclude domain="database" path="xiaoxi_database-shm" />
-    <exclude domain="database" path="xiaoxi_database-wal" />
+    <!-- 库名与 XiaoxiDatabase.DATABASE_NAME (xiaoxi_aether.db) 保持一致 -->
+    <exclude domain="database" path="xiaoxi_aether.db" />
+    <exclude domain="database" path="xiaoxi_aether.db-shm" />
+    <exclude domain="database" path="xiaoxi_aether.db-wal" />
     <exclude domain="sharedpref" path="xiaoxi_byok_prefs.xml" />
     <exclude domain="file" path="crashes" />
 </full-backup-content>

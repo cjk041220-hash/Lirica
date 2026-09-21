@@ -27,6 +27,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- 自主闹钟约定唤醒（Android 12+ 需声明方可请求精确闹钟；用户撤销授权时自动降级 setWindow） -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application
         android:name=".XiaoxiApplication"
         android:allowBackup="true"

@@ -212,7 +212,10 @@ class NativeToolAgent(
             )
         }
 
-        return when (call.name) {
+        // 整体异常兜底：任何工具实现抛出的异常（如精确闹钟 SecurityException、DAO 故障）
+        // 都转为 tool 结果返回给模型，绝不击穿对话主链路；CancellationException 原样上抛保协程取消语义。
+        return try {
+            when (call.name) {
             "open_app" -> {
                 val appName = args["app_name"]?.jsonPrimitive?.content ?: ""
                 val packageName = args["package_name"]?.jsonPrimitive?.content ?: ""
@@ -370,6 +373,16 @@ class NativeToolAgent(
                     output = "未知的系统工具指令: [${call.name}]"
                 )
             }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ToolExecutionResult(
+                toolCallId = call.id,
+                isSuccess = false,
+                output = "工具执行异常: ${e.message ?: e.javaClass.simpleName}",
+                errorMessage = e.message
+            )
         }
     }
 

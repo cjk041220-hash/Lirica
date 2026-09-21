@@ -3,6 +3,7 @@ package com.xiaoxi.android.common.settings
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.database.XiaoxiDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -43,12 +44,53 @@ class BackupAndByokTest {
         assertTrue("backup_rules.xml 必须存在", backupRulesFile.exists())
 
         val dataRulesContent = dataRulesFile.readText()
-        assertTrue(dataRulesContent.contains("xiaoxi_database"))
+        assertTrue(dataRulesContent.contains(XiaoxiDatabase.DATABASE_NAME))
         assertTrue(dataRulesContent.contains("xiaoxi_byok_prefs"))
+        // 库文件三件套（主库 + shm + wal）必须全部排除，防止亲密记忆随备份外流
+        assertTrue(dataRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-shm"))
+        assertTrue(dataRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-wal"))
+        assertFalse("不得残留错误的旧库名 xiaoxi_database", dataRulesContent.contains("xiaoxi_database"))
 
         val backupRulesContent = backupRulesFile.readText()
-        assertTrue(backupRulesContent.contains("xiaoxi_database"))
+        assertTrue(backupRulesContent.contains(XiaoxiDatabase.DATABASE_NAME))
         assertTrue(backupRulesContent.contains("xiaoxi_byok_prefs"))
+        assertTrue(backupRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-shm"))
+        assertTrue(backupRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-wal"))
+        assertFalse("不得残留错误的旧库名 xiaoxi_database", backupRulesContent.contains("xiaoxi_database"))
+    }
+
+    /**
+     * 常量-XML 一致性断言：备份排除规则引用的库名必须与
+     * XiaoxiDatabase.DATABASE_NAME 完全一致，防止重命名数据库后备份规则静默失效。
+     */
+    @Test
+    fun testBackupRulesDatabaseNameMatchesConstant() {
+        val projectDir = File(System.getProperty("user.dir") ?: ".")
+        val dataRulesFile = File(projectDir, "src/main/res/xml/data_extraction_rules.xml").let {
+            if (it.exists()) it else File(projectDir, "app/src/main/res/xml/data_extraction_rules.xml")
+        }
+        val backupRulesFile = File(projectDir, "src/main/res/xml/backup_rules.xml").let {
+            if (it.exists()) it else File(projectDir, "app/src/main/res/xml/backup_rules.xml")
+        }
+
+        assertEquals(
+            "data_extraction_rules.xml 必须引用 XiaoxiDatabase.DATABASE_NAME 声明的库名",
+            XiaoxiDatabase.DATABASE_NAME,
+            dataRulesFile.readLines()
+                .map { it.trim() }
+                .firstOrNull { it.startsWith("<exclude") }?.let { line ->
+                    Regex("""path="([^"]+)"""").find(line)?.groupValues?.get(1)
+                }
+        )
+        assertEquals(
+            "backup_rules.xml 必须引用 XiaoxiDatabase.DATABASE_NAME 声明的库名",
+            XiaoxiDatabase.DATABASE_NAME,
+            backupRulesFile.readLines()
+                .map { it.trim() }
+                .firstOrNull { it.startsWith("<exclude") }?.let { line ->
+                    Regex("""path="([^"]+)"""").find(line)?.groupValues?.get(1)
+                }
+        )
     }
 
     @Test

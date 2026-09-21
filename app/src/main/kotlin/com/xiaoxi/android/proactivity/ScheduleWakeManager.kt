@@ -6,10 +6,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.database.dao.ScheduledAlarmDao
 import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.entity.ScheduledAlarmEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,8 +39,17 @@ class AndroidSystemAlarmScheduler(
         }
         val pendingIntent = PendingIntent.getBroadcast(context, alarmId.hashCode(), intent, flags)
 
+        // Android 12+ 精确闹钟受 SCHEDULE_EXACT_ALARM 门控且用户可随时撤销；
+        // 无权限时降级 setWindow（±10 分钟窗口），杜绝 SecurityException 击穿调用链。
+        val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            alarmManager.canScheduleExactAlarms()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+            if (canScheduleExact) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+            } else {
+                alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAtMs, EXACT_FALLBACK_WINDOW_MS, pendingIntent)
+            }
         } else {
             alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
         }
@@ -63,6 +74,9 @@ class AndroidSystemAlarmScheduler(
     companion object {
         const val ACTION_SCHEDULE_WAKE = "com.xiaoxi.android.action.SCHEDULE_WAKE"
         const val EXTRA_ALARM_ID = "extra_alarm_id"
+
+        /** 精确闹钟权限缺失时 setWindow 降级的触发窗口（毫秒） */
+        private const val EXACT_FALLBACK_WINDOW_MS = 600_000L
     }
 }
 
@@ -72,7 +86,11 @@ class ScheduleWakeReceiver : BroadcastReceiver() {
             val alarmId = intent.getStringExtra(AndroidSystemAlarmScheduler.EXTRA_ALARM_ID) ?: return
             val app = context.applicationContext as? com.xiaoxi.android.XiaoxiApplication ?: return
             val pendingResult = goAsync()
-            val scope = CoroutineScope(Dispatchers.IO)
+            // 协程异常兜底：异常只记日志不上抛，避免 doOnSystem 崩溃循环；finally 仍保证 finish() 归还系统
+            val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+                XiaoxiLog.e(TAG, "闹钟唤醒协程处理异常 (alarmId=$alarmId)", throwable)
+            }
+            val scope = CoroutineScope(Dispatchers.IO + exceptionHandler)
             scope.launch {
                 try {
                     val alarms = app.database.scheduledAlarmDao().getPendingAlarms(System.currentTimeMillis() + 1000L)
@@ -85,6 +103,10 @@ class ScheduleWakeReceiver : BroadcastReceiver() {
                 }
             }
         }
+    }
+
+    private companion object {
+        const val TAG = "ScheduleWakeReceiver"
     }
 }
 
