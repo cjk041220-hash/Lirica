@@ -26,6 +26,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
@@ -34,11 +35,17 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.xiaoxi.android.MainActivity
 import com.xiaoxi.android.XiaoxiApplication
+import com.xiaoxi.android.automation.coordinator.ExecutionStepItem
+import com.xiaoxi.android.automation.coordinator.StepExecutionStatus
+import com.xiaoxi.android.automation.coordinator.TaskExecutionState
 import com.xiaoxi.android.emotion.model.MoodState
+import com.xiaoxi.android.overlay.ui.DraftConfirmationCard
 import com.xiaoxi.android.overlay.ui.IcebreakerBubble
 import com.xiaoxi.android.overlay.ui.OverlayBubble
 import com.xiaoxi.android.overlay.ui.OverlayExpandPanel
+import com.xiaoxi.android.overlay.ui.TaskTraceCard
 import com.xiaoxi.android.overlay.viewmodel.OverlayExpandViewModel
+import kotlinx.coroutines.launch
 
 /**
  * 跨应用常驻伴生悬浮窗服务 (Companion Overlay Service)
@@ -63,12 +70,49 @@ class CompanionOverlayService : LifecycleService() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         initViewModel()
         setupOverlayView()
+        observePerception()
+        observeCoordinatorTaskState()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        expandViewModel?.refreshIcebreaker()
+        val app = application as? XiaoxiApplication
+        val snapshot = app?.perceptionPipeline?.snapshotFlow?.value
+        if (snapshot != null) {
+            expandViewModel?.processPerception(snapshot)
+        } else {
+            expandViewModel?.refreshIcebreaker()
+        }
         return START_STICKY
+    }
+
+    private fun observePerception() {
+        val app = application as? XiaoxiApplication ?: return
+        lifecycleScope.launch {
+            app.perceptionPipeline.snapshotFlow.collect { snapshot ->
+                expandViewModel?.processPerception(snapshot)
+            }
+        }
+    }
+
+    private fun observeCoordinatorTaskState() {
+        val app = application as? XiaoxiApplication ?: return
+        lifecycleScope.launch {
+            app.helixCoordinator.state.collect { state ->
+                when (state) {
+                    is TaskExecutionState.ExecutingStep -> {
+                        promoteToForeground(state.actionDescription)
+                    }
+                    is TaskExecutionState.AwaitingUserConfirmation -> {
+                        setWindowFocusable(true)
+                    }
+                    is TaskExecutionState.Completed, is TaskExecutionState.Failed, TaskExecutionState.Idle -> {
+                        demoteFromForeground()
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -121,7 +165,8 @@ class CompanionOverlayService : LifecycleService() {
             llmClient = app.llmClient,
             memoryManager = app.memoryManager,
             phiMiddleware = app.phiMiddleware,
-            humannessFilter = app.humannessFilter
+            humannessFilter = app.humannessFilter,
+            proactiveCoordinator = app.proactiveCoordinator
         )
     }
 
@@ -180,11 +225,62 @@ class CompanionOverlayService : LifecycleService() {
                         )
                     })
 
+                val taskState by (app?.helixCoordinator?.state?.collectAsState()
+                    ?: androidx.compose.runtime.remember {
+                        androidx.compose.runtime.mutableStateOf(TaskExecutionState.Idle)
+                    })
+
                 Column(
                     horizontalAlignment = Alignment.End
                 ) {
-                    // 1. 顶部未完成念头破冰小气泡 (当未展开且有念头时)
-                    if (!uiState.isExpanded) {
+                    // 0. 草稿二次确认门卡片 (形态三)
+                    if (taskState is TaskExecutionState.AwaitingUserConfirmation) {
+                        val confirmState = taskState as TaskExecutionState.AwaitingUserConfirmation
+                        DraftConfirmationCard(
+                            isVisible = true,
+                            title = confirmState.draftTitle ?: "草稿确认",
+                            riskDetails = confirmState.riskDetails,
+                            initialDraftContent = confirmState.draftContent ?: "",
+                            onConfirm = { edited ->
+                                if (confirmState.onConfirmedWithDraft != null) {
+                                    confirmState.onConfirmedWithDraft?.invoke(edited)
+                                } else {
+                                    confirmState.onConfirmed()
+                                }
+                                setWindowFocusable(false)
+                            },
+                            onCancel = {
+                                confirmState.onCancelled()
+                                setWindowFocusable(false)
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+
+                    // 0.1 任务代行实时步骤流水卡 (形态二)
+                    if (taskState is TaskExecutionState.ExecutingStep && uiState.isExpanded) {
+                        val execState = taskState as TaskExecutionState.ExecutingStep
+                        TaskTraceCard(
+                            isVisible = true,
+                            goal = execState.actionDescription,
+                            currentStepIndex = execState.stepIndex,
+                            totalSteps = execState.totalStepsEstimate,
+                            steps = listOf(
+                                ExecutionStepItem(
+                                    index = execState.stepIndex,
+                                    description = execState.actionDescription,
+                                    status = StepExecutionStatus.RUNNING
+                                )
+                            ),
+                            onCancelClick = {
+                                app?.helixCoordinator?.cancelCurrentTask()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+
+                    // 1. 顶部未完成念头破冰小气泡 (当未展开且无确认门卡片时)
+                    if (!uiState.isExpanded && taskState !is TaskExecutionState.AwaitingUserConfirmation) {
                         IcebreakerBubble(
                             thought = uiState.icebreakerThought,
                             mood = currentMood,
@@ -230,9 +326,10 @@ class CompanionOverlayService : LifecycleService() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // 3. 常驻悬浮伴生体小球
+                    // 3. 常驻悬浮伴生体小球 (形态一：执行中触发流光脉冲)
                     OverlayBubble(
                         mood = currentMood,
+                        isExecuting = (taskState is TaskExecutionState.ExecutingStep),
                         onClick = {
                             vm?.toggleExpanded()
                         },

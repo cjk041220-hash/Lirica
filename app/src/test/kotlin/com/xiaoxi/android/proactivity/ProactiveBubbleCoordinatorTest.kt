@@ -165,6 +165,51 @@ class ProactiveBubbleCoordinatorTest {
     }
 
     @Test
+    fun testCoordinate_dailyQuotaExhausted_priorityWakeThoughtBypassesQuota() = runTest {
+        val snapshot = createSnapshot()
+        val normalThought = UnspokenThoughtEntity(
+            id = "thought-normal",
+            thought = "普通闲聊念头",
+            urgency = 2.0f,
+            createdAt = 100_000L
+        )
+        val priorityWakeThought = UnspokenThoughtEntity(
+            id = "thought_wake_alarm_999",
+            thought = "【自定约定】时间到了，提醒喝水",
+            urgency = 4.8f,
+            createdAt = 103_000L
+        )
+
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 4.8
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(normalThought)
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.PROACTIVE_INTERRUPT,
+            innerMotivation = 4.8,
+            interruptCost = 1.0,
+            effectiveMotivation = 4.8,
+            breakpoint = BreakpointResult(true, BreakpointType.RETURN_TO_LAUNCHER),
+            reason = "Ready"
+        )
+
+        // 消耗完 2 次日常闲聊配额
+        val r1 = coordinator.coordinate(snapshot, nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, r1.level)
+        val r2 = coordinator.coordinate(snapshot, nowMs = 101_000L)
+        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, r2.level)
+
+        // 此时待决念头变为自定约定到期念头 (priorityWakeThought)
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(priorityWakeThought)
+
+        val r3 = coordinator.coordinate(snapshot, nowMs = 103_000L)
+        assertEquals(
+            "高优先级自定约定闹钟到期念头必须突破闲聊配额限制，展示 L2 气泡",
+            ProactivityLevel.L2_ICEBREAKER_BUBBLE,
+            r3.level
+        )
+        assertEquals("thought_wake_alarm_999", r3.thought?.id)
+    }
+
+    @Test
     fun testFeedback_dismissed_increasesBackoffPenalty() = runTest {
         val now = 100_000L
         val initialPenalty = coordinator.getBackoffPenalty()

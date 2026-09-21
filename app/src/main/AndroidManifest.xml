@@ -104,6 +104,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- 自定闹钟约定唤醒广播接收器 -->
+        <receiver
+            android:name=".proactivity.ScheduleWakeReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.xiaoxi.android.action.SCHEDULE_WAKE" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

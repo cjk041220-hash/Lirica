@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -423,8 +424,135 @@ class HelixGuiCoordinatorTest {
     }
 
     @Test
+    fun testExecuteTask_typeWithDraftConfirmation_injectsEditedDraft() = runTest {
+        val mockNodes = listOf(
+            createMockNode("1", "确认下单备注", "android.widget.EditText", ElementBounds(100, 800, 900, 950), isEditable = true, priority = 5)
+        )
+
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.example.app",
+            activityName = "MainActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 10L
+        )
+
+        coEvery {
+            groundingEngine.locate(any(), any(), any(), any(), any())
+        } returns GroundingResult.Found(
+            targetPoint = Point2D(500f, 875f),
+            bounds = NormalizedRect(100f, 400f, 900f, 450f),
+            source = GroundingSource.ACCESSIBILITY_EXACT,
+            confidence = 1.0f,
+            refNode = UiElementNode(
+                className = "android.widget.EditText",
+                text = "确认下单备注",
+                bounds = ElementBounds(100, 800, 900, 950)
+            )
+        )
+
+        coEvery { textInputExecutor.injectText(any(), any(), any()) } returns true
+
+        val actions = listOf(
+            CoordinatorAction.Type(GroundingQuery(text = "确认下单备注"), text = "原始草稿内容", description = "输入备注")
+        )
+
+        val job = launch {
+            coordinator.executeTask("确认下单备注输入", actions)
+        }
+
+        testScheduler.runCurrent()
+
+        val state = coordinator.state.value
+        assertTrue("状态机必须进入 AwaitingUserConfirmation", state is TaskExecutionState.AwaitingUserConfirmation)
+        val confirmState = state as TaskExecutionState.AwaitingUserConfirmation
+
+        assertEquals("原始草稿内容", confirmState.draftContent)
+        assertEquals("输入文本草稿确认", confirmState.draftTitle)
+        assertNotNull(confirmState.onConfirmedWithDraft)
+
+        // 用户在草稿卡中编辑文字并确认
+        confirmState.onConfirmedWithDraft?.invoke("修改后的安全内容")
+
+        testScheduler.advanceUntilIdle()
+        job.join()
+
+        assertTrue(coordinator.state.value is TaskExecutionState.Completed)
+        coVerify(exactly = 1) {
+            textInputExecutor.injectText(any(), any(), "修改后的安全内容")
+        }
+    }
+
+    @Test
     fun testCancelTask_resetsToIdle() = runTest {
         coordinator.cancelCurrentTask()
         assertEquals(TaskExecutionState.Idle, coordinator.state.value)
+    }
+
+    @Test
+    fun testExecuteTask_awaitingConfirmationTimeout_failsWithTimeout() = runTest {
+        val customCoordinator = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            confirmationTimeoutMs = 150L
+        )
+
+        val mockNodes = listOf(
+            createMockNode("1", "确认下单", "android.widget.Button", ElementBounds(100, 800, 900, 950), priority = 5)
+        )
+
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.example.app",
+            activityName = "MainActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 10L
+        )
+
+        coEvery {
+            groundingEngine.locate(any(), any(), any(), any(), any())
+        } returns GroundingResult.Found(
+            targetPoint = Point2D(500f, 875f),
+            bounds = NormalizedRect(100f, 400f, 900f, 450f),
+            source = GroundingSource.ACCESSIBILITY_EXACT,
+            confidence = 1.0f,
+            refNode = UiElementNode(
+                className = "android.widget.Button",
+                text = "确认下单",
+                bounds = ElementBounds(100, 800, 900, 950)
+            )
+        )
+
+        var executionResult: TaskExecutionResult? = null
+        val job = launch {
+            executionResult = customCoordinator.executeTask(
+                "提交高危订单",
+                listOf(CoordinatorAction.Click(GroundingQuery(text = "确认下单"), description = "点击提交订单"))
+            )
+        }
+
+        testScheduler.runCurrent()
+        assertTrue(customCoordinator.state.value is TaskExecutionState.AwaitingUserConfirmation)
+
+        // 时间流逝超过 150ms 超时阈值，且用户未做确认
+        testScheduler.advanceTimeBy(300L)
+        testScheduler.advanceUntilIdle()
+        job.join()
+
+        assertTrue("任务执行结果必须为 Failure", executionResult is TaskExecutionResult.Failure)
+        assertTrue(
+            "失败原因必须包含超时提示",
+            (executionResult as TaskExecutionResult.Failure).reason.contains("超时")
+        )
+        assertTrue(customCoordinator.state.value is TaskExecutionState.Failed)
     }
 }

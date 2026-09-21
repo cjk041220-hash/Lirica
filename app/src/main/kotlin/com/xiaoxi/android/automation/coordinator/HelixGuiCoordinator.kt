@@ -58,7 +58,8 @@ class HelixGuiCoordinatorImpl(
     private val rootNodeProvider: () -> AccessibilityNodeInfo? = { serviceHolder.get()?.rootInActiveWindow },
     private val currentPackageProvider: () -> String? = { serviceHolder.get()?.rootInActiveWindow?.packageName?.toString() },
     private val screenWidthProvider: () -> Int = { 1080 },
-    private val screenHeightProvider: () -> Int = { 2400 }
+    private val screenHeightProvider: () -> Int = { 2400 },
+    private val confirmationTimeoutMs: Long = 300_000L
 ) : HelixGuiCoordinator {
 
     private val _state = MutableStateFlow<TaskExecutionState>(TaskExecutionState.Idle)
@@ -271,6 +272,8 @@ class HelixGuiCoordinatorImpl(
                 )
 
                 val decision = gatekeeper.evaluate(proposed)
+                var effectiveText = if (action is CoordinatorAction.Type) action.text else ""
+
                 when (decision) {
                     is GatekeeperDecision.PhysicalBlocked -> {
                         _state.value = TaskExecutionState.Failed("零信任高危护栏物理熔断: ${decision.reason} (${decision.rule})", stepIndex)
@@ -279,20 +282,36 @@ class HelixGuiCoordinatorImpl(
                     is GatekeeperDecision.RequireUserConfirmation -> {
                         var confirmed = false
                         var cancelled = false
+                        val initialDraft = if (action is CoordinatorAction.Type) action.text else null
+                        val draftTitle = if (action is CoordinatorAction.Type) "输入文本草稿确认" else "敏感操作二次确认"
+
                         _state.value = TaskExecutionState.AwaitingUserConfirmation(
                             token = decision.token,
                             riskDetails = decision.details.description,
+                            draftContent = initialDraft,
+                            draftTitle = draftTitle,
                             onConfirmed = {
                                 gatekeeper.confirmAction(decision.token)
                                 confirmed = true
                             },
                             onCancelled = {
                                 cancelled = true
+                            },
+                            onConfirmedWithDraft = { edited ->
+                                effectiveText = edited
+                                gatekeeper.confirmAction(decision.token)
+                                confirmed = true
                             }
                         )
 
-                        // 挂起等待二次确认
+                        val startTime = System.currentTimeMillis()
+                        // 挂起等待二次确认 (带超时熔断保护)
                         while (!confirmed && !cancelled && !isCancelled.get()) {
+                            if (System.currentTimeMillis() - startTime >= confirmationTimeoutMs) {
+                                cancelled = true
+                                _state.value = TaskExecutionState.Failed("用户确认超时 ($confirmationTimeoutMs ms)", stepIndex)
+                                return false
+                            }
                             delay(50L)
                         }
 
@@ -315,10 +334,11 @@ class HelixGuiCoordinatorImpl(
                         true
                     }
                     is CoordinatorAction.Type -> {
+                        val textToInject = if (effectiveText.isNotBlank()) effectiveText else action.text
                         textInputExecutor.injectText(
                             node = null,
                             targetBounds = bounds,
-                            text = action.text
+                            text = textToInject
                         )
                     }
                     else -> true

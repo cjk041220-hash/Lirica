@@ -10,6 +10,8 @@ import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
+import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.network.ToolCallAssembler
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
@@ -36,6 +38,7 @@ class ChatViewModel(
     private val chatDialogueDao: ChatDialogueDao? = null,
     private val memoryExtractor: MemoryExtractor? = null,
     val handoffManager: HandoffManager = HandoffManager(),
+    val toolAgent: NativeToolAgent? = null,
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
     val sessionId: String = "default_session"
 ) : ViewModel() {
@@ -226,44 +229,96 @@ class ChatViewModel(
                     turnCount = turnCount
                 )
 
-                // 5. 流式打字机累积（O(1) 尾部替换，杜绝逐 Token 全列表映射深拷贝）
-                val accumulated = StringBuilder()
-                llmClient.streamChat(llmConfig, assembledMessages).collect { event ->
-                    when (event) {
-                        is LlmStreamEvent.Token -> {
-                            accumulated.append(event.text)
-                            val currentText = accumulated.toString()
-                            _uiState.update { state ->
-                                val list = state.messages
-                                val lastIdx = list.lastIndex
-                                val updated = if (lastIdx >= 0 && list[lastIdx].id == assistantMessageId) {
-                                    val mutable = list.toMutableList()
-                                    mutable[lastIdx] = list[lastIdx].copy(text = currentText)
-                                    mutable
+                // 5. 流式打字机累积与系统工具闭环 (最多 MAX_TOOL_ITERATIONS 轮)
+                val priorRoundsText = StringBuilder()
+                var currentRoundText = ""
+                var conversationMessages = assembledMessages
+                val maxToolIterations = 5
+                var iteration = 0
+
+                while (iteration < maxToolIterations) {
+                    iteration++
+                    val accumulated = StringBuilder()
+                    val toolAssembler = ToolCallAssembler()
+
+                    llmClient.streamChat(
+                        config = llmConfig,
+                        messages = conversationMessages,
+                        tools = toolAgent?.declaredTools
+                    ).collect { event ->
+                        when (event) {
+                            is LlmStreamEvent.Token -> {
+                                accumulated.append(event.text)
+                                val currentText = if (priorRoundsText.isNotEmpty()) {
+                                    "${priorRoundsText}\n${accumulated}"
                                 } else {
-                                    list.map { msg ->
-                                        if (msg.id == assistantMessageId) msg.copy(text = currentText) else msg
-                                    }
+                                    accumulated.toString()
                                 }
-                                state.copy(messages = updated)
+                                _uiState.update { state ->
+                                    val list = state.messages
+                                    val lastIdx = list.lastIndex
+                                    val updated = if (lastIdx >= 0 && list[lastIdx].id == assistantMessageId) {
+                                        val mutable = list.toMutableList()
+                                        mutable[lastIdx] = list[lastIdx].copy(text = currentText)
+                                        mutable
+                                    } else {
+                                        list.map { msg ->
+                                            if (msg.id == assistantMessageId) msg.copy(text = currentText) else msg
+                                        }
+                                    }
+                                    state.copy(messages = updated)
+                                }
                             }
+                            is LlmStreamEvent.ToolCallChunk -> {
+                                toolAssembler.appendChunk(event)
+                            }
+                            is LlmStreamEvent.Error -> {
+                                throw event.throwable
+                            }
+                            is LlmStreamEvent.Done -> {}
+                            else -> {}
                         }
-                        is LlmStreamEvent.Error -> {
-                            throw event.throwable
+                    }
+
+                    val completedCalls = toolAssembler.getCompletedToolCalls()
+                    if (completedCalls.isNotEmpty() && toolAgent != null) {
+                        val roundContent = accumulated.toString()
+                        if (roundContent.isNotBlank()) {
+                            if (priorRoundsText.isNotEmpty()) priorRoundsText.append("\n")
+                            priorRoundsText.append(roundContent)
                         }
-                        is LlmStreamEvent.Done -> {}
-                        else -> {}
+
+                        val assistantToolMessage = ChatMessage(
+                            role = "assistant",
+                            content = roundContent.ifBlank { null },
+                            toolCalls = completedCalls
+                        )
+
+                        val toolResults = toolAgent.executeToolCalls(completedCalls)
+                        val toolMessages = toolResults.map { it.toChatMessage() }
+
+                        conversationMessages = conversationMessages + assistantToolMessage + toolMessages
+                    } else {
+                        currentRoundText = accumulated.toString()
+                        break
                     }
                 }
 
                 // 6. 流式完成：反 AI 腔过滤与二次自纠环改写
-                val rawResponse = accumulated.toString()
+                val rawResponse = if (priorRoundsText.isNotEmpty() && currentRoundText.isNotBlank()) {
+                    "${priorRoundsText}\n$currentRoundText"
+                } else if (currentRoundText.isNotBlank()) {
+                    currentRoundText
+                } else {
+                    priorRoundsText.toString()
+                }
+
                 val filterResult = humannessFilter.filterWithCorrectionLoop(
                     text = rawResponse,
                     moodState = currentMood,
                     maxRetries = 1
                 ) { instruction ->
-                    val correctionMessages = assembledMessages + listOf(
+                    val correctionMessages = conversationMessages + listOf(
                         ChatMessage(role = "assistant", content = rawResponse),
                         ChatMessage(role = "user", content = instruction)
                     )

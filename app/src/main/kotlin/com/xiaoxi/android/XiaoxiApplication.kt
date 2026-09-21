@@ -1,6 +1,18 @@
 package com.xiaoxi.android
 
 import android.app.Application
+import android.content.ClipboardManager
+import android.content.Context
+import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
+import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinatorImpl
+import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeperImpl
+import com.xiaoxi.android.automation.gesture.GestureExecutorImpl
+import com.xiaoxi.android.automation.gesture.TextInputExecutor
+import com.xiaoxi.android.automation.grounding.ExecutionTreeExtractor
+import com.xiaoxi.android.automation.grounding.HybridGroundingEngineImpl
+import com.xiaoxi.android.automation.healing.SelfHealingWatchdogImpl
+import com.xiaoxi.android.automation.intent.IntentActionDispatcherImpl
 import com.xiaoxi.android.common.logging.XiaoxiCrashHandler
 import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.database.XiaoxiDatabase
@@ -8,6 +20,7 @@ import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
+import com.xiaoxi.android.perception.AccessibilityServiceHolder
 import com.xiaoxi.android.perception.PerceptionPipeline
 import com.xiaoxi.android.perception.PrivacyBreaker
 import com.xiaoxi.android.perception.ScreenStateWatcher
@@ -18,6 +31,12 @@ import com.xiaoxi.android.perception.model.ScreenState
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
 import com.xiaoxi.android.proactivity.AutonomousLifeWorker
+import com.xiaoxi.android.proactivity.ProactiveBubbleCoordinator
+import com.xiaoxi.android.proactivity.ProactiveBubbleCoordinatorImpl
+import com.xiaoxi.android.proactivity.SilenceDecisionEngine
+import com.xiaoxi.android.proactivity.SilenceDecisionEngineImpl
+import com.xiaoxi.android.proactivity.UnspokenThoughtManager
+import com.xiaoxi.android.proactivity.UnspokenThoughtManagerImpl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -61,6 +80,24 @@ class XiaoxiApplication : Application() {
     lateinit var perceptionPipeline: PerceptionPipeline
         private set
 
+    lateinit var unspokenThoughtManager: UnspokenThoughtManager
+        private set
+
+    lateinit var silenceDecisionEngine: SilenceDecisionEngine
+        private set
+
+    lateinit var proactiveCoordinator: ProactiveBubbleCoordinator
+        private set
+
+    lateinit var scheduleWakeManager: com.xiaoxi.android.proactivity.ScheduleWakeManager
+        private set
+
+    lateinit var helixCoordinator: HelixGuiCoordinator
+        private set
+
+    lateinit var nativeToolAgent: NativeToolAgent
+        private set
+
     /**
      * 后台任务（记忆抽取等）共用的 LLM 配置
      */
@@ -83,6 +120,46 @@ class XiaoxiApplication : Application() {
         humannessFilter = HumannessFilter()
 
         startPerceptionPipeline()
+
+        unspokenThoughtManager = UnspokenThoughtManagerImpl(database.unspokenThoughtDao())
+        silenceDecisionEngine = SilenceDecisionEngineImpl()
+        proactiveCoordinator = ProactiveBubbleCoordinatorImpl(
+            thoughtManager = unspokenThoughtManager,
+            decisionEngine = silenceDecisionEngine,
+            emotionEngine = emotionEngine
+        )
+
+        scheduleWakeManager = com.xiaoxi.android.proactivity.ScheduleWakeManager(
+            scheduledAlarmDao = database.scheduledAlarmDao(),
+            unspokenThoughtDao = database.unspokenThoughtDao(),
+            alarmScheduler = com.xiaoxi.android.proactivity.AndroidSystemAlarmScheduler(this)
+        )
+
+        val intentDispatcher = IntentActionDispatcherImpl(this)
+        val treeExtractor = ExecutionTreeExtractor()
+        val gestureExecutor = GestureExecutorImpl(serviceProvider = { AccessibilityServiceHolder.get() })
+        val clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val textInputExecutor = TextInputExecutor(clipboardManager, gestureExecutor)
+        val watchdog = SelfHealingWatchdogImpl()
+        val gatekeeper = FinancialGatekeeperImpl()
+        val groundingEngine = HybridGroundingEngineImpl()
+
+        helixCoordinator = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog
+        )
+
+        nativeToolAgent = NativeToolAgent(
+            coordinator = helixCoordinator,
+            intentDispatcher = intentDispatcher,
+            scheduleWakeManager = scheduleWakeManager
+        )
+
         registerAutonomousLife()
     }
 
@@ -120,11 +197,12 @@ class XiaoxiApplication : Application() {
     }
 
     /**
-     * 注册闲时自主生活周期任务（幂等，KEEP 策略）。
+     * 注册闲时自主生活与自叙入梦周期任务（幂等，KEEP 策略）。
      * runCatching 兜底：Robolectric 单测环境可能未初始化 WorkManager，不应阻断 Application 启动。
      */
-    private fun registerAutonomousLife() {
+    fun registerAutonomousLife() {
         runCatching { AutonomousLifeWorker.enqueue(this) }
+        runCatching { com.xiaoxi.android.memory.consolidation.SubconsciousDreamWorker.enqueue(this) }
     }
 
     companion object {

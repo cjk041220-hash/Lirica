@@ -44,16 +44,20 @@ import com.xiaoxi.android.emotion.model.MoodState
 fun OverlayBubble(
     mood: MoodState,
     modifier: Modifier = Modifier,
+    isExecuting: Boolean = false,
     onClick: () -> Unit = {},
     onDragDelta: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {}
 ) {
-    // 16 种情绪的动态光晕主色调映射
-    val (primaryHaloColor, secondaryHaloColor, microExpression) = getMoodVisualTokens(mood)
+    // 16 种情绪的动态光晕主色调映射；若正在代行操作，切换为蓝紫色执行脉冲 (形态一)
+    val (rawPrimaryColor, rawSecondaryColor, rawExpression) = getMoodVisualTokens(mood)
+    val primaryHaloColor = if (isExecuting) Color(0xFF7C4DFF) else rawPrimaryColor
+    val secondaryHaloColor = if (isExecuting) Color(0xFF00E5FF) else rawSecondaryColor
+    val microExpression = if (isExecuting) "⚡" else rawExpression
 
-    // 呼吸律动动效：根据情绪唤醒度 (Arousal) 调整呼吸周期
+    // 呼吸律动动效：执行中采用 700ms 快速流光律动
     val infiniteTransition = rememberInfiniteTransition(label = "BubbleBreathing")
-    val pulseDuration = when (mood) {
+    val pulseDuration = if (isExecuting) 700 else when (mood) {
         MoodState.EXCITED, MoodState.LIVELY -> 900
         MoodState.HAPPY, MoodState.CURIOUS, MoodState.EXPECTANT -> 1400
         MoodState.SLEEPY, MoodState.LAZY, MoodState.DAZE -> 2600

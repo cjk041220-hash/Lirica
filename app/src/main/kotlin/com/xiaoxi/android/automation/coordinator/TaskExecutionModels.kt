@@ -15,12 +15,26 @@ sealed interface TaskExecutionState {
     data class AwaitingUserConfirmation(
         val token: String,
         val riskDetails: String,
+        val draftContent: String? = null,
+        val draftTitle: String? = null,
         val onConfirmed: () -> Unit,
-        val onCancelled: () -> Unit
+        val onCancelled: () -> Unit,
+        val onConfirmedWithDraft: ((String) -> Unit)? = null
     ) : TaskExecutionState
     data class Completed(val message: String, val stepsTaken: Int) : TaskExecutionState
     data class Failed(val errorReason: String, val lastStepIndex: Int) : TaskExecutionState
 }
+
+enum class StepExecutionStatus {
+    PENDING, RUNNING, COMPLETED, FAILED
+}
+
+data class ExecutionStepItem(
+    val index: Int,
+    val description: String,
+    val status: StepExecutionStatus = StepExecutionStatus.PENDING,
+    val durationMs: Long? = null
+)
 
 enum class SwipeDirection {
     UP, DOWN, LEFT, RIGHT

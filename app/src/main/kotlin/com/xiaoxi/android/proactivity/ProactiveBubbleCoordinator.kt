@@ -91,8 +91,11 @@ class ProactiveBubbleCoordinatorImpl(
             backoffPenalty = max(0.0, backoffPenalty * 0.5)
         }
 
-        // 2. 动机动力学计算与念头更新
-        val rawMotivation = thoughtManager.processPerception(snapshot, emotionEngine.currentVector, nowMs)
+        // 2. 动机动力学计算与念头更新 (融合即时感知动力学与待决念头池最高紧急度)
+        val perceptionMotivation = thoughtManager.processPerception(snapshot, emotionEngine.currentVector, nowMs)
+        val topPendingThought = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
+        val thoughtUrgency = topPendingThought?.urgency?.toDouble() ?: 0.0
+        val rawMotivation = max(perceptionMotivation, thoughtUrgency)
 
         // 3. 用户退避惩罚抵扣
         val effectiveInnerMotivation = max(0.0, rawMotivation - backoffPenalty)
@@ -130,8 +133,14 @@ class ProactiveBubbleCoordinatorImpl(
                 )
             }
             ProactiveAction.PROACTIVE_INTERRUPT -> {
-                // 每日配额硬约束守门
-                if (bubblesShownToday >= ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA) {
+                val topThoughts = thoughtManager.getTopPendingThoughts(limit = 1)
+                val topThought = topThoughts.firstOrNull()
+                val isPriorityWakeThought = topThought != null && (
+                    topThought.id.startsWith("thought_wake_") || topThought.urgency >= 4.5f
+                )
+
+                // 每日配额硬约束守门 (高优先级自定约定闹钟念头跳过闲聊配额限制)
+                if (bubblesShownToday >= ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA && !isPriorityWakeThought) {
                     ProactiveCoordinationResult(
                         level = ProactivityLevel.L1_MICRO_EXPRESSION,
                         decision = decision,
@@ -140,15 +149,16 @@ class ProactiveBubbleCoordinatorImpl(
                         bubblesShownToday = bubblesShownToday
                     )
                 } else {
-                    val topThoughts = thoughtManager.getTopPendingThoughts(limit = 1)
-                    if (topThoughts.isNotEmpty()) {
-                        bubblesShownToday++
+                    if (topThought != null) {
+                        if (!isPriorityWakeThought) {
+                            bubblesShownToday++
+                        }
                         lastInterruptionTime = nowMs
                         ProactiveCoordinationResult(
                             level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
                             decision = decision,
-                            thought = topThoughts.first(),
-                            reason = "触发主动破冰条件，展示头顶内心独白气泡",
+                            thought = topThought,
+                            reason = if (isPriorityWakeThought) "自定闹钟约定到期唤醒，优先展示履约气泡" else "触发主动破冰条件，展示头顶内心独白气泡",
                             bubblesShownToday = bubblesShownToday
                         )
                     } else {

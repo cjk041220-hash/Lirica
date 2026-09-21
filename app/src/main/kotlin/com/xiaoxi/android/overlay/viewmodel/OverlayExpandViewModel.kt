@@ -14,8 +14,12 @@ import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.network.model.LlmProvider
 import com.xiaoxi.android.network.model.LlmStreamEvent
+import com.xiaoxi.android.perception.model.PerceptionSnapshot
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
+import com.xiaoxi.android.proactivity.ProactiveBubbleCoordinator
+import com.xiaoxi.android.proactivity.ProactivityLevel
+import com.xiaoxi.android.proactivity.UserFeedback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +37,7 @@ class OverlayExpandViewModel(
     private val memoryManager: DualTrackMemoryManager,
     private val phiMiddleware: PhiMiddleware = PhiMiddleware(),
     private val humannessFilter: HumannessFilter = HumannessFilter(),
+    val proactiveCoordinator: ProactiveBubbleCoordinator? = null,
     private val llmConfig: LlmConfig = LlmConfig(
         apiKey = BuildConfig.DEEPSEEK_API_KEY,
         provider = LlmProvider.DEEPSEEK,
@@ -54,6 +59,36 @@ class OverlayExpandViewModel(
     }
 
     /**
+     * 响应端侧多维情境感知快照，通过主动协调中枢 (ProactiveBubbleCoordinator) 驱动分级呈现
+     */
+    fun processPerception(snapshot: PerceptionSnapshot, nowMs: Long = System.currentTimeMillis()) {
+        val coordinator = proactiveCoordinator ?: return
+        viewModelScope.launch {
+            val result = coordinator.coordinate(snapshot, nowMs)
+            when (result.level) {
+                ProactivityLevel.L2_ICEBREAKER_BUBBLE -> {
+                    _uiState.update { it.copy(icebreakerThought = result.thought) }
+                }
+                ProactivityLevel.L0_SILENT -> {
+                    // L0: 静默更新内部动力学，若已有破冰气泡且已被废弃/消费则清除
+                    if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                        _uiState.update { it.copy(icebreakerThought = null) }
+                    }
+                }
+                ProactivityLevel.L1_MICRO_EXPRESSION -> {
+                    // L1: 微表情由 EmotionEngine 内部冲激驱动，不展示文字气泡
+                    if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                        _uiState.update { it.copy(icebreakerThought = null) }
+                    }
+                }
+                ProactivityLevel.L3_LIGHT_NOTIFICATION -> {
+                    // L3: 轻通知级别
+                }
+            }
+        }
+    }
+
+    /**
      * 刷新未完成念头（清理已过期念头，提取最高紧急度候选作为破冰气泡）
      */
     fun refreshIcebreaker(nowTs: Long = System.currentTimeMillis()) {
@@ -65,10 +100,11 @@ class OverlayExpandViewModel(
     }
 
     /**
-     * 用户关闭/忽略破冰气泡，标记为已废弃
+     * 用户关闭/忽略破冰气泡，标记为已废弃并回传负向反馈增加退避惩罚
      */
-    fun dismissIcebreaker(thought: UnspokenThoughtEntity) {
+    fun dismissIcebreaker(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
+            proactiveCoordinator?.onUserFeedback(UserFeedback.DISMISSED, thought.id, nowMs)
             unspokenThoughtDao.markDiscarded(thought.id)
             _uiState.update { state ->
                 if (state.icebreakerThought?.id == thought.id) {
@@ -81,17 +117,34 @@ class OverlayExpandViewModel(
     }
 
     /**
-     * 用户点击破冰气泡，标记已消费，展开面板并将念头填入输入栏
+     * 用户点击破冰气泡接茬，标记已消费并回传正向反馈削减退避惩罚，展开面板并将念头填入输入栏
      */
-    fun onIcebreakerClicked(thought: UnspokenThoughtEntity) {
+    fun onIcebreakerClicked(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
-            unspokenThoughtDao.markConsumed(thought.id, System.currentTimeMillis())
+            proactiveCoordinator?.onUserFeedback(UserFeedback.CLICKED, thought.id, nowMs)
+            unspokenThoughtDao.markConsumed(thought.id, nowMs)
             _uiState.update { state ->
                 state.copy(
                     isExpanded = true,
                     icebreakerThought = null,
                     quickInputText = thought.thought
                 )
+            }
+        }
+    }
+
+    /**
+     * 破冰气泡展示超时自然隐退 (弱负面反馈)
+     */
+    fun onIcebreakerIgnored(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
+        viewModelScope.launch {
+            proactiveCoordinator?.onUserFeedback(UserFeedback.IGNORED, thought.id, nowMs)
+            _uiState.update { state ->
+                if (state.icebreakerThought?.id == thought.id) {
+                    state.copy(icebreakerThought = null)
+                } else {
+                    state
+                }
             }
         }
     }

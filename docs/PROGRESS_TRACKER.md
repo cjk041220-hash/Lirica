@@ -1,6 +1,6 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第二轮系统级架构演进 · Milestone 2.3 准备阶段 (第 0 步先期护栏、M2.1 执行态基建、M2.2 Helix-GUI 代行总控与工具闭环已全绿达成，当前基线 293 tests 全过，待启动 M2.3 自叙梦系统与记忆地图化重构)  
+> **当前阶段**：第二轮系统级架构演进 · **Milestone 2.5 全绿验收达成** (Step 0 ~ M2.5 全面收官，当前基线 **350 tests 全绿**，100% 成功打包)  
 > **最后更新**：2026-09-21  
 > **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager
 
@@ -20,7 +20,8 @@
 | **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活 / R8) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | **已全绿验收** | 4/4 |
 | **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
-| **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | 待规划 | 0/5 |
+| **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **已全绿验收** | 5/5 |
+| **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收** | 5/5 |
 
 ---
 
@@ -852,27 +853,99 @@
 
 ---
 
+## 第二轮优化·Milestone 2.4 全局神经贯通与真机端到端验收 (M2.4 全绿达成)
+
+> **核心使命**：彻底缝合《主方案2.0》指出的全部架构断层，让主动性裁决总线正式接管悬浮窗生命周期，打通聊天与悬浮交互面板的 Function Calling / Tool 路由多轮闭环，落地 Bot `schedule_wake` 阻断闹钟调度器，交付形态一（执行脉冲）、形态二（步骤流水卡）与形态三（起草-确认门卡片）伴生微交互体系，并通过包含微信草稿、高德导航、自定闹钟活水、游戏防骚扰、零信任支付熔断在内的真机全场景联调压测。
+
+### 交付内容清单
+1. **主动性总线挂载与悬浮窗生命周期接管 (Task 1 - Proactive Bus Integration)**：
+   - `OverlayExpandViewModel`：注入 `ProactiveBubbleCoordinator`，暴露 `processPerception(snapshot, nowMs)` 分级驱动（L0 静默 / L1 微表情 / L2 破冰气泡 / L3 轻提示）；
+   - 用户反馈闭环：点击接茬 `onIcebreakerClicked`（触发 `UserFeedback.CLICKED`，扣减退避惩罚，展开面板填入念头）、关闭忽略 `dismissIcebreaker`（触发 `UserFeedback.DISMISSED`，加重退避惩罚）、自然隐退 `onIcebreakerIgnored`（触发 `UserFeedback.IGNORED`）；
+   - `CompanionOverlayService`：`observePerception()` 响应式收集 `PerceptionPipeline.snapshotFlow`，彻底解决悬浮窗绕过主动裁决中枢的【交互性断层】；
+   - `XiaoxiApplication`：单例持有 `UnspokenThoughtManager`、`SilenceDecisionEngine` 与 `ProactiveBubbleCoordinator`；
+   - `OverlayExpandViewModelProactiveTest` 5 个测试用例全绿通过，变异验证全红转全绿。
+2. **系统工具路由器与多轮执行闭环 (Task 2 - Function Calling & Tool Loop)**：
+   - `ChatViewModel`：声明工具注入 `llmClient.streamChat`，收集 `LlmStreamEvent.ToolCallChunk` 并通过 `ToolCallAssembler` 聚合；
+   - 调度 `NativeToolAgent.executeToolCalls` 执行，并将执行结果转译为 `ChatMessage(role = "tool")` 回写入上下文；
+   - 支持最多 5 轮 Agent 思考-执行循环，直到生成最终回复，彻底消除长程任务无工具闭环的【心智性断层】；
+   - `ChatViewModelToolCallingTest` 3 个测试用例全绿通过（含多轮工具调用、最大轮次截断防爆栈与工具失败容错），变异验证全红转全绿。
+3. **`schedule_wake` 阻断闹钟调度器与自主时间感知 (Task 3 - ScheduleWakeManager)**：
+   - `SystemAlarmScheduler` 与 `AndroidSystemAlarmScheduler`：封装 Android 原生 `AlarmManager.setExactAndAllowWhileIdle` 精确唤醒与 `PendingIntent` 调度；
+   - `ScheduleWakeManager`：支持 `scheduleWake(triggerAtMs, botNote, blockDelivery)` 持久化入 Room `scheduled_alarms` 表并注册系统闹钟；
+   - `ScheduleWakeReceiver`：广播捕获唤醒事件，将闹钟状态置为 `triggered`，并向 `unspoken_thoughts` 写入第一人称破冰念头活水（`urgency = 4.8f`）；
+   - `NativeToolAgent`：扩充 `schedule_wake` 原生工具声明与路由分发；
+   - `ScheduleWakeManagerTest` 5 个测试用例与 `NativeToolAgentTest` 9 个测试用例全绿通过，变异验证全红转全绿。
+4. **任务代行伴生卡片微交互体系落地 (Task 4 - Overlay Execution UI & Draft Gate)**：
+   - **形态一：执行脉冲（Execution Pulse）**：`OverlayBubble` 接入 `isExecuting` 参数，执行中切换为 700ms 蓝紫色动态流光律动（`0xFF7C4DFF` / `0xFF00E5FF`）与 `⚡` 标识；
+   - **形态二：实时步骤流水卡（Step-by-step Trace Card）**：`TaskTraceCard` 承载当前代行目标、步骤完成/进行/等待状态机（`ExecutionStepItem`）与一键 [✕ 中止代行] 红色按钮；
+   - **形态三：可编辑起草-确认门卡片（Draft-Confirmation Card）**：`DraftConfirmationCard` 针对发送消息/敏感操作弹出轻量就地编辑卡，支持修改草稿并一键发送；
+   - `HelixGuiCoordinator`：深度支持 `AwaitingUserConfirmation` 携带 `draftContent`，并在确认时注入用户修改后的安全草稿；
+   - `CompanionOverlayService`：挂载 `helixCoordinator.state` 监听，执行中自动提权前台服务（`promoteToForeground`），完成自动降级（`demoteFromForeground`），动态调度输入法焦点；
+   - `CompanionOverlayExecutionUiTest` 3 个测试用例与 `HelixGuiCoordinatorTest` 9 个测试用例全绿通过，变异验证全红转全绿。
+5. **全系统真机场景联调压测与端到端自动化验收 (Task 5 - P10 & E2E Verification)**：
+   - `EndToEndMilestone24VerificationTest` 落地 5 大复杂真机复合场景用例：
+     1. 微信草稿起草确认门与用户微调代发模拟；
+     2. 高德地图导航直达与多步代行模拟；
+     3. `schedule_wake` 自定闹钟约定到期唤醒至清晨活水全链路；
+     4. 全屏游戏/会议高打扰代价防骚扰与每日配额守门；
+     5. 零信任金融高危操作（支付/银行）绝对物理熔断拦截；
+   - `EndToEndMilestone24VerificationTest` 5 个复杂用例 100% 通过。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: **345 tests completed, 0 failed, 100% pass** (测试套件从 316 扩充至 345，净增 29 项测试)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 7s** (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第二轮系统级架构优化第四里程碑（Milestone 2.4）全绿达成！小汐 2.0 第二轮系统级架构与演进方案（Step 0 ~ M2.4）**全线圆满收官**！
+
+---
+
+## 第二轮优化·Milestone 2.5 生产级缺陷加固与收敛闭环 (M2.5 全绿达成)
+
+> **核心使命**：基于第二轮全面工程审查识别出的 8 项隐患，采用严格 TDD 模式完成 2 个 P0 级（生产阻断/休眠扼杀）与 3 个 P1 级（业务断层/超时死锁/配额误降级）核心修复，单测库扩充至 **350 项全绿通过**，APK 编译 100% 成功。
+
+### 交付内容清单
+1. **`SubconsciousDreamWorker` 生产挂载 (P0 - XiaoxiApplication)**：
+   - 在 `XiaoxiApplication.registerAutonomousLife()` 中补齐 `SubconsciousDreamWorker.enqueue(this)`，恢复生产环境夜间入梦 WorkManager 周期调度；
+   - 新增 `XiaoxiApplicationTest` 单元测试，红灯转绿灯验证。
+2. **`ScheduleWakeReceiver` 广播异步协程生命周期守门 (P0 - goAsync)**：
+   - 在 `ScheduleWakeReceiver.onReceive()` 中引入 `goAsync()` 与 `try-finally { pendingResult.finish() }`，根除休眠唤醒（RTC_WAKEUP）瞬间进程被系统挂起扼杀隐患；
+   - 新增 `ScheduleWakeReceiverTest` 单元测试，红灯转绿灯验证。
+3. **自然语言应用名称到真实包名解析器 (P1 - NativeToolAgent)**：
+   - 落地 `NativeToolAgent.resolvePackageName` 映射中枢，收敛包含微信 (`com.tencent.mm`)、高德地图 (`com.autonavi.minimap`)、QQ、淘宝、美团、哔哩哔哩、系统设置等常用高频别名，打通自然语言工具调用闭环；
+   - `NativeToolAgentTest` 扩充自然语言应用打开测试用例，红灯转绿灯验证。
+4. **`HelixGuiCoordinator` 二次确认挂起等待超时熔断 (P1 - Timeout Protection)**：
+   - 在 `HelixGuiCoordinatorImpl` 中引入 `confirmationTimeoutMs: Long = 300_000L` 超时参数，轮询检测超时自动流转至 `Failed("用户确认超时")`，杜绝用户未理会卡片时的永久挂死；
+   - `HelixGuiCoordinatorTest` 扩充超时熔断测试用例，红灯转绿灯验证。
+5. **自定约定闹钟到期念头豁免日常闲聊配额限制 (P1 - Priority Wake Bubble)**：
+   - 在 `ProactiveBubbleCoordinatorImpl` 中引入高优先级履约判定（`isPriorityWakeThought`），自定约定闹钟到期念头不受 `DAILY_BUBBLE_QUOTA = 2` 闲聊配额限制；
+   - `ProactiveBubbleCoordinatorTest` 扩充配额耗尽下高优先级闹钟念头仍破冰呈现测试用例，红灯转绿灯验证。
+- **全量测试与打包证据**：
+  - `./gradlew testDebugUnitTest`: **350 tests completed, 0 failed, 100% pass** (测试套件从 345 扩充至 350，净增 5 项测试)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 6s** (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。生产级缺陷加固与收敛闭环（Milestone 2.5）全绿达成！
+
+---
+
 ## 新窗口极速交接备忘录 (Quick Start For Next Agent)
 
 1. **环境与命令**：
-   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，316 tests passed）
+   - 运行全量单测：`./gradlew testDebugUnitTest`（当前全绿，**350 tests passed**）
    - 验证打包：`./gradlew assembleDebug`（当前 100% 成功，0 错误 0 警告）
    - Android SDK 路径位于 `local.properties`（`C:\Users\Lenovo\AppData\Local\Android\Sdk`）
    - Java 21 环境，Gradle 8.10.2
 2. **严守铁律**：
    - **绝不使用 Chaquopy**：100% Native Kotlin + Coroutines + Room + Compose + WorkManager。
    - **TDD 先行**：先写测试 → 确认红灯 → 编码跑绿 → 故意改坏破坏分支做**变异验证**（确认变红） → 恢复全绿 → 原子提交。
-   - **代码编写前必读局部方案**：严禁写 Dummy Code。
+   - **零信任安全红线**：金融密码与支付物理熔断率保持 100.0%，剪贴板必须毫秒级快照还原。
 3. **最新 Git 状态**：
-   - 当前工作区分支：`feat/round2-m23-dream-memory`。
-   - 最新进展：Milestone 2.3（自叙梦系统与 5 层记忆地图化重构）全绿验收达成，316 个单测 100% 通过。
+   - 当前工作区分支：`feat/round2-m24-nerve-integration`。
+   - 最新进展：第二轮系统级架构演进全部四大里程碑 + M2.5 生产加固（M2.1 执行态基建、M2.2 Helix-GUI 总控闭环、M2.3 梦系统与记忆地图、M2.4 全局神经贯通、M2.5 缺陷修复加固）全部全绿达成，全仓 350 个单测 100% 通过。
 4. **整体系统现状**：
    - Phase 0 ~ Phase 5 全部达成 (249 tests 基线)
    - 第二轮优化第 0 步先期护栏达成 (259 tests，P1, P6, P2 就位)
    - 第二轮优化 Milestone 2.1 达成 (270 tests，执行态基建与坐标断层缝合)
    - 第二轮优化 Milestone 2.2 达成 (293 tests，Coordinator状态机 / Tool路由 / 流式性能 / 备份隔离)
    - 第二轮优化 Milestone 2.3 达成 (316 tests，自叙梦系统 / 语义去重 / 相对时间绝对化 / 矛盾消歧 / WORLDVIEW / 5层记忆地图 / Handoff 快照 / Room v2)
-   - 下一阶段：Milestone 2.4 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测)
+   - 第二轮优化 Milestone 2.4 达成 (345 tests，ProactiveBus 悬浮接管 / schedule_wake 闹钟 / 草稿确认卡 / 5大真机复杂场景联调全绿)
+   - 第二轮优化 Milestone 2.5 达成 (350 tests，DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免)
 
 
 

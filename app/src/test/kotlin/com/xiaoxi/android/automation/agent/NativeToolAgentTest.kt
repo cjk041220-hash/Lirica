@@ -6,8 +6,10 @@ import com.xiaoxi.android.automation.coordinator.TaskExecutionResult
 import com.xiaoxi.android.automation.intent.DispatchResult
 import com.xiaoxi.android.automation.intent.IntentAction
 import com.xiaoxi.android.automation.intent.IntentActionDispatcher
+import com.xiaoxi.android.database.entity.ScheduledAlarmEntity
 import com.xiaoxi.android.network.model.ToolCall
 import com.xiaoxi.android.network.model.ToolCallFunction
+import com.xiaoxi.android.proactivity.ScheduleWakeManager
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -29,26 +31,29 @@ class NativeToolAgentTest {
 
     private val coordinator = mockk<HelixGuiCoordinator>()
     private val intentDispatcher = mockk<IntentActionDispatcher>()
+    private val scheduleWakeManager = mockk<ScheduleWakeManager>()
     private lateinit var agent: NativeToolAgent
 
     @Before
     fun setUp() {
         agent = NativeToolAgent(
             coordinator = coordinator,
-            intentDispatcher = intentDispatcher
+            intentDispatcher = intentDispatcher,
+            scheduleWakeManager = scheduleWakeManager
         )
     }
 
     @Test
     fun testDeclaredTools_containsAllCoreTools() {
         val tools = agent.declaredTools
-        assertEquals(5, tools.size)
+        assertEquals(6, tools.size)
         val toolNames = tools.map { it.function.name }
         assertTrue(toolNames.contains("open_app"))
         assertTrue(toolNames.contains("click_element"))
         assertTrue(toolNames.contains("input_text"))
         assertTrue(toolNames.contains("swipe"))
         assertTrue(toolNames.contains("task_finish"))
+        assertTrue(toolNames.contains("schedule_wake"))
 
         tools.forEach { tool ->
             assertNotNull(tool.function.description)
@@ -75,6 +80,30 @@ class NativeToolAgentTest {
         assertTrue(result.isSuccess)
         assertEquals("call_1", result.toolCallId)
         assertTrue(result.output.contains("高德地图"))
+    }
+
+    @Test
+    fun testExecute_openApp_naturalLanguageChineseName_resolvesPackageName() = runTest {
+        val call = ToolCall(
+            id = "call_nl_1",
+            function = ToolCallFunction(
+                name = "open_app",
+                arguments = """{"app_name":"微信"}"""
+            )
+        )
+
+        every {
+            intentDispatcher.dispatch(any())
+        } returns DispatchResult.Success(mockk(relaxed = true))
+
+        val result = agent.executeToolCall(call)
+
+        assertTrue(result.isSuccess)
+        io.mockk.verify(exactly = 1) {
+            intentDispatcher.dispatch(
+                match { it is IntentAction.LaunchApp && it.packageName == "com.tencent.mm" }
+            )
+        }
     }
 
     @Test
@@ -203,5 +232,36 @@ class NativeToolAgentTest {
         assertEquals("tool", chatMessage.role)
         assertEquals("call_7", chatMessage.toolCallId)
         assertEquals("操作已完成", chatMessage.content)
+    }
+
+    @Test
+    fun testExecute_scheduleWake_delegatesToScheduleWakeManager() = runTest {
+        val toolCall = ToolCall(
+            id = "call_wake_1",
+            type = "function",
+            function = ToolCallFunction(
+                name = "schedule_wake",
+                arguments = "{\"delay_minutes\": 30, \"bot_note\": \"提醒喝水\", \"block_delivery\": true}"
+            )
+        )
+
+        val scheduledEntity = ScheduledAlarmEntity(
+            id = "alarm_1",
+            triggerAt = System.currentTimeMillis() + 1800_000L,
+            botNote = "提醒喝水",
+            blockDelivery = true,
+            status = ScheduledAlarmEntity.STATUS_PENDING
+        )
+
+        coEvery { scheduleWakeManager.scheduleWake(any(), "提醒喝水", true, any()) } returns scheduledEntity
+
+        val result = agent.executeToolCall(toolCall)
+
+        assertTrue(result.isSuccess)
+        assertEquals("call_wake_1", result.toolCallId)
+        assertTrue(result.output.contains("已成功设定自定闹钟约定"))
+        assertTrue(result.output.contains("提醒喝水"))
+
+        coVerify { scheduleWakeManager.scheduleWake(any(), "提醒喝水", true, any()) }
     }
 }

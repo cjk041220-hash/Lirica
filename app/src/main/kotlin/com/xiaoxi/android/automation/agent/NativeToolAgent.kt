@@ -12,6 +12,7 @@ import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.ToolCall
 import com.xiaoxi.android.network.model.ToolDefinition
 import com.xiaoxi.android.network.model.ToolFunction
+import com.xiaoxi.android.proactivity.ScheduleWakeManager
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -40,6 +41,8 @@ data class ToolExecutionResult(
 class NativeToolAgent(
     private val coordinator: HelixGuiCoordinator,
     private val intentDispatcher: IntentActionDispatcher,
+    private val scheduleWakeManager: ScheduleWakeManager? = null,
+    private val timeProvider: () -> Long = { System.currentTimeMillis() },
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true }
 ) {
 
@@ -164,6 +167,34 @@ class NativeToolAgent(
                         }
                     }
                 )
+            ),
+            ToolDefinition(
+                type = "function",
+                function = ToolFunction(
+                    name = "schedule_wake",
+                    description = "小汐为自己设定一个未来定时提醒闹钟约定，到达指定时间后自动唤醒心智并生成第一人称念头活水",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        putJsonObject("properties") {
+                            putJsonObject("delay_minutes") {
+                                put("type", "number")
+                                put("description", "延迟触发的分钟数（例如 30 表示 30 分钟后）")
+                            }
+                            putJsonObject("bot_note") {
+                                put("type", "string")
+                                put("description", "小汐自己用第一人称记录的定闹钟原因（例如：'半小时后提醒JK喝水'）")
+                            }
+                            putJsonObject("block_delivery") {
+                                put("type", "boolean")
+                                put("description", "闹钟到期前是否阻断普通外部事件打扰（可选，默认 false）")
+                            }
+                        }
+                        putJsonArray("required") {
+                            add(JsonPrimitive("delay_minutes"))
+                            add(JsonPrimitive("bot_note"))
+                        }
+                    }
+                )
             )
         )
     }
@@ -185,7 +216,8 @@ class NativeToolAgent(
             "open_app" -> {
                 val appName = args["app_name"]?.jsonPrimitive?.content ?: ""
                 val packageName = args["package_name"]?.jsonPrimitive?.content ?: ""
-                val action = IntentAction.LaunchApp(packageName = packageName.ifBlank { appName })
+                val resolvedPackage = resolvePackageName(appName, packageName)
+                val action = IntentAction.LaunchApp(packageName = resolvedPackage)
                 when (val result = intentDispatcher.dispatch(action)) {
                     is DispatchResult.Success -> {
                         ToolExecutionResult(
@@ -312,6 +344,25 @@ class NativeToolAgent(
                 )
             }
 
+            "schedule_wake" -> {
+                val delayMinutes = args["delay_minutes"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
+                val botNote = args["bot_note"]?.jsonPrimitive?.content ?: "自定约定"
+                val blockDelivery = args["block_delivery"]?.jsonPrimitive?.booleanOrNull ?: false
+
+                val triggerAtMs = timeProvider() + (delayMinutes * 60 * 1000).toLong()
+                val entity = scheduleWakeManager?.scheduleWake(triggerAtMs, botNote, blockDelivery)
+
+                ToolExecutionResult(
+                    toolCallId = call.id,
+                    isSuccess = entity != null,
+                    output = if (entity != null) {
+                        "已成功设定自定闹钟约定：[$botNote]，将在 $delayMinutes 分钟后触发"
+                    } else {
+                        "设定闹钟约定：[$botNote]，计划在 $delayMinutes 分钟后触发"
+                    }
+                )
+            }
+
             else -> {
                 ToolExecutionResult(
                     toolCallId = call.id,
@@ -324,5 +375,38 @@ class NativeToolAgent(
 
     suspend fun executeToolCalls(calls: List<ToolCall>): List<ToolExecutionResult> {
         return calls.map { executeToolCall(it) }
+    }
+
+    companion object {
+        val KNOWN_APP_PACKAGES = mapOf(
+            "微信" to "com.tencent.mm",
+            "wechat" to "com.tencent.mm",
+            "qq" to "com.tencent.mobileqq",
+            "高德地图" to "com.autonavi.minimap",
+            "高德" to "com.autonavi.minimap",
+            "地图" to "com.autonavi.minimap",
+            "淘宝" to "com.taobao.taobao",
+            "美团" to "com.sankuai.meituan",
+            "微博" to "com.sina.weibo",
+            "哔哩哔哩" to "tv.danmaku.bili",
+            "b站" to "tv.danmaku.bili",
+            "bilibili" to "tv.danmaku.bili",
+            "网易云音乐" to "com.netease.cloudmusic",
+            "网易云" to "com.netease.cloudmusic",
+            "抖音" to "com.ss.android.ugc.aweme",
+            "快手" to "com.smile.gifmaker",
+            "支付宝" to "com.eg.android.AlipayGphone",
+            "京东" to "com.jingdong.app.mall",
+            "设置" to "com.android.settings",
+            "系统设置" to "com.android.settings"
+        )
+
+        fun resolvePackageName(appName: String, explicitPackage: String = ""): String {
+            if (explicitPackage.isNotBlank()) return explicitPackage
+            val normalized = appName.trim().lowercase()
+            return KNOWN_APP_PACKAGES[normalized]
+                ?: KNOWN_APP_PACKAGES[appName.trim()]
+                ?: if (appName.contains('.')) appName.trim() else appName.trim()
+        }
     }
 }
