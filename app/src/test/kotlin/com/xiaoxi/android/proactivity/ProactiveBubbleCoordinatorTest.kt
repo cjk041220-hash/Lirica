@@ -17,6 +17,7 @@ import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -207,6 +208,63 @@ class ProactiveBubbleCoordinatorTest {
             r3.level
         )
         assertEquals("thought_wake_alarm_999", r3.thought?.id)
+    }
+
+    @Test
+    fun testCoordinateFirstFrame_showsBubbleAndConsumesQuota() = runTest {
+        val mockThought = UnspokenThoughtEntity(
+            id = "thought-first-frame",
+            thought = "首帧兜底念头",
+            createdAt = 100_000L
+        )
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(mockThought)
+
+        val result = coordinator.coordinateFirstFrame(nowMs = 100_000L)
+
+        assertEquals("首帧兜底必须经协调器裁决并计入每日配额（评审中等#4）", ProactivityLevel.L2_ICEBREAKER_BUBBLE, result.level)
+        assertEquals("thought-first-frame", result.thought?.id)
+        assertEquals(1, result.bubblesShownToday)
+        assertEquals(1, coordinator.getBubblesShownToday())
+    }
+
+    @Test
+    fun testCoordinateFirstFrame_quotaExhausted_blocksBubble() = runTest {
+        val mockThought = UnspokenThoughtEntity(
+            id = "thought-quota-frame",
+            thought = "想说的话",
+            createdAt = 100_000L
+        )
+        coEvery { thoughtManager.getTopPendingThoughts(1) } returns listOf(mockThought)
+
+        // 先用 coordinate 消耗完 2 次每日配额（decisionEngine stub 为允许打断）
+        val snapshot = createSnapshot()
+        coEvery { thoughtManager.processPerception(snapshot, any(), any()) } returns 4.8
+        every { decisionEngine.evaluate(snapshot, any(), any(), any(), any()) } returns DecisionResult(
+            action = ProactiveAction.PROACTIVE_INTERRUPT,
+            innerMotivation = 4.8,
+            interruptCost = 1.0,
+            effectiveMotivation = 4.8,
+            breakpoint = BreakpointResult(true, BreakpointType.RETURN_TO_LAUNCHER),
+            reason = "Ready"
+        )
+        coordinator.coordinate(snapshot, nowMs = 100_000L)
+        coordinator.coordinate(snapshot, nowMs = 101_000L)
+        assertEquals(2, coordinator.getBubblesShownToday())
+
+        // 配额耗尽后首帧兜底同样必须被拦截，不得旁路
+        val result = coordinator.coordinateFirstFrame(nowMs = 102_000L)
+        assertEquals("配额耗尽时首帧兜底必须被拦截", ProactivityLevel.L0_SILENT, result.level)
+        assertNull(result.thought)
+        assertEquals(2, result.bubblesShownToday)
+    }
+
+    @Test
+    fun testCoordinateFirstFrame_emptyThoughtPool_producesSilent() = runTest {
+        // relaxed mockk 默认 getTopPendingThoughts 返回空列表
+        val result = coordinator.coordinateFirstFrame(nowMs = 100_000L)
+        assertEquals(ProactivityLevel.L0_SILENT, result.level)
+        assertNull(result.thought)
+        assertEquals(0, result.bubblesShownToday)
     }
 
     @Test

@@ -53,6 +53,15 @@ data class ProactiveCoordinationResult(
  */
 interface ProactiveBubbleCoordinator {
     suspend fun coordinate(snapshot: PerceptionSnapshot, nowMs: Long = System.currentTimeMillis()): ProactiveCoordinationResult
+
+    /**
+     * 首帧强制裁决：悬浮窗冷启动等无感知快照场景的兜底入口。
+     * 不推进感知动机计算与沉默裁决（避免污染 prevSnapshot），仅做
+     * 跨天配额重置 + 每日配额守门（高优先级履约念头豁免）并计入配额，
+     * 保证"谁可以展示气泡"的裁决权不被 UI 层旁路（评审中等#4）。
+     */
+    suspend fun coordinateFirstFrame(nowMs: Long = System.currentTimeMillis()): ProactiveCoordinationResult
+
     suspend fun onUserFeedback(feedback: UserFeedback, thoughtId: String?, nowMs: Long = System.currentTimeMillis())
     fun getBackoffPenalty(): Double
     fun getBubblesShownToday(): Int
@@ -172,6 +181,61 @@ class ProactiveBubbleCoordinatorImpl(
                     }
                 }
             }
+        }
+    }
+
+    override suspend fun coordinateFirstFrame(nowMs: Long): ProactiveCoordinationResult {
+        // 跨天配额重置与退避衰减，语义与 coordinate 保持一致
+        val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
+        if (currentDay != lastBubbleDay) {
+            lastBubbleDay = currentDay
+            bubblesShownToday = 0
+            backoffPenalty = max(0.0, backoffPenalty * 0.5)
+        }
+
+        // 首帧场景无感知快照，无法推进动机计算与沉默裁决；仅守每日配额
+        // （高优先级履约念头豁免，语义与 coordinate 的 PROACTIVE_INTERRUPT 分支对齐）
+        val topThought = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
+        val isPriorityWakeThought = topThought != null && (
+            topThought.id.startsWith("thought_wake_") || topThought.urgency >= 4.5f
+        )
+        val quotaAllowed = bubblesShownToday < ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA
+
+        return if (topThought != null && (quotaAllowed || isPriorityWakeThought)) {
+            if (!isPriorityWakeThought) {
+                bubblesShownToday++
+            }
+            lastInterruptionTime = nowMs
+            ProactiveCoordinationResult(
+                level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
+                decision = DecisionResult(
+                    action = ProactiveAction.PROACTIVE_INTERRUPT,
+                    innerMotivation = 0.0,
+                    interruptCost = 0.0,
+                    effectiveMotivation = 0.0,
+                    breakpoint = BreakpointResult(isBreakpoint = false, type = BreakpointType.NONE),
+                    reason = "首帧兜底展示（无感知快照），计入每日主动配额"
+                ),
+                thought = topThought,
+                reason = "首帧兜底展示，计入每日主动配额",
+                bubblesShownToday = bubblesShownToday
+            )
+        } else {
+            ProactiveCoordinationResult(
+                level = ProactivityLevel.L0_SILENT,
+                decision = DecisionResult(
+                    action = ProactiveAction.SILENT,
+                    innerMotivation = 0.0,
+                    interruptCost = 0.0,
+                    effectiveMotivation = 0.0,
+                    breakpoint = BreakpointResult(isBreakpoint = false, type = BreakpointType.NONE),
+                    reason = "首帧兜底被每日配额拦截或念头池为空"
+                ),
+                thought = null,
+                reason = if (topThought == null) "念头池无待表达念头"
+                else "每日主动破冰配额已用尽 (${bubblesShownToday}/${ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA})",
+                bubblesShownToday = bubblesShownToday
+            )
         }
     }
 

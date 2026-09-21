@@ -161,6 +161,100 @@ class MemoryExtractorTest {
     }
 
     @Test
+    fun testMaybeExtract_llmFailure_restoresBatchAndRetries() = runTest {
+        // 先网络失败、后成功：验证失败批次回填后能随下一次触发被重新抽取，不丢失对话上下文
+        var shouldFail = true
+        val mockEngine = MockEngine { _ ->
+            if (shouldFail) throw RuntimeException("network down")
+            respond(
+                content = sseResponse(
+                    "{\"memories\":",
+                    "[{\"content\":\"用户喜欢在晚上跑步\",\"category\":\"作息\"}]}"
+                ),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) {
+                json(testJson)
+            }
+        }
+        val extractor = MemoryExtractor(
+            llmClient = XiaoxiLlmClient(httpClient = httpClient),
+            userMemoryDao = userMemoryDao,
+            llmConfig = LlmConfig(apiKey = "test-key"),
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 1
+        )
+        coEvery { userMemoryDao.insert(any()) } returns 1L
+
+        // 第一次：LLM 网络失败，返回 0 但批次必须回填
+        val firstCount = extractor.maybeExtract("我最近每天晚上都会去江边跑步，感觉很解压。")
+        assertEquals(0, firstCount)
+        assertEquals("失败批次必须回填到 pendingTurns", 1, extractor.getPendingTurnCount())
+
+        // 第二次：网络恢复，回填的批次内容应随重试被成功抽取
+        shouldFail = false
+        val secondCount = extractor.maybeExtract("今晚又去江边跑了五公里，状态回来了。")
+        assertEquals(1, secondCount)
+        coVerify(exactly = 1) {
+            userMemoryDao.insert(withArg { entity: UserMemoryEntity ->
+                assertEquals("用户喜欢在晚上跑步", entity.content)
+            })
+        }
+        assertEquals("抽取成功后队列清空", 0, extractor.getPendingTurnCount())
+    }
+
+    @Test
+    fun testMaybeExtract_llmFailureDuringNewBatch_restoresAtFrontKeepsOrder() = runTest {
+        // 失败回填后，若新 turn 已先入队，旧批次内容必须插到队首保持时间顺序
+        var shouldFail = true
+        val mockEngine = MockEngine { _ ->
+            if (shouldFail) throw RuntimeException("network down")
+            respond(
+                content = sseResponse("{\"memories\":[{\"content\":\"用户喜欢咖啡\"}]}"),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) {
+                json(testJson)
+            }
+        }
+        val extractor = MemoryExtractor(
+            llmClient = XiaoxiLlmClient(httpClient = httpClient),
+            userMemoryDao = userMemoryDao,
+            llmConfig = LlmConfig(apiKey = "test-key"),
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 2
+        )
+        coEvery { userMemoryDao.insert(any()) } returns 1L
+
+        // 第一轮失败（单 turn 触发用 force）
+        val firstCount = extractor.maybeExtract("第一批：我最喜欢的编程语言是 Kotlin。", force = true)
+        assertEquals(0, firstCount)
+        assertEquals(1, extractor.getPendingTurnCount())
+
+        // 新 turn 入队（此时队列：[新 turn, 失败批次]）
+        extractor.maybeExtract("第二批：我今天早上喝了豆浆。")
+
+        // 第二次触发成功，断言批次顺序正确（队首是失败批次的旧内容）
+        shouldFail = false
+        extractor.maybeExtract("第三批：随便凑个触发条件。", force = true)
+        coVerify(exactly = 1) {
+            userMemoryDao.insert(withArg { entity: UserMemoryEntity ->
+                assertEquals("用户喜欢咖啡", entity.content)
+            })
+        }
+        // 三条 turn 都已消耗（含回填的失败批次与两轮新 turn）
+        assertEquals(0, extractor.getPendingTurnCount())
+    }
+
+    @Test
     fun testExtractJsonPayload_variants() {
         val extractor = buildExtractor(sseResponse("{}"))
 

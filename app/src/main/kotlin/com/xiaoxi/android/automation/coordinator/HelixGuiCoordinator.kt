@@ -23,10 +23,13 @@ import com.xiaoxi.android.automation.healing.WatchdogVerdict
 import com.xiaoxi.android.automation.intent.DispatchResult
 import com.xiaoxi.android.automation.intent.IntentActionDispatcher
 import com.xiaoxi.android.perception.AccessibilityServiceHolder
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 
 interface HelixGuiCoordinator {
@@ -67,12 +70,19 @@ class HelixGuiCoordinatorImpl(
 
     private val isCancelled = AtomicBoolean(false)
 
+    companion object {
+        /** 文本注入前活节点树扫描上限，防止巨型 UI 树拖垮注入时延 */
+        private const val MAX_LIVE_NODE_SCAN = 1000
+    }
+
     override suspend fun executeTask(
         goal: String,
         actions: List<CoordinatorAction>,
         maxSteps: Int
     ): TaskExecutionResult {
         isCancelled.set(false)
+        // 重置自愈状态机：上一次任务的历史步与恢复计数不得影响本次裁决
+        watchdog.reset()
         _state.value = TaskExecutionState.Planning(goal)
 
         if (actions.isEmpty()) {
@@ -187,10 +197,16 @@ class HelixGuiCoordinatorImpl(
                 return false
             }
 
-            // 评估 watchdog
-            val verdict = watchdog.inspectStep(0L, currentPackageProvider() ?: "", null, actionDescription(action))
+            // 评估 watchdog：树抓取为空时以包名哈希作指纹（同包连续抓取失败同样构成"卡住"语义）
+            val verdict = watchdog.inspectStep(
+                fingerprint = (currentPackageProvider() ?: "").hashCode().toLong(),
+                currentPackage = currentPackageProvider() ?: "",
+                targetPackage = null,
+                actionSummary = actionDescription(action)
+            )
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
+                watchdog.recordRecoveryAttempt(verdict.anomaly)
                 applyRecoveryAction(verdict.suggestedAction, emptyList())
                 dump = treeExtractor.dumpTree(rootNodeProvider(), screenWidthProvider(), screenHeightProvider(), currentPackageProvider())
             }
@@ -213,7 +229,7 @@ class HelixGuiCoordinatorImpl(
         // 若未找到，检查是否有阻断弹窗并尝试自愈
         if (locateResult is GroundingResult.NotFound) {
             val verdict = watchdog.inspectStep(
-                fingerprint = 0L,
+                fingerprint = pageFingerprint(dump.nodes),
                 currentPackage = currentPackageProvider() ?: "",
                 targetPackage = null,
                 actionSummary = actionDescription(action),
@@ -221,6 +237,7 @@ class HelixGuiCoordinatorImpl(
             )
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
+                watchdog.recordRecoveryAttempt(verdict.anomaly)
                 applyRecoveryAction(verdict.suggestedAction, dump.nodes)
 
                 // 自愈后重新抓取与接地
@@ -280,8 +297,7 @@ class HelixGuiCoordinatorImpl(
                         return false
                     }
                     is GatekeeperDecision.RequireUserConfirmation -> {
-                        var confirmed = false
-                        var cancelled = false
+                        val confirmation = CompletableDeferred<Boolean>()
                         val initialDraft = if (action is CoordinatorAction.Type) action.text else null
                         val draftTitle = if (action is CoordinatorAction.Type) "输入文本草稿确认" else "敏感操作二次确认"
 
@@ -292,32 +308,34 @@ class HelixGuiCoordinatorImpl(
                             draftTitle = draftTitle,
                             onConfirmed = {
                                 gatekeeper.confirmAction(decision.token)
-                                confirmed = true
+                                confirmation.complete(true)
                             },
                             onCancelled = {
-                                cancelled = true
+                                confirmation.complete(false)
                             },
                             onConfirmedWithDraft = { edited ->
                                 effectiveText = edited
                                 gatekeeper.confirmAction(decision.token)
-                                confirmed = true
+                                confirmation.complete(true)
                             }
                         )
 
-                        val startTime = System.currentTimeMillis()
-                        // 挂起等待二次确认 (带超时熔断保护)
-                        while (!confirmed && !cancelled && !isCancelled.get()) {
-                            if (System.currentTimeMillis() - startTime >= confirmationTimeoutMs) {
-                                cancelled = true
-                                _state.value = TaskExecutionState.Failed("用户确认超时 ($confirmationTimeoutMs ms)", stepIndex)
+                        try {
+                            // CompletableDeferred 挂起等待二次确认（替代 while+delay 忙轮询；
+                            // Deferred 的完成 happens-before 保证回调线程对 effectiveText 的写入对恢复点可见）
+                            val approved = withTimeout(confirmationTimeoutMs) { confirmation.await() }
+                            if (!approved || !gatekeeper.consumeApproval(decision.token)) {
+                                _state.value = TaskExecutionState.Failed("用户取消或高危操作未获确认", stepIndex)
                                 return false
                             }
-                            delay(50L)
-                        }
-
-                        if (!confirmed || !gatekeeper.consumeApproval(decision.token)) {
-                            _state.value = TaskExecutionState.Failed("用户取消或高危操作未获确认", stepIndex)
+                        } catch (e: TimeoutCancellationException) {
+                            _state.value = TaskExecutionState.Failed("用户确认超时 ($confirmationTimeoutMs ms)", stepIndex)
                             return false
+                        } catch (e: CancellationException) {
+                            // 外层协程被取消（调用方作用域销毁等）：状态归位 Idle 再上抛，
+                            // 避免 _state 残留 AwaitingUserConfirmation 影响下一次任务
+                            _state.value = TaskExecutionState.Idle
+                            throw e
                         }
                     }
                     is GatekeeperDecision.Allowed -> {
@@ -335,8 +353,11 @@ class HelixGuiCoordinatorImpl(
                     }
                     is CoordinatorAction.Type -> {
                         val textToInject = if (effectiveText.isNotBlank()) effectiveText else action.text
+                        // 接地结果 refNode 是纯数据快照 (UiElementNode)，无法直接执行 ACTION_SET_TEXT / ACTION_PASTE；
+                        // 必须按 bounds 从当前活动窗口恢复活节点后再注入——node=null 时两条注入路径都会静默失效。
+                        val liveNode = findLiveNodeByBounds(bounds)
                         textInputExecutor.injectText(
-                            node = null,
+                            node = liveNode,
                             targetBounds = bounds,
                             text = textToInject
                         )
@@ -345,6 +366,54 @@ class HelixGuiCoordinatorImpl(
                 }
             }
         }
+    }
+
+    /**
+     * 页面指纹：由节点文本与 bounds 组合的多项式哈希。
+     * 同一页面反复出现时指纹一致，供 watchdog 检测卡死循环；
+     * 空树返回 0L（保持"无指纹"语义）。
+     */
+    private fun pageFingerprint(nodes: List<ExecutionNode>): Long {
+        if (nodes.isEmpty()) return 0L
+        var hash = 1125899906842597L
+        for (node in nodes) {
+            hash = 31L * hash + (node.text?.hashCode() ?: 0)
+            hash = 31L * hash + node.bounds.hashCode()
+        }
+        return hash
+    }
+
+    /**
+     * 从当前活动窗口树中恢复与接地快照 bounds 对应的活节点：
+     * 优先精确匹配 bounds；其次取与目标区域相交的可编辑节点（输入框兜底）。
+     * 树遍历带上限，防止巨型 UI 树拖垮注入时延。
+     */
+    private fun findLiveNodeByBounds(targetBounds: ElementBounds): AccessibilityNodeInfo? {
+        val root = rootNodeProvider() ?: return null
+        var editableFallback: AccessibilityNodeInfo? = null
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < MAX_LIVE_NODE_SCAN) {
+            val node = queue.removeFirst() ?: continue
+            visited++
+            val rect = android.graphics.Rect()
+            node.getBoundsInScreen(rect)
+            val exactMatch = rect.left == targetBounds.left && rect.top == targetBounds.top &&
+                rect.right == targetBounds.right && rect.bottom == targetBounds.bottom
+            if (exactMatch) {
+                return node
+            }
+            if (editableFallback == null && node.isEditable &&
+                rect.intersects(targetBounds.left, targetBounds.top, targetBounds.right, targetBounds.bottom)
+            ) {
+                editableFallback = node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return editableFallback
     }
 
     private suspend fun applyRecoveryAction(action: HealingAction, currentNodes: List<ExecutionNode>) {

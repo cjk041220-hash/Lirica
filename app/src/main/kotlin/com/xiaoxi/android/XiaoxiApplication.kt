@@ -28,6 +28,7 @@ import com.xiaoxi.android.perception.UsageStatsTracker
 import com.xiaoxi.android.perception.XiaoxiAccessibilityService
 import com.xiaoxi.android.perception.XiaoxiNotificationListenerService
 import com.xiaoxi.android.perception.model.ScreenState
+import com.xiaoxi.android.persona.HandoffManager
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
 import com.xiaoxi.android.proactivity.AutonomousLifeWorker
@@ -50,8 +51,9 @@ class XiaoxiApplication : Application() {
     /**
      * 应用级常驻作用域：感知管线等后台订阅随进程存活，
      * SupervisorJob 保证单个订阅失败不拖垮整个作用域。
+     * Dispatchers.IO：订阅主体为 Room 写入与 LLM 流式 IO，IO 池弹性更大，避免阻塞 CPU 密集型 Default 池。
      */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     lateinit var database: XiaoxiDatabase
         private set
@@ -91,6 +93,12 @@ class XiaoxiApplication : Application() {
 
     lateinit var scheduleWakeManager: com.xiaoxi.android.proactivity.ScheduleWakeManager
         private set
+
+    /**
+     * 会话交接快照单例：跨 Activity/ViewModel 重建保持快照不丢
+     * （HandoffManager 为纯内存缓存，若由 ViewModel 各自 new 出，重建即丢失上下文交接快照）
+     */
+    val handoffManager: HandoffManager = HandoffManager()
 
     lateinit var helixCoordinator: HelixGuiCoordinator
         private set
@@ -144,6 +152,9 @@ class XiaoxiApplication : Application() {
         val gatekeeper = FinancialGatekeeperImpl()
         val groundingEngine = HybridGroundingEngineImpl()
 
+        // 注入真实屏幕宽高：滑动比例与接地坐标换算依赖真实尺寸，
+        // 默认 1080x2400 硬编码在其他分辨率设备上会产生错位手势；
+        // 每次调用时实时读取，规避 Application 早期系统 displayMetrics 尚未就绪的问题
         helixCoordinator = HelixGuiCoordinatorImpl(
             intentDispatcher = intentDispatcher,
             treeExtractor = treeExtractor,
@@ -151,7 +162,9 @@ class XiaoxiApplication : Application() {
             gatekeeper = gatekeeper,
             gestureExecutor = gestureExecutor,
             textInputExecutor = textInputExecutor,
-            watchdog = watchdog
+            watchdog = watchdog,
+            screenWidthProvider = { android.content.res.Resources.getSystem().displayMetrics.widthPixels },
+            screenHeightProvider = { android.content.res.Resources.getSystem().displayMetrics.heightPixels }
         )
 
         nativeToolAgent = NativeToolAgent(

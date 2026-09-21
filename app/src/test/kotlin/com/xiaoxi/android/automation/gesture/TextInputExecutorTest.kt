@@ -84,4 +84,21 @@ class TextInputExecutorTest {
         // 还原后仍为 null 或空
         assertTrue(clipboardManager.primaryClip == null || clipboardManager.primaryClip?.itemCount == 0)
     }
+
+    /**
+     * node=null 失败语义：接地失败兜底 bounds 时（HelixGuiCoordinator 旧实现曾硬编码 node=null），
+     * ACTION_SET_TEXT 与 ACTION_PASTE 两条注入路径均不可用，必须显式返回 false，
+     * 且不冲掉用户原有剪贴板内容。
+     */
+    @Test
+    fun testInjectText_nullNode_failsAndRestoresOriginalClip() = runTest {
+        clipboardManager.setPrimaryClip(ClipData.newPlainText("user", "用户剪贴板里的原文"))
+
+        val bounds = ElementBounds(100, 100, 300, 200)
+        val success = textInputExecutor.injectText(null, bounds, "没有节点的注入")
+
+        assertEquals(false, success)
+        // 剪贴板快照还原铁律：即使失败也不能冲掉用户内容
+        assertEquals("用户剪贴板里的原文", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
+    }
 }

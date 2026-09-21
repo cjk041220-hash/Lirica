@@ -89,13 +89,29 @@ class OverlayExpandViewModel(
     }
 
     /**
-     * 刷新未完成念头（清理已过期念头，提取最高紧急度候选作为破冰气泡）
+     * 刷新未完成念头（清理已过期念头，提取最高紧急度候选作为破冰气泡）。
+     * 首帧兜底展示同样收编进主动总线：经协调器首帧裁决并计入每日配额，
+     * 不再直接旁路展示（评审中等#4）；协调器缺省时回退旧的直读行为。
      */
     fun refreshIcebreaker(nowTs: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
             unspokenThoughtDao.discardExpiredThoughts(nowTs)
-            val topList = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1)
-            _uiState.update { it.copy(icebreakerThought = topList.firstOrNull()) }
+            val coordinator = proactiveCoordinator
+            if (coordinator != null) {
+                val result = coordinator.coordinateFirstFrame(nowTs)
+                _uiState.update {
+                    it.copy(
+                        icebreakerThought = if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) {
+                            result.thought
+                        } else {
+                            null
+                        }
+                    )
+                }
+            } else {
+                val topList = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1)
+                _uiState.update { it.copy(icebreakerThought = topList.firstOrNull()) }
+            }
         }
     }
 

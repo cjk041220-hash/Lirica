@@ -88,6 +88,7 @@ class MemoryExtractor(
         if (trimmed.length < MIN_USER_TEXT_LENGTH && pendingTurns.isEmpty() && !force) return 0
 
         val batchContext: String
+        var failedBatchStart: Long = 0L
         synchronized(this) {
             if (trimmed.isNotEmpty()) {
                 if (pendingTurns.isEmpty()) {
@@ -104,6 +105,7 @@ class MemoryExtractor(
 
             if (shouldTrigger && pendingTurns.isNotEmpty()) {
                 batchContext = pendingTurns.joinToString("\n---\n")
+                failedBatchStart = batchStartTimestamp
                 pendingTurns.clear()
                 batchStartTimestamp = 0L
                 lastExtractionTimestamp = nowMs
@@ -122,7 +124,29 @@ class MemoryExtractor(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
+            // LLM 请求失败（网络瞬态错误等）：回填批次，避免整批对话上下文永久丢失（方案 #13）。
+            // 注意 parseAndStore 内部的解析失败返回 0 不走此路径——持续性解析失败回填会引发重试风暴。
+            restoreFailedBatch(batchContext, failedBatchStart)
             0
+        }
+    }
+
+    /**
+     * LLM 抽取失败时把批次内容拆回原 turn 插到队首，保持时间顺序。
+     * 批次起点取更早者：若请求期间已有新批次开始（其起点更晚），恢复失败批次起点可保证
+     * 节流窗口从最早的未抽取内容连续计算。
+     */
+    private fun restoreFailedBatch(batchContext: String, failedBatchStart: Long) {
+        if (batchContext.isBlank()) return
+        val turns = batchContext.split("\n---\n")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (turns.isEmpty()) return
+        synchronized(this) {
+            pendingTurns.addAll(0, turns)
+            if (failedBatchStart > 0 && (batchStartTimestamp == 0L || failedBatchStart < batchStartTimestamp)) {
+                batchStartTimestamp = failedBatchStart
+            }
         }
     }
 
