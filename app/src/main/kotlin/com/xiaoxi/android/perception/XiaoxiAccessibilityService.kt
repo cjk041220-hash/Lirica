@@ -40,6 +40,7 @@ class XiaoxiAccessibilityService : AccessibilityService() {
         const val IS_ACCESSIBILITY_TOOL: Boolean = false
         const val CAN_PERFORM_GESTURES: Boolean = true
         const val CAN_RETRIEVE_WINDOW_CONTENT: Boolean = true
+        const val CAN_TAKE_SCREENSHOT: Boolean = true
 
         @Volatile
         var isServiceConnected: Boolean = false

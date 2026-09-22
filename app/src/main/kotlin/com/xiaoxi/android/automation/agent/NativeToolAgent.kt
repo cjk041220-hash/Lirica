@@ -1,10 +1,12 @@
 package com.xiaoxi.android.automation.agent
 
+import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.coordinator.CoordinatorAction
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
 import com.xiaoxi.android.automation.coordinator.SwipeDirection
 import com.xiaoxi.android.automation.coordinator.TaskExecutionResult
 import com.xiaoxi.android.automation.grounding.GroundingQuery
+import com.xiaoxi.android.automation.grounding.VisualElementDetector
 import com.xiaoxi.android.automation.intent.DispatchResult
 import com.xiaoxi.android.automation.intent.IntentAction
 import com.xiaoxi.android.automation.intent.IntentActionDispatcher
@@ -42,6 +44,8 @@ class NativeToolAgent(
     private val coordinator: HelixGuiCoordinator,
     private val intentDispatcher: IntentActionDispatcher,
     private val scheduleWakeManager: ScheduleWakeManager? = null,
+    private val screenCaptureManager: ScreenCaptureManager? = null,
+    private val visualDetector: VisualElementDetector? = null,
     /**
      * 生活工具（天气、日程…）。与设备操控无关的纯网络/纯本地能力，
      * 通过 [LifeTool] 契约挂载，避免 agent 的 when 分支随工具数膨胀。
@@ -202,7 +206,26 @@ class NativeToolAgent(
                     }
                 )
             )
-        ) + lifeTools.flatMap { it.definitions }
+        ) + (if (screenCaptureManager != null) {
+            listOf(
+                ToolDefinition(
+                    type = "function",
+                    function = ToolFunction(
+                        name = "read_screen",
+                        description = "捕获当前手机屏幕并通过端侧 OCR 识别其上所有可见文字内容与布局（适用于无障碍树无法读取的自绘界面、小程序、游戏或需要核对画面文字时）",
+                        parameters = buildJsonObject {
+                            put("type", "object")
+                            putJsonObject("properties") {
+                                putJsonObject("focus_area") {
+                                    put("type", "string")
+                                    put("description", "重点关注的屏幕区域或查询目标（可选）")
+                                }
+                            }
+                        }
+                    )
+                )
+            )
+        } else emptyList()) + lifeTools.flatMap { it.definitions }
     }
 
     suspend fun executeToolCall(call: ToolCall): ToolExecutionResult {
@@ -380,6 +403,41 @@ class NativeToolAgent(
                         "设定闹钟约定：[$botNote]，计划在 $delayMinutes 分钟后触发"
                     }
                 )
+            }
+
+            "read_screen" -> {
+                if (screenCaptureManager == null) {
+                    ToolExecutionResult(
+                        toolCallId = call.id,
+                        isSuccess = false,
+                        output = "屏幕读取不可用：未挂载截屏管理器或当前系统无障碍未就绪"
+                    )
+                } else {
+                    val frame = screenCaptureManager.captureScreen()
+                    if (frame == null) {
+                        ToolExecutionResult(
+                            toolCallId = call.id,
+                            isSuccess = false,
+                            output = "未能成功捕获屏幕（可能处于金融隐私敏感应用或无障碍截屏未授权）"
+                        )
+                    } else {
+                        val detections = visualDetector?.detectAll(frame.bytes) ?: emptyList()
+                        if (detections.isEmpty()) {
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = true,
+                                output = "屏幕捕获成功，但未识别到任何可见文字（可能为纯图像或画布空白）"
+                            )
+                        } else {
+                            val formatted = detections.joinToString("\n") { "- 「${it.text}」" }
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = true,
+                                output = "屏幕 OCR 识别到 ${detections.size} 项文本：\n$formatted"
+                            )
+                        }
+                    }
+                }
             }
 
             else -> {

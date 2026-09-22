@@ -62,24 +62,29 @@ class PrivacyBreaker {
 
         // 16~19 位银行卡号正则
         private val BANK_CARD_REGEX = Regex("\\d{16,19}")
+
+        /**
+         * 判断目标应用是否属于银行或敏感金融黑名单
+         */
+        fun isSensitiveApp(packageName: String): Boolean {
+            if (SENSITIVE_PACKAGES.contains(packageName)) {
+                return true
+            }
+
+            val lower = packageName.lowercase()
+            return lower.contains(".bank") ||
+                    lower.contains(".alipay") ||
+                    lower.contains(".wallet") ||
+                    lower.contains(".pwd") ||
+                    lower.contains(".password") ||
+                    lower.contains(".crypto")
+        }
     }
 
     /**
-     * 判断目标应用是否属于银行或敏感金融黑名单
+     * 判断目标应用是否属于银行或敏感金融黑名单 (向后兼容实例调用)
      */
-    fun isSensitiveApp(packageName: String): Boolean {
-        if (SENSITIVE_PACKAGES.contains(packageName)) {
-            return true
-        }
-
-        val lower = packageName.lowercase()
-        return lower.contains(".bank") ||
-                lower.contains(".alipay") ||
-                lower.contains(".wallet") ||
-                lower.contains(".pwd") ||
-                lower.contains(".password") ||
-                lower.contains(".crypto")
-    }
+    fun isSensitiveApp(packageName: String): Boolean = Companion.isSensitiveApp(packageName)
 
     /**
      * 针对页面无障碍快照执行物理熔断与脱敏清洗

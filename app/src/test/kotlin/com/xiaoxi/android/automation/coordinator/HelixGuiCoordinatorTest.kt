@@ -3,6 +3,8 @@ package com.xiaoxi.android.automation.coordinator
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.xiaoxi.android.automation.capture.FrameCaptureResult
+import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeperImpl
 import com.xiaoxi.android.automation.gesture.GestureExecutor
@@ -554,5 +556,64 @@ class HelixGuiCoordinatorTest {
             (executionResult as TaskExecutionResult.Failure).reason.contains("超时")
         )
         assertTrue(customCoordinator.state.value is TaskExecutionState.Failed)
+    }
+
+    @Test
+    fun testExecuteTask_whenAccessibilityNotFound_triggersScreenCaptureAndOcrGrounding() = runTest {
+        val mockScreenCapture = mockk<ScreenCaptureManager>()
+        val dummyBytes = byteArrayOf(10, 20)
+        coEvery { mockScreenCapture.captureScreen() } returns FrameCaptureResult(dummyBytes, 1080, 2400)
+
+        val ocrCoordinator = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            screenWidthProvider = { 1080 },
+            screenHeightProvider = { 2400 },
+            screenCaptureManager = mockScreenCapture
+        )
+
+        // 第一次无障碍树抽取成功，但无障碍节点树里没有目标文字（例如自绘 Canvas）
+        val mockNodes = listOf(
+            createMockNode("root", "主页容器", "android.widget.FrameLayout", ElementBounds(0, 0, 1080, 2400))
+        )
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.flutter.app",
+            activityName = "FlutterActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 5L
+        )
+
+        // 1. 无截图调用时（L0 无障碍直达）：返回 NotFound
+        coEvery {
+            groundingEngine.locate(any(), any(), screenshot = null, any(), any())
+        } returns GroundingResult.NotFound("未在无障碍树中找到")
+
+        // 2. 带截图调用时（L1 OCR 视觉接地）：成功找到
+        coEvery {
+            groundingEngine.locate(any(), any(), screenshot = dummyBytes, any(), any())
+        } returns GroundingResult.Found(
+            targetPoint = Point2D(300f, 600f),
+            bounds = NormalizedRect(200f, 500f, 400f, 700f),
+            source = GroundingSource.VISUAL_OCR,
+            confidence = 0.90f
+        )
+
+        val actions = listOf(
+            CoordinatorAction.Click(GroundingQuery(text = "自绘按钮"), description = "点击自绘按钮")
+        )
+
+        val result = ocrCoordinator.executeTask("测试自绘按钮点击", actions)
+
+        assertTrue("带 OCR 截屏接地应执行成功", result is TaskExecutionResult.Success)
+        coVerify(exactly = 1) { mockScreenCapture.captureScreen() }
+        coVerify(exactly = 1) { gestureExecutor.execute(any(), any()) }
     }
 }

@@ -27,10 +27,11 @@
 | PHI 语气重锚 / 8 轮抗漂移 | ✅ 已实现 | `persona/PhiMiddleware.kt`、`persona/DriftShieldScheduler.kt` |
 | 工具调用态动作伴随语契约 | ✅ 已实现 | `persona/PhiMiddleware.kt`（TOOL_PERSONA_CONTRACT） |
 | 无障碍轻量读屏 + 前台/通知感知 | ✅ 已实现 | `perception/*`（`XiaoxiAccessibilityService`、`UsageStatsTracker`、`XiaoxiNotificationListenerService`） |
-| 感知文本隐私熔断（金融/密码框物理断流） | ✅ 已实现 | `perception/PrivacyBreaker.kt`（覆盖文本节点；截图像素级脱敏为规划中） |
+| 感知文本隐私熔断（金融/密码框物理断流） | ✅ 已实现 | `perception/PrivacyBreaker.kt`（覆盖文本节点与截屏断流；截图像素级脱敏为规划中） |
 | 无障碍手势代行（点击/滑动/文本注入） | ✅ 已实现 | `automation/gesture/*`、`automation/coordinator/HelixGuiCoordinator.kt` |
-| 混合接地（无障碍树优先 → OCR → VLM） | ⚠️ 实验中 | `automation/grounding/HybridGroundingEngine.kt`；`ScreenCaptureManager.captureScreen()` 尚未实现（恒 null），ML Kit/云端 VLM 探测器未接入 |
-| 多模态视觉定位（AutoGLM / UI-TARS） | 🗺️ 规划中 | 见《主方案 3.0》M3.2，**当前无任何可用实现** |
+| 混合接地（无障碍树优先 → ML Kit 离线 OCR） | ✅ 已实现 | `automation/grounding/HybridGroundingEngine.kt`、`MlKitVisualDetector.kt`、`ScreenCaptureManager.kt` |
+| 端侧静默截屏与文本提取（read_screen / 离线 OCR） | ✅ 已实现 | `automation/capture/ScreenCaptureManager.kt`、`automation/grounding/MlKitVisualDetector.kt` |
+| 多模态视觉定位（AutoGLM / UI-TARS / 云端 VLM） | 🗺️ 规划中 | 见《主方案 3.0》M3.2，当前主要依靠无障碍与端侧 ML Kit OCR |
 | Shizuku 穿透执行 / 动作分块宏 | 🗺️ 规划中 | 见《主方案 3.0》M3.3 |
 | 天气查询（Open-Meteo，免 Key） | ✅ 已实现 | `life/WeatherTool.kt` |
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |

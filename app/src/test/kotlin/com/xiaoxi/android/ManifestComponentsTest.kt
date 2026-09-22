@@ -19,6 +19,7 @@ class ManifestComponentsTest {
         assertFalse(XiaoxiAccessibilityService.IS_ACCESSIBILITY_TOOL)
         assertTrue(XiaoxiAccessibilityService.CAN_PERFORM_GESTURES)
         assertTrue(XiaoxiAccessibilityService.CAN_RETRIEVE_WINDOW_CONTENT)
+        assertTrue(XiaoxiAccessibilityService.CAN_TAKE_SCREENSHOT)
     }
 
     @Test
@@ -30,6 +31,7 @@ class ManifestComponentsTest {
         assertTrue(content.contains("android:notificationTimeout=\"150\""))
         assertTrue(content.contains("android:canRetrieveWindowContent=\"true\""))
         assertTrue(content.contains("android:canPerformGestures=\"true\""))
+        assertTrue(content.contains("android:canTakeScreenshot=\"true\""))
         assertTrue(content.contains("android:isAccessibilityTool=\"false\""))
     }
 

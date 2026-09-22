@@ -2,6 +2,7 @@ package com.xiaoxi.android.automation.coordinator
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityNodeInfo
+import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
 import com.xiaoxi.android.automation.gatekeeper.GatekeeperDecision
 import com.xiaoxi.android.automation.gatekeeper.ProposedAction
@@ -67,6 +68,7 @@ class HelixGuiCoordinatorImpl(
     // 接地引擎会明确返回 NotFound，故障暴露在日志与自愈链路里。
     private val screenWidthProvider: () -> Int = { 0 },
     private val screenHeightProvider: () -> Int = { 0 },
+    private val screenCaptureManager: ScreenCaptureManager? = null,
     private val confirmationTimeoutMs: Long = 300_000L
 ) : HelixGuiCoordinator {
 
@@ -231,7 +233,21 @@ class HelixGuiCoordinatorImpl(
             screenHeight = screenHeightProvider()
         )
 
-        // 若未找到，检查是否有阻断弹窗并尝试自愈
+        // 若无障碍树未找到且具备截屏能力，触发 L1 视觉/OCR 接地
+        if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
+            val screenshot = screenCaptureManager.captureScreen()?.bytes
+            if (screenshot != null) {
+                locateResult = groundingEngine.locate(
+                    query = query,
+                    tree = dump.nodes.toUiElementNodes(),
+                    screenshot = screenshot,
+                    screenWidth = screenWidthProvider(),
+                    screenHeight = screenHeightProvider()
+                )
+            }
+        }
+
+        // 若仍未找到，检查是否有阻断弹窗并尝试自愈
         if (locateResult is GroundingResult.NotFound) {
             val verdict = watchdog.inspectStep(
                 fingerprint = pageFingerprint(dump.nodes),
@@ -255,6 +271,19 @@ class HelixGuiCoordinatorImpl(
                         screenWidth = screenWidthProvider(),
                         screenHeight = screenHeightProvider()
                     )
+                    // 自愈重试下同样支持 OCR 视觉接地
+                    if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
+                        val retryScreenshot = screenCaptureManager.captureScreen()?.bytes
+                        if (retryScreenshot != null) {
+                            locateResult = groundingEngine.locate(
+                                query = query,
+                                tree = retryDump.nodes.toUiElementNodes(),
+                                screenshot = retryScreenshot,
+                                screenWidth = screenWidthProvider(),
+                                screenHeight = screenHeightProvider()
+                            )
+                        }
+                    }
                 }
             }
         }

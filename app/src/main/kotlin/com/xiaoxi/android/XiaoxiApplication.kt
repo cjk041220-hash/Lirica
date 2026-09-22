@@ -7,6 +7,7 @@ import android.hardware.display.DisplayManager
 import android.util.DisplayMetrics
 import android.view.Display
 import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinatorImpl
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeperImpl
@@ -14,6 +15,7 @@ import com.xiaoxi.android.automation.gesture.GestureExecutorImpl
 import com.xiaoxi.android.automation.gesture.TextInputExecutor
 import com.xiaoxi.android.automation.grounding.ExecutionTreeExtractor
 import com.xiaoxi.android.automation.grounding.HybridGroundingEngineImpl
+import com.xiaoxi.android.automation.grounding.MlKitVisualDetector
 import com.xiaoxi.android.automation.healing.SelfHealingWatchdogImpl
 import com.xiaoxi.android.automation.intent.IntentActionDispatcherImpl
 import com.xiaoxi.android.common.logging.XiaoxiCrashHandler
@@ -165,7 +167,12 @@ class XiaoxiApplication : Application() {
         val textInputExecutor = TextInputExecutor(clipboardManager, gestureExecutor)
         val watchdog = SelfHealingWatchdogImpl()
         val gatekeeper = FinancialGatekeeperImpl()
-        val groundingEngine = HybridGroundingEngineImpl()
+        val visualDetector = MlKitVisualDetector()
+        val groundingEngine = HybridGroundingEngineImpl(visualDetector = visualDetector)
+        val screenCaptureManager = ScreenCaptureManager(
+            serviceProvider = { AccessibilityServiceHolder.get() },
+            currentPackageProvider = { AccessibilityServiceHolder.get()?.rootInActiveWindow?.packageName?.toString() }
+        )
 
         // 注入真实屏幕宽高：滑动比例与接地坐标换算依赖真实尺寸，
         // 默认 1080x2400 硬编码在其他分辨率设备上会产生错位手势；
@@ -198,13 +205,16 @@ class XiaoxiApplication : Application() {
                     displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.getRealMetrics(metrics)
                     metrics.heightPixels
                 }.getOrDefault(0)
-            }
+            },
+            screenCaptureManager = screenCaptureManager
         )
 
         nativeToolAgent = NativeToolAgent(
             coordinator = helixCoordinator,
             intentDispatcher = intentDispatcher,
             scheduleWakeManager = scheduleWakeManager,
+            screenCaptureManager = screenCaptureManager,
+            visualDetector = visualDetector,
             // 生活工具挂载：天气（Open-Meteo，免 Key）+ 日程（create_event/list_events，
             // 落 scheduled_alarms 表并注册系统闹钟）。后续搜索等按同一 LifeTool
             // 契约追加，不动 agent 主体

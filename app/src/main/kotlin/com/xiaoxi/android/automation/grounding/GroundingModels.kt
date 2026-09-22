@@ -92,6 +92,7 @@ enum class GroundingSource {
     ACCESSIBILITY_EXACT,
     ACCESSIBILITY_FUZZY,
     VISUAL_VLM,
+    VISUAL_OCR,
     HYBRID_FUSION
 }
 

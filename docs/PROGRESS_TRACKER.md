@@ -1,6 +1,6 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第三轮系统级架构演进（3.0）· **批次 2（M3.0 活人感三件套）+ 技术债还账 全绿达成**（当前基线 **434 tests 全绿**）  
+> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.2 端侧视觉感知与离线 OCR 破盲 全绿达成**（当前基线 **449 tests 全绿**）  
 > **最后更新**：2026-09-22  
 > **整体技术栈**：Android 侧 100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（`backend/` 为 Python 参考源，只读冻结）
 
@@ -22,7 +22,8 @@
 | **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **已全绿验收** | 5/5 |
 | **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收**（goAsync 仅修了 finish() 时序，协程异常兜底 2026-09-21 后补，见优化方案 #15/P1-8） | 5/5 |
-| **Round 3 · 批次 2** | M3.0 活人感三件套（T2.1 动作伴随语契约 / T2.2 生活工具·天气+日程 / T2.3 care 关心提示+冷却台账）+ 技术债还账 8 项 | **已全绿验收**（伴随语/天气/care 由并行会话 2026-09-22 晚实现；日程 EventLifeTool 与技术债还账同日晚补全，见本轮执行记录） | 3/3 |
+| **Round 3 · 批次 2** | M3.0 活人感三件套（T2.1 动作伴随语契约 / T2.2 生活工具·天气+日程 / T2.3 care 关心提示+冷却台账）+ 技术债还账 8 项 | **已全绿验收** | 3/3 |
+| **Round 3 · 批次 3** | M3.2 端侧视觉感知与离线 OCR 破盲（T3.1 截屏提权 / T3.2 截帧流水线 / T3.3 ML Kit 离线中文 OCR / T3.4 隐私断流 / T3.5 read_screen） | **已全绿验收** | 5/5 |
 
 ---
 
@@ -976,6 +977,46 @@
   8. 《主方案 3.0》架构基线改为"Android 侧 100% Native Kotlin"并补测试证据指针
 - **测试证据**：`gradlew testDebugUnitTest` 全绿 **434 tests / 0 failed / 0 errors**（较并行会话基线 421 净增 13：EventLifeToolTest 11 + 退避 2）
 - **审查结论**：批次 2 唯一遗留为无（T2.2 网页搜索/地图/塔罗/生理周期按评审留批次 6）；下一步 M3.1 BYOK 网关单独成轮
+
+---
+
+## Round 3 · 批次 3 (M3.2) 执行记录（2026-09-22）
+
+> 评审依据：《主方案 3.0》第三章第 3.3 节与《评审意见——主方案 3.0 补充改进清单》第八节批次 3 路线图。全面攻坚端侧视觉感知与 OCR 破盲能力，打通无感静默截屏、离线中文 OCR 推理、金融隐私熔断双闸门与 `read_screen` 系统工具。单测套件从 434 扩充至 **449 项全绿**。
+
+### 交付内容清单
+1. **无障碍截屏显式提权契约 (T3.1)**：
+   - `accessibility_service_config.xml` 增加声明 `android:canTakeScreenshot="true"`；
+   - `XiaoxiAccessibilityService` 声明 `CAN_TAKE_SCREENSHOT = true`；
+   - `ManifestComponentsTest` 补充 XML 属性与服务契约断言，100% 跑绿。
+2. **原生静默截屏流水线与 HardwareBuffer 显存释放 (T3.2)**：
+   - `ScreenCaptureManager`：实现 Android 11+ (API 30+) `AccessibilityService.takeScreenshot` 原生无感截帧；
+   - 严守 GPU 显存防泄露铁律：在 `finally` 块显式释放 `hardwareBuffer.close()`；
+   - 250ms 频率节流保护：窗口内多次请求复用最近捕获帧，杜绝 CPU/GPU 瞬时风暴；
+   - 图像压缩调度优化：后台协程安全压缩高质量 JPEG 字节流；
+   - `ScreenCaptureManagerTest` 扩充节流复用、服务空兜底与测试执行器用例，全绿通过。
+3. **Google ML Kit 离线中文 OCR 引擎与视觉检测器 (T3.3)**：
+   - 引入 `com.google.mlkit:text-recognition-chinese:16.0.1` 离线中文模型，打包随 APK 分发，零外网依赖，免 GMS，30~60ms 极速推理；
+   - `VisualDetection` & `VisualElementDetector`：增加多文本候选与坐标契约 `detectAll`；
+   - `MlKitVisualDetector`：实现三级匹配决策（精确匹配 -> 包含匹配 -> 反向包含匹配），将视觉文字像素框严格换算为 0..1000 `NormalizedRect` 归一化坐标；
+   - `MlKitVisualDetectorTest` 7 个单测用例覆盖空图、空词、精确匹配、子串包含匹配、长短词反向包含与多结果提取，全绿通过。
+4. **金融与密码绝对隐私熔断第一闸门 (T3.4)**：
+   - `ScreenCaptureManager` 截屏前置校验 `PrivacyBreaker.isSensitiveApp`；
+   - 命中毒株敏感金融应用（支付宝、各大银行、密码箱）时直接物理断流返回 null，杜绝私密画面留存或外发；
+   - `ScreenCaptureManagerTest` 专项单测验证支付宝前台时绝对拒绝截屏，单测全绿通过。
+5. **漏斗型混合接地接通与 `read_screen` 视觉工具闭环 (T3.5)**：
+   - `GroundingSource` 扩充 `VISUAL_OCR`；
+   - `HybridGroundingEngineImpl` 接入 `MlKitVisualDetector`，支持无障碍未命中时的 L1 视觉 OCR 破盲与自绘页面物理坐标换算；
+   - `HelixGuiCoordinatorImpl` 接入 `ScreenCaptureManager`，当无障碍节点树找不到目标时自动触发截屏 OCR 重定位；
+   - `NativeToolAgent` 增加 `read_screen` 系统工具声明与派发，支持 Bot 主动截屏识读页面文字；
+   - `XiaoxiApplication` 完成全局装配与依赖注入；
+   - `HybridGroundingEngineTest` 与 `NativeToolAgentTest` 新增视觉 OCR 接地与 `read_screen` 闭环单测。
+
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: **449 tests completed, 0 failed, 100% pass** (测试套件从 434 扩充至 449，净增 15 项单测)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 23s** (0 error, 0 warning，原生 `libmlkit_google_ocr_pipeline.so` 成功打包进 APK)
+- **阶段验收结论**：APPROVED。第三轮系统级架构演进第三里程碑（M3.2 端侧视觉感知与离线 OCR 破盲）全绿达成！
+
 
 
 

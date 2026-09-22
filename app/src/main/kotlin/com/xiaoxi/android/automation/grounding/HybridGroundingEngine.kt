@@ -115,11 +115,16 @@ class HybridGroundingEngineImpl(
             }
 
             // Visual only match
+            val visualSource = if (visualDetector is MlKitVisualDetector) {
+                GroundingSource.VISUAL_OCR
+            } else {
+                GroundingSource.VISUAL_VLM
+            }
             return GroundingResult.Found(
                 targetPoint = visualRect.toScreenPoint(safeW, safeH),
                 bounds = visualRect,
-                source = GroundingSource.VISUAL_VLM,
-                confidence = 0.85f
+                source = visualSource,
+                confidence = if (visualSource == GroundingSource.VISUAL_OCR) 0.88f else 0.85f
             )
         }
 

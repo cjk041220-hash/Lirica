@@ -190,4 +190,24 @@ class HybridGroundingEngineTest {
         val nonOverlapping = NormalizedRect(200f, 200f, 300f, 300f)
         assertEquals(0f, rect1.iou(nonOverlapping), 0.001f)
     }
+
+    @Test
+    fun testLocate_mlKitDetector_returnsVisualOcr() = runTest {
+        val mlKitDetector = MlKitVisualDetector(
+            ocrEngineRunner = {
+                listOf(VisualDetection("立即结算", NormalizedRect(200f, 900f, 800f, 980f)))
+            }
+        )
+        val ocrEngine = HybridGroundingEngineImpl(mlKitDetector)
+
+        val query = GroundingQuery(text = "立即结算")
+        val result = ocrEngine.locate(query, emptyList(), byteArrayOf(1, 2), screenWidth, screenHeight)
+
+        assertTrue(result is GroundingResult.Found)
+        val found = result as GroundingResult.Found
+        assertEquals(GroundingSource.VISUAL_OCR, found.source)
+        assertEquals(0.88f, found.confidence, 0.01f)
+        assertEquals(200f, found.bounds.left, 0.1f)
+        assertEquals(900f, found.bounds.top, 0.1f)
+    }
 }

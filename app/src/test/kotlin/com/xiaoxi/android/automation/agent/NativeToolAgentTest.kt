@@ -1,8 +1,13 @@
 package com.xiaoxi.android.automation.agent
 
+import com.xiaoxi.android.automation.capture.FrameCaptureResult
+import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.coordinator.CoordinatorAction
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
 import com.xiaoxi.android.automation.coordinator.TaskExecutionResult
+import com.xiaoxi.android.automation.grounding.NormalizedRect
+import com.xiaoxi.android.automation.grounding.VisualDetection
+import com.xiaoxi.android.automation.grounding.VisualElementDetector
 import com.xiaoxi.android.automation.intent.DispatchResult
 import com.xiaoxi.android.automation.intent.IntentAction
 import com.xiaoxi.android.automation.intent.IntentActionDispatcher
@@ -263,5 +268,79 @@ class NativeToolAgentTest {
         assertTrue(result.output.contains("提醒喝水"))
 
         coVerify { scheduleWakeManager.scheduleWake(any(), "提醒喝水", true, any()) }
+    }
+
+    @Test
+    fun testDeclaredTools_withScreenCaptureManager_includesReadScreen() {
+        val mockScreenCapture = mockk<ScreenCaptureManager>()
+        val agentWithCapture = NativeToolAgent(
+            coordinator = coordinator,
+            intentDispatcher = intentDispatcher,
+            scheduleWakeManager = scheduleWakeManager,
+            screenCaptureManager = mockScreenCapture
+        )
+
+        val tools = agentWithCapture.declaredTools
+        assertEquals(7, tools.size)
+        val toolNames = tools.map { it.function.name }
+        assertTrue("应包含 read_screen 工具", toolNames.contains("read_screen"))
+    }
+
+    @Test
+    fun testExecuteToolCall_readScreen_success() = runTest {
+        val mockScreenCapture = mockk<ScreenCaptureManager>()
+        val mockVisualDetector = mockk<VisualElementDetector>()
+
+        val dummyBytes = byteArrayOf(1, 2, 3)
+        val dummyFrame = FrameCaptureResult(dummyBytes, 1080, 2400)
+        coEvery { mockScreenCapture.captureScreen() } returns dummyFrame
+
+        val detections = listOf(
+            VisualDetection("微信支付", NormalizedRect(100f, 200f, 400f, 300f)),
+            VisualDetection("账单详情", NormalizedRect(100f, 400f, 400f, 500f))
+        )
+        coEvery { mockVisualDetector.detectAll(dummyBytes) } returns detections
+
+        val agentWithOcr = NativeToolAgent(
+            coordinator = coordinator,
+            intentDispatcher = intentDispatcher,
+            screenCaptureManager = mockScreenCapture,
+            visualDetector = mockVisualDetector
+        )
+
+        val toolCall = ToolCall(
+            id = "call_ocr_1",
+            type = "function",
+            function = ToolCallFunction(name = "read_screen", arguments = "{}")
+        )
+
+        val result = agentWithOcr.executeToolCall(toolCall)
+        assertTrue(result.isSuccess)
+        assertEquals("call_ocr_1", result.toolCallId)
+        assertTrue(result.output.contains("微信支付"))
+        assertTrue(result.output.contains("账单详情"))
+        assertTrue(result.output.contains("2 项文本"))
+    }
+
+    @Test
+    fun testExecuteToolCall_readScreen_whenCaptureNull_failsGracefully() = runTest {
+        val mockScreenCapture = mockk<ScreenCaptureManager>()
+        coEvery { mockScreenCapture.captureScreen() } returns null // 比如命中敏感金融拦截
+
+        val agentWithOcr = NativeToolAgent(
+            coordinator = coordinator,
+            intentDispatcher = intentDispatcher,
+            screenCaptureManager = mockScreenCapture
+        )
+
+        val toolCall = ToolCall(
+            id = "call_ocr_2",
+            type = "function",
+            function = ToolCallFunction(name = "read_screen", arguments = "{}")
+        )
+
+        val result = agentWithOcr.executeToolCall(toolCall)
+        assertFalse(result.isSuccess)
+        assertTrue(result.output.contains("未能成功捕获屏幕"))
     }
 }
