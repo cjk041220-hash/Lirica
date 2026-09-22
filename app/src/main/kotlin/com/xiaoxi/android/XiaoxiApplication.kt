@@ -6,7 +6,11 @@ import android.content.Context
 import android.hardware.display.DisplayManager
 import android.util.DisplayMetrics
 import android.view.Display
+import com.xiaoxi.android.automation.agent.AppPackageResolver
 import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.automation.backend.AccessibilityExecutionBackend
+import com.xiaoxi.android.automation.backend.HybridExecutionManager
+import com.xiaoxi.android.automation.backend.ShizukuExecutionBackend
 import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinatorImpl
@@ -174,6 +178,19 @@ class XiaoxiApplication : Application() {
             currentPackageProvider = { AccessibilityServiceHolder.get()?.rootInActiveWindow?.packageName?.toString() }
         )
 
+        // 组装双通道自动化执行底座：无障碍拟人手势 + Shizuku 穿透通道
+        val accessibilityBackend = AccessibilityExecutionBackend(
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            serviceProvider = { AccessibilityServiceHolder.get() }
+        )
+        val shizukuBackend = ShizukuExecutionBackend()
+        val hybridExecutionManager = HybridExecutionManager(
+            accessibilityBackend = accessibilityBackend,
+            shizukuBackend = shizukuBackend
+        )
+        val packageResolver = AppPackageResolver(context = this)
+
         // 注入真实屏幕宽高：滑动比例与接地坐标换算依赖真实尺寸，
         // 默认 1080x2400 硬编码在其他分辨率设备上会产生错位手势；
         // 每次调用时实时读取，规避 Application 早期系统 displayMetrics 尚未就绪的问题。
@@ -206,7 +223,8 @@ class XiaoxiApplication : Application() {
                     metrics.heightPixels
                 }.getOrDefault(0)
             },
-            screenCaptureManager = screenCaptureManager
+            screenCaptureManager = screenCaptureManager,
+            executionBackend = hybridExecutionManager
         )
 
         nativeToolAgent = NativeToolAgent(
@@ -215,6 +233,7 @@ class XiaoxiApplication : Application() {
             scheduleWakeManager = scheduleWakeManager,
             screenCaptureManager = screenCaptureManager,
             visualDetector = visualDetector,
+            packageResolver = packageResolver,
             // 生活工具挂载：天气（Open-Meteo，免 Key）+ 日程（create_event/list_events，
             // 落 scheduled_alarms 表并注册系统闹钟）。后续搜索等按同一 LifeTool
             // 契约追加，不动 agent 主体

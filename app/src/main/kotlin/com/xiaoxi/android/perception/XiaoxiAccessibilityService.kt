@@ -26,12 +26,15 @@ import kotlinx.coroutines.launch
 /**
  * 无障碍前台节点轻量抽取与焦点感知服务
  *
- * 架构规范严守：
+ * 架构规范与感知-执行双模契约严守：
  * 1. Binder 线程阻断延迟 <= 0.1ms：浅拷贝入队即走，绝不在 Binder 线程遍历节点树
  * 2. L0 SPSC 环形队列无锁解耦 (AccessibilityRingBuffer)
  * 3. 树深度严格限高 (depth <= 4)、字符限长截断 (NodeExtractor)
  * 4. Fastbot 状态指纹计算与防抖动过滤 (FastbotStateHasher)
- * 5. 严格只读隔离：绝不调用任何 performAction()
+ * 5. 感知-执行双模物理隔离契约：
+ *    - 感知主通道：在无障碍事件生命周期内保持 100% 纯只读提取，绝不调用任何 performAction()，彻底避免读写竞争；
+ *    - 执行通道：手势与穿透代行由独立的 [AccessibilityServiceHolder] 单例托管实例，在协程调度器下异步触发贝塞尔曲线手势；
+ *    - 双重安全守门：所有自动化执行动作前，必须无条件通过 [FinancialGatekeeper] 与 [PrivacyBreaker] 金融隐私双闸门审查。
  */
 class XiaoxiAccessibilityService : AccessibilityService() {
 

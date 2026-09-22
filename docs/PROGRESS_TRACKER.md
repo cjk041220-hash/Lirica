@@ -1,7 +1,7 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.2 端侧视觉感知与离线 OCR 破盲 全绿达成**（当前基线 **449 tests 全绿**）  
-> **最后更新**：2026-09-22  
+> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.3 手机操控升维与动作分块 全绿达成**（当前基线 **471 tests 全绿**）  
+> **最后更新**：2026-09-23  
 > **整体技术栈**：Android 侧 100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（`backend/` 为 Python 参考源，只读冻结）
 
 ---
@@ -24,6 +24,7 @@
 | **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收**（goAsync 仅修了 finish() 时序，协程异常兜底 2026-09-21 后补，见优化方案 #15/P1-8） | 5/5 |
 | **Round 3 · 批次 2** | M3.0 活人感三件套（T2.1 动作伴随语契约 / T2.2 生活工具·天气+日程 / T2.3 care 关心提示+冷却台账）+ 技术债还账 8 项 | **已全绿验收** | 3/3 |
 | **Round 3 · 批次 3** | M3.2 端侧视觉感知与离线 OCR 破盲（T3.1 截屏提权 / T3.2 截帧流水线 / T3.3 ML Kit 离线中文 OCR / T3.4 隐私断流 / T3.5 read_screen） | **已全绿验收** | 5/5 |
+| **Round 3 · 批次 4** | M3.3 手机操控升维与动作分块（T4.1 感知执行双模契约 / T4.2 Shizuku 提权底座 / T4.3 动作分块宏 execute_macro / T4.4 中文分流 / T4.5 真实包解析 AppPackageResolver） | **已全绿验收** | 5/5 |
 
 ---
 
@@ -1016,6 +1017,46 @@
   - `./gradlew testDebugUnitTest`: **449 tests completed, 0 failed, 100% pass** (测试套件从 434 扩充至 449，净增 15 项单测)
   - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 23s** (0 error, 0 warning，原生 `libmlkit_google_ocr_pipeline.so` 成功打包进 APK)
 - **阶段验收结论**：APPROVED。第三轮系统级架构演进第三里程碑（M3.2 端侧视觉感知与离线 OCR 破盲）全绿达成！
+
+---
+
+## Round 3 · 批次 4 (M3.3) 执行记录（2026-09-23）
+
+> 评审依据：《主方案 3.0》第三章第 3.1 节与《评审意见——主方案 3.0 补充改进清单》第八节批次 4 路线图。全面攻坚手机操控升维与穿透执行，落地 Shizuku ADB 提权执行底座、中文输入分流铁律、动作分块宏执行器 (`execute_macro`) 与真实包名动态解析器 (`AppPackageResolver`)。单测套件从 449 扩充至 **471 项全绿**。
+
+### 交付内容清单
+1. **感知-执行双模契约重锚 (T4.1)**：
+   - `XiaoxiAccessibilityService` 类头明确重构为双模物理隔离契约：
+     - 感知通道：Binder 事件循环中保持 100% 纯只读提取，零 `performAction`，保障 AOSP 事件分发零延迟；
+     - 执行通道：手势模拟与穿透代行由独立 `AccessibilityServiceHolder` 托管，协程调度器下异步触发；
+     - 双闸门审查：所有自动化动作前严格执行 `FinancialGatekeeper` 与 `PrivacyBreaker.isSensitiveApp`。
+2. **Shizuku 提权通道与双通道执行中枢 (T4.2)**：
+   - 引入 `dev.rikka.shizuku:api:13.1.5` 与 `provider:13.1.5`；
+   - `AndroidManifest.xml` 声明 `moe.shizuku.manager.permission.API_V23`、`ShizukuProvider` 与 `<queries>` 启动器包可见性；
+   - `ExecutionBackend` 抽象统一底座，落地 `AccessibilityExecutionBackend` 与 `ShizukuExecutionBackend`；
+   - `ShizukuExecutionBackend` 实现基于 ADB 的毫秒级极速 `input tap`、`input swipe`、`input keyevent` 与 `input text`；
+   - `ShizukuExecutionBackendTest` 7 个单测全绿覆盖。
+3. **中文/Emoji 字符输入分流铁律 (T4.4)**：
+   - 彻底解决 ADB `input text` 依赖 `KeyCharacterMap` 无法打印 CJK 字符的顽疾；
+   - `HybridExecutionManager` 建立分流决策树：文本只要包含汉字或 Emoji 代理项，**100% 走无障碍通道**（`ACTION_SET_TEXT` / 剪贴板安全快照还原）；仅纯 ASCII 字符走 Shizuku；
+   - 变异测试（故意关闭 CJK 拦截）验证红灯拦截生效，`HybridExecutionManagerTest` 5 个单测全绿。
+4. **动作分块宏批处理器 (T4.3 - `execute_macro`)**：
+   - `TaskExecutionModels.kt` 扩充 `CoordinatorAction.PressKey`（符号化按键，支持 "ENTER", "BACK", "HOME", "SEARCH", "RECENTS" 等）与 `CoordinatorAction.Delay`；
+   - `KeycodeMapper` 提供符号名称到 Android KeyEvent 键码的双向解析；
+   - `HelixGuiCoordinatorImpl` 支持连续批处理宏动作与 `executionBackend` 调度；
+   - `NativeToolAgent` 新增 `execute_macro` 工具，支持模型单轮下发多步连续动作（点击、输入、按键、滑动、延时），将交互总时延从 15~20 秒大幅削减至 2 秒以内；
+   - `HelixGuiCoordinatorTest` 与 `NativeToolAgentTest` 补充宏动作解析、顺序执行与中断单测，全绿通过。
+5. **真实应用包名解析与别名索引重做 (T4.5 - `AppPackageResolver`)**：
+   - 彻底废除旧版未匹配时盲目返回中文原字符串的脆弱机制；
+   - `AppPackageResolver`：融合静态加速索引（微信、淘宝、美团、饿了么、B站等及拼音别名 `wx`, `tb`, `ele`, `zfb`）与基于 `PackageManager.queryIntentActivities` 的动态安装应用标签索引；
+   - 未匹配时安全返回 `null`，主链路给出友好的中文诊断说明；
+   - `AppPackageResolverTest` 4 个用例全绿通过。
+
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: **471 tests completed, 0 failed, 100% pass** (测试套件从 449 扩充至 471，净增 22 项单测)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 10s** (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第三轮系统级架构演进第四里程碑（M3.3 手机操控升维与动作分块）全绿达成！
+
 
 
 

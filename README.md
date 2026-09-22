@@ -32,7 +32,8 @@
 | 混合接地（无障碍树优先 → ML Kit 离线 OCR） | ✅ 已实现 | `automation/grounding/HybridGroundingEngine.kt`、`MlKitVisualDetector.kt`、`ScreenCaptureManager.kt` |
 | 端侧静默截屏与文本提取（read_screen / 离线 OCR） | ✅ 已实现 | `automation/capture/ScreenCaptureManager.kt`、`automation/grounding/MlKitVisualDetector.kt` |
 | 多模态视觉定位（AutoGLM / UI-TARS / 云端 VLM） | 🗺️ 规划中 | 见《主方案 3.0》M3.2，当前主要依靠无障碍与端侧 ML Kit OCR |
-| Shizuku 穿透执行 / 动作分块宏 | 🗺️ 规划中 | 见《主方案 3.0》M3.3 |
+| Shizuku 穿透执行 / 动作分块宏 (execute_macro) | ✅ 已实现 | `automation/backend/*`（`ShizukuExecutionBackend`、`HybridExecutionManager`）、`NativeToolAgent.kt` |
+| 真实应用包名解析与别名索引 (AppPackageResolver) | ✅ 已实现 | `automation/agent/AppPackageResolver.kt`、`AndroidManifest.xml` (`<queries>`) |
 | 天气查询（Open-Meteo，免 Key） | ✅ 已实现 | `life/WeatherTool.kt` |
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |

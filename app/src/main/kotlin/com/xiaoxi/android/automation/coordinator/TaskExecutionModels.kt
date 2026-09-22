@@ -57,6 +57,15 @@ sealed interface CoordinatorAction {
         val description: String = "滑动屏幕"
     ) : CoordinatorAction
     data class Backtrack(val description: String = "物理返回") : CoordinatorAction
+    data class PressKey(
+        val keyCode: Int,
+        val keyName: String = "按键",
+        val description: String = "按键 $keyName"
+    ) : CoordinatorAction
+    data class Delay(
+        val delayMs: Long,
+        val description: String = "等待 ${delayMs}ms"
+    ) : CoordinatorAction
     data class Finish(val summary: String = "代行任务已完成") : CoordinatorAction
 }
 

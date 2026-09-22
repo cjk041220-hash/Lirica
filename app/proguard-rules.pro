@@ -40,3 +40,14 @@
 -keep class * extends androidx.work.ListenableWorker {
     <init>(...);
 }
+
+# Google ML Kit
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+
+# Shizuku
+-keep class moe.shizuku.** { *; }
+-keep class rikka.shizuku.** { *; }
+-dontwarn moe.shizuku.**
+-dontwarn rikka.shizuku.**
+

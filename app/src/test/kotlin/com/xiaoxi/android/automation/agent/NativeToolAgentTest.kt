@@ -51,7 +51,7 @@ class NativeToolAgentTest {
     @Test
     fun testDeclaredTools_containsAllCoreTools() {
         val tools = agent.declaredTools
-        assertEquals(6, tools.size)
+        assertEquals(7, tools.size)
         val toolNames = tools.map { it.function.name }
         assertTrue(toolNames.contains("open_app"))
         assertTrue(toolNames.contains("click_element"))
@@ -59,6 +59,7 @@ class NativeToolAgentTest {
         assertTrue(toolNames.contains("swipe"))
         assertTrue(toolNames.contains("task_finish"))
         assertTrue(toolNames.contains("schedule_wake"))
+        assertTrue(toolNames.contains("execute_macro"))
 
         tools.forEach { tool ->
             assertNotNull(tool.function.description)
@@ -281,7 +282,7 @@ class NativeToolAgentTest {
         )
 
         val tools = agentWithCapture.declaredTools
-        assertEquals(7, tools.size)
+        assertEquals(8, tools.size)
         val toolNames = tools.map { it.function.name }
         assertTrue("应包含 read_screen 工具", toolNames.contains("read_screen"))
     }
@@ -342,5 +343,70 @@ class NativeToolAgentTest {
         val result = agentWithOcr.executeToolCall(toolCall)
         assertFalse(result.isSuccess)
         assertTrue(result.output.contains("未能成功捕获屏幕"))
+    }
+
+    @Test
+    fun testExecuteToolCall_executeMacro_sequentialSuccess() = runTest {
+        coEvery {
+            coordinator.executeTask("在网易云搜索并播放", any(), any())
+        } returns TaskExecutionResult.Success("宏执行成功", 3)
+
+        val macroArgs = """
+            {
+                "description": "在网易云搜索并播放",
+                "actions": [
+                    { "type": "click", "target_text": "搜索框" },
+                    { "type": "type", "text": "海阔天空" },
+                    { "type": "press_key", "key": "ENTER" }
+                ]
+            }
+        """.trimIndent()
+
+        val toolCall = ToolCall(
+            id = "call_macro_1",
+            type = "function",
+            function = ToolCallFunction(name = "execute_macro", arguments = macroArgs)
+        )
+
+        val result = agent.executeToolCall(toolCall)
+        assertTrue(result.isSuccess)
+        assertEquals("call_macro_1", result.toolCallId)
+        assertTrue(result.output.contains("宏动作分块执行成功 (共 3 步)"))
+
+        coVerify(exactly = 1) {
+            coordinator.executeTask("在网易云搜索并播放", match { actions ->
+                actions.size == 3 &&
+                    actions[0] is CoordinatorAction.Click &&
+                    actions[1] is CoordinatorAction.Type &&
+                    actions[2] is CoordinatorAction.PressKey
+            }, any())
+        }
+    }
+
+    @Test
+    fun testExecuteToolCall_executeMacro_failureHaltsGracefully() = runTest {
+        coEvery {
+            coordinator.executeTask(any(), any(), any())
+        } returns TaskExecutionResult.Failure("第 2 步元素未找到", 2)
+
+        val macroArgs = """
+            {
+                "description": "测试中断宏",
+                "actions": [
+                    { "type": "click", "target_text": "第一步" },
+                    { "type": "click", "target_text": "第二步" }
+                ]
+            }
+        """.trimIndent()
+
+        val toolCall = ToolCall(
+            id = "call_macro_2",
+            type = "function",
+            function = ToolCallFunction(name = "execute_macro", arguments = macroArgs)
+        )
+
+        val result = agent.executeToolCall(toolCall)
+        assertFalse(result.isSuccess)
+        assertTrue(result.output.contains("第 2 步执行失败"))
     }
 }

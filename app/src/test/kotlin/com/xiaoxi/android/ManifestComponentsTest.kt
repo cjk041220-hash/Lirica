@@ -68,6 +68,8 @@ class ManifestComponentsTest {
         assertTrue(manifestContent.contains("android.permission.PACKAGE_USAGE_STATS"))
         assertTrue(manifestContent.contains("android.permission.POST_NOTIFICATIONS"))
         assertTrue(manifestContent.contains("android.permission.RECEIVE_BOOT_COMPLETED"))
+        assertTrue(manifestContent.contains("moe.shizuku.manager.permission.API_V23"))
+        assertTrue(manifestContent.contains("<queries>"))
 
         // Services & Receivers
         assertTrue(manifestContent.contains(".perception.XiaoxiAccessibilityService"))

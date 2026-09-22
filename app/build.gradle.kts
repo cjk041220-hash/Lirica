@@ -124,6 +124,11 @@ dependencies {
     // Google ML Kit Text Recognition (Chinese - Bundled Model, No GMS required)
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
+    // Shizuku (Privileged ADB execution & penetration)
+    val shizukuVersion = "13.1.5"
+    implementation("dev.rikka.shizuku:api:$shizukuVersion")
+    implementation("dev.rikka.shizuku:provider:$shizukuVersion")
+
     // Unit Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.mockk:mockk:1.13.13")

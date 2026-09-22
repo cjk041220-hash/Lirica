@@ -1,5 +1,7 @@
 package com.xiaoxi.android.automation.agent
 
+import android.view.KeyEvent
+import com.xiaoxi.android.automation.backend.KeycodeMapper
 import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.coordinator.CoordinatorAction
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
@@ -19,7 +21,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -46,6 +50,7 @@ class NativeToolAgent(
     private val scheduleWakeManager: ScheduleWakeManager? = null,
     private val screenCaptureManager: ScreenCaptureManager? = null,
     private val visualDetector: VisualElementDetector? = null,
+    private val packageResolver: AppPackageResolver = AppPackageResolver(),
     /**
      * 生活工具（天气、日程…）。与设备操控无关的纯网络/纯本地能力，
      * 通过 [LifeTool] 契约挂载，避免 agent 的 when 分支随工具数膨胀。
@@ -205,6 +210,64 @@ class NativeToolAgent(
                         }
                     }
                 )
+            ),
+            ToolDefinition(
+                type = "function",
+                function = ToolFunction(
+                    name = "execute_macro",
+                    description = "连续执行一组预定义的原子动作列表（动作分块 Action Chunking），单轮指令下发多步点击、输入、滑动、按键或延迟，大幅削减交互往返时延",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        putJsonObject("properties") {
+                            putJsonObject("description") {
+                                put("type", "string")
+                                put("description", "本次宏操作的目标总结")
+                            }
+                            putJsonObject("actions") {
+                                put("type", "array")
+                                putJsonObject("items") {
+                                    put("type", "object")
+                                    putJsonObject("properties") {
+                                        putJsonObject("type") {
+                                            put("type", "string")
+                                            put("description", "动作类型：click / type / press_key / swipe / delay")
+                                        }
+                                        putJsonObject("target_text") {
+                                            put("type", "string")
+                                            put("description", "目标元素文本或无障碍描述（click / type 选用）")
+                                        }
+                                        putJsonObject("target_resource_id") {
+                                            put("type", "string")
+                                            put("description", "目标元素 resource-id")
+                                        }
+                                        putJsonObject("text") {
+                                            put("type", "string")
+                                            put("description", "待输入的文字内容（type 必填）")
+                                        }
+                                        putJsonObject("key") {
+                                            put("type", "string")
+                                            put("description", "按键名称（如 'ENTER', 'BACK', 'HOME', 'SEARCH'）或数字键码（press_key 必填）")
+                                        }
+                                        putJsonObject("direction") {
+                                            put("type", "string")
+                                            put("description", "滑动方向：up / down / left / right（swipe 必填）")
+                                        }
+                                        putJsonObject("delay_ms") {
+                                            put("type", "integer")
+                                            put("description", "延时等待毫秒数（delay 必填）")
+                                        }
+                                    }
+                                    putJsonArray("required") {
+                                        add(JsonPrimitive("type"))
+                                    }
+                                }
+                            }
+                        }
+                        putJsonArray("required") {
+                            add(JsonPrimitive("actions"))
+                        }
+                    }
+                )
             )
         ) + (if (screenCaptureManager != null) {
             listOf(
@@ -259,21 +322,30 @@ class NativeToolAgent(
                 val appName = args["app_name"]?.jsonPrimitive?.content ?: ""
                 val packageName = args["package_name"]?.jsonPrimitive?.content ?: ""
                 val resolvedPackage = resolvePackageName(appName, packageName)
-                val action = IntentAction.LaunchApp(packageName = resolvedPackage)
-                when (val result = intentDispatcher.dispatch(action)) {
-                    is DispatchResult.Success -> {
-                        ToolExecutionResult(
-                            toolCallId = call.id,
-                            isSuccess = true,
-                            output = "应用 [$appName] 已成功打开并置于前台"
-                        )
-                    }
-                    else -> {
-                        ToolExecutionResult(
-                            toolCallId = call.id,
-                            isSuccess = false,
-                            output = "打开应用 [$appName] 失败: $result"
-                        )
+
+                if (resolvedPackage.isBlank()) {
+                    ToolExecutionResult(
+                        toolCallId = call.id,
+                        isSuccess = false,
+                        output = "未能解析应用 [$appName] 的包名，请检查应用名称或显式提供 package_name"
+                    )
+                } else {
+                    val action = IntentAction.LaunchApp(packageName = resolvedPackage)
+                    when (val result = intentDispatcher.dispatch(action)) {
+                        is DispatchResult.Success -> {
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = true,
+                                output = "应用 [$appName] 已成功打开并置于前台"
+                            )
+                        }
+                        else -> {
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = false,
+                                output = "打开应用 [$appName] 失败: $result"
+                            )
+                        }
                     }
                 }
             }
@@ -440,6 +512,98 @@ class NativeToolAgent(
                 }
             }
 
+            "execute_macro" -> {
+                val actionsArray = args["actions"]?.jsonArray
+                if (actionsArray.isNullOrEmpty()) {
+                    ToolExecutionResult(
+                        toolCallId = call.id,
+                        isSuccess = false,
+                        output = "宏动作执行失败: actions 动作列表为空"
+                    )
+                } else {
+                    val coordinatorActions = mutableListOf<CoordinatorAction>()
+                    var parseError: String? = null
+                    for ((idx, elem) in actionsArray.withIndex()) {
+                        val actObj = elem as? JsonObject
+                        if (actObj == null) {
+                            parseError = "第 ${idx + 1} 步动作格式错误: 期望为 JSON 对象"
+                            break
+                        }
+                        val type = actObj["type"]?.jsonPrimitive?.content?.lowercase() ?: ""
+                        val targetText = actObj["target_text"]?.jsonPrimitive?.content
+                        val targetResId = actObj["target_resource_id"]?.jsonPrimitive?.content
+                        val query = GroundingQuery(text = targetText, resourceId = targetResId)
+
+                        when (type) {
+                            "click" -> {
+                                val desc = "点击 ${targetText ?: targetResId ?: "元素"}"
+                                coordinatorActions.add(CoordinatorAction.Click(query, desc))
+                            }
+                            "type" -> {
+                                val text = actObj["text"]?.jsonPrimitive?.content ?: ""
+                                coordinatorActions.add(CoordinatorAction.Type(query, text, "输入「$text」"))
+                            }
+                            "press_key" -> {
+                                val keyStr = actObj["key"]?.jsonPrimitive?.content ?: "ENTER"
+                                val keyCode = KeycodeMapper.resolveKeyCode(keyStr) ?: KeyEvent.KEYCODE_ENTER
+                                coordinatorActions.add(CoordinatorAction.PressKey(keyCode, keyStr, "按键 $keyStr"))
+                            }
+                            "swipe" -> {
+                                val dirStr = actObj["direction"]?.jsonPrimitive?.content ?: "up"
+                                val dir = when (dirStr.lowercase()) {
+                                    "down" -> SwipeDirection.DOWN
+                                    "left" -> SwipeDirection.LEFT
+                                    "right" -> SwipeDirection.RIGHT
+                                    else -> SwipeDirection.UP
+                                }
+                                coordinatorActions.add(CoordinatorAction.Swipe(dir, humanoid = true, description = "向 $dirStr 滑动"))
+                            }
+                            "delay" -> {
+                                val delayMs = actObj["delay_ms"]?.jsonPrimitive?.content?.toLongOrNull() ?: 300L
+                                coordinatorActions.add(CoordinatorAction.Delay(delayMs, "等待 ${delayMs}ms"))
+                            }
+                            else -> {
+                                parseError = "第 ${idx + 1} 步动作类型未知: [$type]"
+                                break
+                            }
+                        }
+                    }
+
+                    if (parseError != null) {
+                        ToolExecutionResult(
+                            toolCallId = call.id,
+                            isSuccess = false,
+                            output = parseError
+                        )
+                    } else {
+                        val goal = args["description"]?.jsonPrimitive?.content ?: "连续宏操作 (${coordinatorActions.size} 步)"
+                        when (val result = coordinator.executeTask(goal, coordinatorActions)) {
+                            is TaskExecutionResult.Success -> {
+                                ToolExecutionResult(
+                                    toolCallId = call.id,
+                                    isSuccess = true,
+                                    output = "宏动作分块执行成功 (共 ${result.stepsTaken} 步): ${result.message}"
+                                )
+                            }
+                            is TaskExecutionResult.Failure -> {
+                                ToolExecutionResult(
+                                    toolCallId = call.id,
+                                    isSuccess = false,
+                                    output = "宏动作在第 ${result.stepIndex} 步执行失败: ${result.reason}"
+                                )
+                            }
+                            TaskExecutionResult.Cancelled -> {
+                                ToolExecutionResult(
+                                    toolCallId = call.id,
+                                    isSuccess = false,
+                                    output = "宏动作执行被取消"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             else -> {
                 ToolExecutionResult(
                     toolCallId = call.id,
@@ -460,40 +624,29 @@ class NativeToolAgent(
         }
     }
 
+    fun resolvePackageName(appName: String, explicitPackage: String = ""): String {
+        if (explicitPackage.isNotBlank()) return explicitPackage
+        val resolved = packageResolver.resolve(appName)
+        if (!resolved.isNullOrBlank()) return resolved
+        val normalized = appName.trim().lowercase()
+        return KNOWN_APP_PACKAGES[normalized]
+            ?: KNOWN_APP_PACKAGES[appName.trim()]
+            ?: if (appName.contains('.')) appName.trim() else ""
+    }
+
     suspend fun executeToolCalls(calls: List<ToolCall>): List<ToolExecutionResult> {
         return calls.map { executeToolCall(it) }
     }
 
     companion object {
-        val KNOWN_APP_PACKAGES = mapOf(
-            "微信" to "com.tencent.mm",
-            "wechat" to "com.tencent.mm",
-            "qq" to "com.tencent.mobileqq",
-            "高德地图" to "com.autonavi.minimap",
-            "高德" to "com.autonavi.minimap",
-            "地图" to "com.autonavi.minimap",
-            "淘宝" to "com.taobao.taobao",
-            "美团" to "com.sankuai.meituan",
-            "微博" to "com.sina.weibo",
-            "哔哩哔哩" to "tv.danmaku.bili",
-            "b站" to "tv.danmaku.bili",
-            "bilibili" to "tv.danmaku.bili",
-            "网易云音乐" to "com.netease.cloudmusic",
-            "网易云" to "com.netease.cloudmusic",
-            "抖音" to "com.ss.android.ugc.aweme",
-            "快手" to "com.smile.gifmaker",
-            "支付宝" to "com.eg.android.AlipayGphone",
-            "京东" to "com.jingdong.app.mall",
-            "设置" to "com.android.settings",
-            "系统设置" to "com.android.settings"
-        )
+        val KNOWN_APP_PACKAGES = AppPackageResolver.DEFAULT_KNOWN_APPS
 
         fun resolvePackageName(appName: String, explicitPackage: String = ""): String {
             if (explicitPackage.isNotBlank()) return explicitPackage
             val normalized = appName.trim().lowercase()
             return KNOWN_APP_PACKAGES[normalized]
                 ?: KNOWN_APP_PACKAGES[appName.trim()]
-                ?: if (appName.contains('.')) appName.trim() else appName.trim()
+                ?: if (appName.contains('.')) appName.trim() else ""
         }
     }
 }

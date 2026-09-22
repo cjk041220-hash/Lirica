@@ -3,6 +3,7 @@ package com.xiaoxi.android.automation.coordinator
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.xiaoxi.android.automation.backend.ExecutionBackend
 import com.xiaoxi.android.automation.capture.FrameCaptureResult
 import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
@@ -615,5 +616,33 @@ class HelixGuiCoordinatorTest {
         assertTrue("带 OCR 截屏接地应执行成功", result is TaskExecutionResult.Success)
         coVerify(exactly = 1) { mockScreenCapture.captureScreen() }
         coVerify(exactly = 1) { gestureExecutor.execute(any(), any()) }
+    }
+
+    @Test
+    fun testExecuteTask_macroWithPressKeyAndDelay_dispatchesExecutionBackend() = runTest {
+        val mockBackend = mockk<ExecutionBackend>(relaxed = true)
+        coEvery { mockBackend.isAvailable() } returns true
+        coEvery { mockBackend.sendKeycode(66) } returns true
+
+        val macroCoordinator = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            executionBackend = mockBackend
+        )
+
+        val actions = listOf(
+            CoordinatorAction.Delay(50L, "稍作等待"),
+            CoordinatorAction.PressKey(66, "ENTER", "按回车")
+        )
+
+        val result = macroCoordinator.executeTask("执行宏动作", actions)
+
+        assertTrue(result is TaskExecutionResult.Success)
+        coVerify(exactly = 1) { mockBackend.sendKeycode(66) }
     }
 }

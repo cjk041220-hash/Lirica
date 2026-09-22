@@ -2,6 +2,7 @@ package com.xiaoxi.android.automation.coordinator
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityNodeInfo
+import com.xiaoxi.android.automation.backend.ExecutionBackend
 import com.xiaoxi.android.automation.capture.ScreenCaptureManager
 import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
 import com.xiaoxi.android.automation.gatekeeper.GatekeeperDecision
@@ -69,6 +70,7 @@ class HelixGuiCoordinatorImpl(
     private val screenWidthProvider: () -> Int = { 0 },
     private val screenHeightProvider: () -> Int = { 0 },
     private val screenCaptureManager: ScreenCaptureManager? = null,
+    private val executionBackend: ExecutionBackend? = null,
     private val confirmationTimeoutMs: Long = 300_000L
 ) : HelixGuiCoordinator {
 
@@ -153,6 +155,29 @@ class HelixGuiCoordinatorImpl(
                     serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                 }
 
+                is CoordinatorAction.PressKey -> {
+                    val ok = if (executionBackend != null && executionBackend.isAvailable()) {
+                        executionBackend.sendKeycode(action.keyCode)
+                    } else {
+                        when (action.keyCode) {
+                            android.view.KeyEvent.KEYCODE_BACK -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) == true
+                            android.view.KeyEvent.KEYCODE_HOME -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) == true
+                            android.view.KeyEvent.KEYCODE_APP_SWITCH -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS) == true
+                            android.view.KeyEvent.KEYCODE_POWER -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) == true
+                            else -> false
+                        }
+                    }
+                    if (!ok) {
+                        val failReason = "按键事件模拟失败: ${action.keyName} (keyCode=${action.keyCode})"
+                        _state.value = TaskExecutionState.Failed(failReason, stepIndex)
+                        return TaskExecutionResult.Failure(failReason, stepIndex)
+                    }
+                }
+
+                is CoordinatorAction.Delay -> {
+                    kotlinx.coroutines.delay(action.delayMs.coerceAtLeast(0L))
+                }
+
                 is CoordinatorAction.Swipe -> {
                     val w = screenWidthProvider().toFloat()
                     val h = screenHeightProvider().toFloat()
@@ -162,9 +187,13 @@ class HelixGuiCoordinatorImpl(
                         SwipeDirection.LEFT -> listOf(w * 0.8f, h / 2f, w * 0.2f, h / 2f)
                         SwipeDirection.RIGHT -> listOf(w * 0.2f, h / 2f, w * 0.8f, h / 2f)
                     }
-                    gestureExecutor.execute(
-                        GestureSpec.Swipe(startX, startY, endX, endY, humanoidCurve = action.humanoid)
-                    )
+                    if (executionBackend != null && executionBackend.isAvailable()) {
+                        executionBackend.swipe(startX, startY, endX, endY, 300L)
+                    } else {
+                        gestureExecutor.execute(
+                            GestureSpec.Swipe(startX, startY, endX, endY, humanoidCurve = action.humanoid)
+                        )
+                    }
                 }
 
                 is CoordinatorAction.Click, is CoordinatorAction.Type -> {
@@ -380,9 +409,13 @@ class HelixGuiCoordinatorImpl(
                 // 4. 拟人化动作分发
                 when (action) {
                     is CoordinatorAction.Click -> {
-                        gestureExecutor.execute(
-                            GestureSpec.Click(targetPoint.x, targetPoint.y)
-                        )
+                        if (executionBackend != null && executionBackend.isAvailable()) {
+                            executionBackend.click(targetPoint.x, targetPoint.y)
+                        } else {
+                            gestureExecutor.execute(
+                                GestureSpec.Click(targetPoint.x, targetPoint.y)
+                            )
+                        }
                         true
                     }
                     is CoordinatorAction.Type -> {
@@ -484,6 +517,8 @@ class HelixGuiCoordinatorImpl(
         is CoordinatorAction.Type -> action.description
         is CoordinatorAction.Swipe -> action.description
         is CoordinatorAction.Backtrack -> action.description
+        is CoordinatorAction.PressKey -> action.description
+        is CoordinatorAction.Delay -> action.description
         is CoordinatorAction.Finish -> action.summary
     }
 
