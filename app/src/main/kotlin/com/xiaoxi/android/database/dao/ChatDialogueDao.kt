@@ -56,4 +56,24 @@ interface ChatDialogueDao {
 
     @Query("SELECT DISTINCT session_id FROM chat_dialogues ORDER BY session_id ASC")
     suspend fun getAllSessions(): List<String>
+
+    /**
+     * 近 N 天内用户消息的时间戳（升序，跨全部会话，不含 beforeMs 那条）。
+     *
+     * 只取时间戳不取内容：关心检测只需要"什么时候在"，不需要"说了什么"——
+     * 把读取面压到最小是隐私与 IO 的双重考虑。
+     *
+     * @param beforeMs 排除当前正在发送的这条消息：调用方在持久化当前消息
+     * **之后**才做检测，不排除的话"距上一条消息的间隔"永远是 0。
+     */
+    @Query(
+        "SELECT timestamp FROM chat_dialogues " +
+            "WHERE role = 'user' AND timestamp >= :sinceMs AND timestamp < :beforeMs " +
+            "ORDER BY timestamp ASC"
+    )
+    suspend fun getUserTimestampsSince(sinceMs: Long, beforeMs: Long): List<Long>
+
+    /** beforeMs 之前最近一条用户消息的时间（跨全部会话）；无历史时返回 null */
+    @Query("SELECT MAX(timestamp) FROM chat_dialogues WHERE role = 'user' AND timestamp < :beforeMs")
+    suspend fun getLastUserTimestampBefore(beforeMs: Long): Long?
 }

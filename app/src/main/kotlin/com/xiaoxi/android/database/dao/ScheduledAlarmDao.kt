@@ -29,6 +29,16 @@ interface ScheduledAlarmDao {
     @Query("SELECT * FROM scheduled_alarms WHERE status = 'pending' AND trigger_at <= :nowMs ORDER BY trigger_at ASC")
     suspend fun getPendingAlarms(nowMs: Long): List<ScheduledAlarmEntity>
 
+    /**
+     * 未来窗口 (nowMs, untilMs] 内待触发的日程（list_events 生活工具用）。
+     * 只取时间戳窗口与条数上限，避免"列出全部历史"式查询在长期使用后无限膨胀。
+     */
+    @Query(
+        "SELECT * FROM scheduled_alarms WHERE status = 'pending' AND trigger_at > :nowMs AND trigger_at <= :untilMs " +
+            "ORDER BY trigger_at ASC LIMIT :limit"
+    )
+    suspend fun getUpcomingAlarms(nowMs: Long, untilMs: Long, limit: Int): List<ScheduledAlarmEntity>
+
     @Query("UPDATE scheduled_alarms SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: String, status: String)
 }

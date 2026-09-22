@@ -1,8 +1,8 @@
 # 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第二轮系统级架构演进 · **Milestone 2.5 全绿验收达成** (Step 0 ~ M2.5 全面收官，当前基线 **350 tests 全绿**，100% 成功打包)  
-> **最后更新**：2026-09-21  
-> **整体技术栈**：100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager
+> **当前阶段**：第三轮系统级架构演进（3.0）· **批次 2（M3.0 活人感三件套）+ 技术债还账 全绿达成**（当前基线 **434 tests 全绿**）  
+> **最后更新**：2026-09-22  
+> **整体技术栈**：Android 侧 100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（`backend/` 为 Python 参考源，只读冻结）
 
 ---
 
@@ -22,6 +22,7 @@
 | **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
 | **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **已全绿验收** | 5/5 |
 | **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收**（goAsync 仅修了 finish() 时序，协程异常兜底 2026-09-21 后补，见优化方案 #15/P1-8） | 5/5 |
+| **Round 3 · 批次 2** | M3.0 活人感三件套（T2.1 动作伴随语契约 / T2.2 生活工具·天气+日程 / T2.3 care 关心提示+冷却台账）+ 技术债还账 8 项 | **已全绿验收**（伴随语/天气/care 由并行会话 2026-09-22 晚实现；日程 EventLifeTool 与技术债还账同日晚补全，见本轮执行记录） | 3/3 |
 
 ---
 
@@ -947,6 +948,34 @@
    - 第二轮优化 Milestone 2.3 达成 (316 tests，自叙梦系统 / 语义去重 / 相对时间绝对化 / 矛盾消歧 / WORLDVIEW / 5层记忆地图 / Handoff 快照 / Room v2)
    - 第二轮优化 Milestone 2.4 达成 (345 tests，ProactiveBus 悬浮接管 / schedule_wake 闹钟 / 草稿确认卡 / 5大真机复杂场景联调全绿)
    - 第二轮优化 Milestone 2.5 达成 (350 tests，DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免)
+   - 第三轮 批次 2 (M3.0 活人感三件套) + 技术债还账达成 (434 tests，2026-09-22)
+
+## Round 3 · 批次 2 执行记录（2026-09-22）
+
+> 评审依据：《评审意见——主方案3.0补充改进清单》第八节路线图。伴随语契约 / 天气工具 / care 检测由并行会话实现（421 tests 全绿），本会话完成日程工具补全与技术债还账，合并后 434 tests 全绿。
+
+### T2.2 后半：日程生活工具 EventLifeTool（本会话交付）
+- [x] 状态：已完成 (2026-09-22)
+- **交付内容**：
+  - 新增 `life/EventLifeTool.kt`：`create_event`（ISO 时间三级解析：带时区 → 本地 → 纯日期默认上午 9 点；过去时间与不可解析时间给中文失败说明；落 `scheduled_alarms` 并经 `ScheduleWakeManager` 注册系统闹钟）与 `list_events`（未来 N 天窗口升序列出，天数钳制 1~30，上限 20 条，只展示事件名不泄露备注）
+  - `ScheduledAlarmDao` 新增 `getUpcomingAlarms(nowMs, untilMs, limit)`（无 schema 迁移）
+  - `XiaoxiApplication` 装配：`lifeTools = [WeatherLifeTool(), EventLifeTool(...)]`
+- **测试证据**：`EventLifeToolTest` 11 用例全绿（契约/本地时间/带时区/纯日期/过去拒绝/模糊时间/空标题/升序与备注隐藏/空列表/天数钳制）
+- **审查结论**：失败语义与 WeatherLifeTool 一致（绝不击穿对话主链路）；未引入 Room 迁移
+
+### 技术债还账 8 项（评审批次解耦清单，本会话交付）
+- [x] 状态：已完成 (2026-09-22)
+- **交付内容**：
+  1. `RoomMigrationTest` 重写：v1 夹具逐列对照权威 `app/schemas/1.json`（修正凭印象手写的 `curiosity`/`warmth` 错误列与 `chat_dialogues` 错误结构，补齐索引），并新增四张旧表数据迁移后逐字段无损断言
+  2. `MemoryExtractor` 失败回填加指数退避（60s 起翻倍、封顶 15 分钟；force 显式调用绕过；成功归零），消灭弱网重试风暴；新增退避专项单测 2 项，原"失败即重试"用例同步改为越过退避窗口
+  3. `XiaoxiApplication` 屏幕尺寸改 `DisplayManager.getRealMetrics` 物理整屏口径（替代 `Resources.getSystem()`，分屏/自由窗口不再错位）
+  4. `HelixGuiCoordinator` 默认 provider 由 1080×2400 改为 0（=未知），`HybridGroundingEngine` 尺寸 ≤0 时明确返回 NotFound——静默错位手势改为大声失败
+  5. `ScheduleWakeManager` setWindow 降级注释语义校正（[triggerAt, triggerAt+10min] 窗口，非 ±10 分钟）
+  6. `git config i18n.logOutputEncoding/commitEncoding utf-8`
+  7. `README` 增设能力状态标注表（已实现/实验中/规划中逐条对照代码），修正"多模态视觉定位"overclaim 与过时的"2.0 基础重构阶段"表述
+  8. 《主方案 3.0》架构基线改为"Android 侧 100% Native Kotlin"并补测试证据指针
+- **测试证据**：`gradlew testDebugUnitTest` 全绿 **434 tests / 0 failed / 0 errors**（较并行会话基线 421 净增 13：EventLifeToolTest 11 + 退避 2）
+- **审查结论**：批次 2 唯一遗留为无（T2.2 网页搜索/地图/塔罗/生理周期按评审留批次 6）；下一步 M3.1 BYOK 网关单独成轮
 
 
 

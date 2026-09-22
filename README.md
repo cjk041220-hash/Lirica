@@ -12,23 +12,40 @@
 ### 四大核心能力
 1. **自由自主人格（Customizable Persona）**：原生全兼容 **SillyTavern（酒馆）角色卡（V1/V2/V3）** 导入导出，内置 PHI 语气重锚与 8 轮抗漂移引擎，角色长聊不崩。
 2. **获权情境感知（Ambient Sensing）**：在用户授权下，常驻感知前台应用、停留时长、屏幕文本结构与第三方系统通知，如同趴在屏幕边的伴侣。
-3. **真实手机操控（Device Manipulation）**：结合 Android 无障碍服务（`AccessibilityService`）与多模态视觉定位（AutoGLM / UI-TARS），实现原子手势模拟与跨应用自动化代行。
-4. **自主生活与主动性（Proactive Living）**：具备“关于自己”的独立记忆轨（Self-Track），闲时自主上网阅读趣闻，结合情境感知在合适时机主动搭话与吐槽。
+3. **真实手机操控（Device Manipulation）**：结合 Android 无障碍服务（`AccessibilityService`）实现原子手势模拟与跨应用自动化代行；视觉定位与穿透执行在路线图中（见能力状态表）。
+4. **自主生活与主动性（Proactive Living）**：具备“关于自己”的独立记忆轨（Self-Track），闲时自主上网阅读趣闻，结合情境感知在合适时机主动搭话与吐槽，异常感知关心（深夜/久未出现）带冷却台账。
 5. **本地优先与隐私安全（Local-First）**：无中心化服务器，所有记忆与屏幕数据端侧闭环，具备金融与密码框物理熔断防护。用户自备 Key（BYOK）为 experimental 能力，尚未开放配置入口。
+
+### 📊 能力状态标注表
+
+> 规则：**每个对外宣称的能力必须逐条对照代码**，标注"已实现 / 实验中 / 规划中"。
+> 此表因两次"文档宣称 vs 代码现实"偏差（BYOK、视觉定位）而设，修订需同步给出代码出处。
+
+| 能力 | 状态 | 代码出处 |
+|:--|:--|:--|
+| SillyTavern 角色卡 V1/V2/V3 导入导出 | ✅ 已实现 | `persona/CharacterCardDecoder.kt` |
+| PHI 语气重锚 / 8 轮抗漂移 | ✅ 已实现 | `persona/PhiMiddleware.kt`、`persona/DriftShieldScheduler.kt` |
+| 工具调用态动作伴随语契约 | ✅ 已实现 | `persona/PhiMiddleware.kt`（TOOL_PERSONA_CONTRACT） |
+| 无障碍轻量读屏 + 前台/通知感知 | ✅ 已实现 | `perception/*`（`XiaoxiAccessibilityService`、`UsageStatsTracker`、`XiaoxiNotificationListenerService`） |
+| 感知文本隐私熔断（金融/密码框物理断流） | ✅ 已实现 | `perception/PrivacyBreaker.kt`（覆盖文本节点；截图像素级脱敏为规划中） |
+| 无障碍手势代行（点击/滑动/文本注入） | ✅ 已实现 | `automation/gesture/*`、`automation/coordinator/HelixGuiCoordinator.kt` |
+| 混合接地（无障碍树优先 → OCR → VLM） | ⚠️ 实验中 | `automation/grounding/HybridGroundingEngine.kt`；`ScreenCaptureManager.captureScreen()` 尚未实现（恒 null），ML Kit/云端 VLM 探测器未接入 |
+| 多模态视觉定位（AutoGLM / UI-TARS） | 🗺️ 规划中 | 见《主方案 3.0》M3.2，**当前无任何可用实现** |
+| Shizuku 穿透执行 / 动作分块宏 | 🗺️ 规划中 | 见《主方案 3.0》M3.3 |
+| 天气查询（Open-Meteo，免 Key） | ✅ 已实现 | `life/WeatherTool.kt` |
+| 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
+| 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
+| 网页搜索 / 地图 / 塔罗 / 生理周期 | 🗺️ 规划中 | backend 参考源有实现（`backend/tools/*`），Android 侧未迁移 |
+| BYOK 多模型网关（OpenAI 兼容 / Anthropic） | 🗺️ 规划中 | 当前主链路直连 DeepSeek（`network/XiaoxiLlmClient.kt`）；`ByokSettingsRepository` 为实验中未接线 |
+| 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
 
 ---
 
 ## 🗺️ 架构与演进路线
 
-项目当前正处于 2.0 基础重构阶段：
-* **核心开发蓝图**：详见 [`小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md`](./小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md)
-* **执行规划**：
-  * **Phase 0**：原生基建确立、权限与 BYOK 通信客户端打通、SillyTavern 卡解析
-  * **Phase 1**：心智引擎与双轨记忆原生化（移植 8 轮重锚与 Russell 情绪状态机）
-  * **Phase 2**：Jetpack Compose 主界面与跨应用伴生悬浮窗（Floating Overlay）
-  * **Phase 3**：获权感知中枢（应用追踪、无障碍轻量读屏、通知捕获）
-  * **Phase 4**：主动性裁决器与自主生活循环上线
-  * **Phase 5**：手机操控（Intent 直达 + 无障碍手势 + 视觉 Grounding）
+2.0 基础重构已完成（R8 混淆启用、工具闭环装配、365 项单测基线全绿），当前处于 **3.0 系统级演进阶段**（BYOK 网关 / 视觉感知 / 操控升维 / 人格深水区）：
+* **核心开发蓝图**：详见 [`主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md`](./docs/主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md)
+* **执行规划**：按《评审意见——主方案 3.0 补充改进清单》第八节修订路线执行：M3.1 BYOK 网关 → M3.0 活人感三件套 → M3.2 视觉感知与观测闭环 → M3.3 操控升维 → M3.4 人格深水区 → M3.6 生活工具生态（可选）
 
 ---
 

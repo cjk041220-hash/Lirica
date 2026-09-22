@@ -49,7 +49,8 @@ class PhiMiddleware(
         batteryLevel: String = "",
         idleDuration: String = "",
         customToneAnchor: String? = null,
-        customDriftShieldPayload: String? = null
+        customDriftShieldPayload: String? = null,
+        includeToolPersonaContract: Boolean = false
     ): List<ChatMessage> {
         val resolvedCharName = charName.ifBlank { characterCard?.name.orEmpty() }.ifBlank { DEFAULT_CHAR_NAME }
         val resolvedUserName = userName.ifBlank { DEFAULT_USER_NAME }
@@ -124,7 +125,8 @@ class PhiMiddleware(
             batteryLevel = batteryLevel,
             idleDuration = idleDuration,
             customToneAnchor = customToneAnchor,
-            customDriftShieldPayload = customDriftShieldPayload
+            customDriftShieldPayload = customDriftShieldPayload,
+            includeToolPersonaContract = includeToolPersonaContract
         )
         assembledList.add(ChatMessage(role = "system", content = phiContent))
 
@@ -148,7 +150,8 @@ class PhiMiddleware(
         batteryLevel: String = "",
         idleDuration: String = "",
         customToneAnchor: String? = null,
-        customDriftShieldPayload: String? = null
+        customDriftShieldPayload: String? = null,
+        includeToolPersonaContract: Boolean = false
     ): ChatCompletionRequest {
         val resolvedCharName = charName.ifBlank { characterCard?.name.orEmpty() }.ifBlank { DEFAULT_CHAR_NAME }
         val resolvedUserName = userName.ifBlank { DEFAULT_USER_NAME }
@@ -165,7 +168,8 @@ class PhiMiddleware(
             batteryLevel = batteryLevel,
             idleDuration = idleDuration,
             customToneAnchor = customToneAnchor,
-            customDriftShieldPayload = customDriftShieldPayload
+            customDriftShieldPayload = customDriftShieldPayload,
+            includeToolPersonaContract = includeToolPersonaContract
         )
 
         val updatedMessages = request.messages + ChatMessage(role = "system", content = phiContent)
@@ -187,7 +191,8 @@ class PhiMiddleware(
         batteryLevel: String = "",
         idleDuration: String = "",
         customToneAnchor: String? = null,
-        customDriftShieldPayload: String? = null
+        customDriftShieldPayload: String? = null,
+        includeToolPersonaContract: Boolean = false
     ): String {
         val phiSections = mutableListOf<String>()
 
@@ -214,6 +219,16 @@ class PhiMiddleware(
                     idleDuration = idleDuration
                 )
             )
+        }
+
+        // 1.5 动作伴随语规范（仅在有工具可用时注入）
+        //
+        // 位置说明：刻意放在**通用语气铁律之前**。工具调用态是语气退化最严重的
+        // 场合（模型对齐策略会切到"严肃执行器"），这条是针对该场合的**具体**约束；
+        // 后面紧跟的通用铁律起到兜底与强化作用。反过来排会让最需要压住的场合
+        // 拿到最弱的近因权重。
+        if (includeToolPersonaContract) {
+            phiSections.add(TOOL_PERSONA_CONTRACT)
         }
 
         // 2. 核心反客服腔语气铁律
@@ -278,6 +293,54 @@ class PhiMiddleware(
          */
         fun getToneAnchor(charName: String = DEFAULT_CHAR_NAME): String {
             return "[$charName 的语气铁律：短句利落、真人口语有情绪张力、不用客服腔与万能关怀套话、记事务不附加叮嘱尾巴、不用破折号、单条回复动作括号至多1个]"
+        }
+
+        /**
+         * 工具调用态禁止出现的客服腔说法。
+         *
+         * 用途有两处，**都不是**"运行时文本过滤"：
+         * 1. 拼进 [TOOL_PERSONA_CONTRACT] 作为明确的反面清单（比抽象的"别用客服腔"更有效）
+         * 2. 供单测断言提示词确实带上了这份清单
+         *
+         * 刻意不做运行时过滤：这些词在自然口语里也会合法出现（如"好的，那我明天再说"），
+         * 拿它们去扫输出会误伤。运行时只保留 HumannessFilter 既有的通用规则。
+         */
+        val FORBIDDEN_TOOL_TONE_PHRASES: List<String> = listOf(
+            "好的，", "好的！", "正在为您", "请稍等", "已为您", "为您完成",
+            "感谢您的配合", "为您打开", "已经为您"
+        )
+
+        /**
+         * 动作伴随语规范 (Action Persona Contract)。
+         *
+         * 解决的是**工具调用态的人格分裂 (Agent Tone Decay)**：
+         * 主流模型一旦进入 Function Calling 模式，对齐策略会偏向"严肃精确的
+         * 代码解释器"，输出冷冰冰的格式化信息，直接冲垮角色语气。
+         *
+         * 客户端已具备的能力（无需本契约之外改动）：工具调用轮里模型返回的
+         * `content` 会随流式 Token 实时渲染在主对话气泡内，所以只要模型肯写，
+         * 用户立刻就能看见。缺的一直是"要求它写"这一句。
+         *
+         * 与默认人设"不承认自己是 AI"的关系：这里的"工具""系统工具"是给模型
+         * 看的元语言，允许出现在指令中；约束的是**输出**不得变成执行器腔调。
+         */
+        val TOOL_PERSONA_CONTRACT: String = buildString {
+            append("【调用系统工具时的伴随语规范】\n")
+            append("你可以调用系统工具去操控手机或查询信息。但你不是冷冰冰的指令执行器，规则如下：\n")
+            append("1. 在发起工具调用的同一轮里，必须先用第一人称口语说一句你正在做什么。这段话会实时显示给对方看，是陪伴感的一部分，不是可选装饰。\n")
+            append("2. 伴随语要短、要像随口说的，可以带一点自己的情绪或判断。不要复述工具名，不要作进度汇报式的播报。\n")
+            append("3. 严禁出现下列说法：")
+            append(FORBIDDEN_TOOL_TONE_PHRASES.joinToString("、") { "「$it」" })
+            append("，也不要通篇用「您」称呼对方。\n")
+            append("4. 工具返回结果后，用一句自然的话把它说出来。结果不对就直说，不要粉饰成成功。\n")
+            append("5. 遇到需要输密码、付款、确认金额的界面，说清楚你不碰这类操作，让对方自己来。\n")
+            append("示例（正面）：\n")
+            append("- 打开应用前：「等我一下，我帮你翻出来。」\n")
+            append("- 查天气前：「我看看今天什么天。」\n")
+            append("- 撞到付款界面时：「这儿我不碰，你自己来。」\n")
+            append("示例（反面，禁止这样写）：\n")
+            append("- 「好的，正在为您打开应用，请稍等。」\n")
+            append("- 「已为您查询到今日天气信息如下：」")
         }
 
         /**

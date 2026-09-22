@@ -11,6 +11,7 @@ import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
 import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.life.CareHintDetector
 import com.xiaoxi.android.network.ToolCallAssembler
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.ChatMessage
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
@@ -39,6 +41,12 @@ class ChatViewModel(
     private val memoryExtractor: MemoryExtractor? = null,
     val handoffManager: HandoffManager = HandoffManager(),
     val toolAgent: NativeToolAgent? = null,
+    /**
+     * 异常感知关心检测器（深夜 / 久未出现等）。
+     * 注入后每次发消息都会做一次检测，同一由头的冷却由检测器内部的
+     * 台账保证；null = 关闭该能力（默认），既有测试与装配无需改动。
+     */
+    private val careHintDetector: CareHintDetector? = null,
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
     val sessionId: String = "default_session"
 ) : ViewModel() {
@@ -178,6 +186,24 @@ class ChatViewModel(
                     preRecalledUnspokenThoughts = thoughts
                 )
 
+                // 2.5 关心提示（care hints）：异常情境感知（深夜 / 久未出现…）。
+                // 注入位置：动态上下文的末尾、对话历史之前——越靠近生成端，
+                // 对"这一轮怎么开口"的影响越直接。
+                // 检测在当前消息已持久化之后进行，查询显式排除当前这条
+                // （beforeMs = userTimestamp），否则"距上一条的间隔"永远是 0。
+                val careLines = collectCareHintsOrNull(userTimestamp)
+                val effectiveDynamicContext = if (careLines.isNullOrEmpty()) {
+                    dynamicContext
+                } else {
+                    val careBlock = buildString {
+                        append("### [即时关心感知]\n")
+                        for (line in careLines) {
+                            append("- ").append(line).append('\n')
+                        }
+                    }.trim()
+                    if (dynamicContext.isNullOrBlank()) careBlock else "$dynamicContext\n\n$careBlock"
+                }
+
                 // 3. 追加占位助手消息
                 val assistantMessageId = UUID.randomUUID().toString()
                 val assistantTimestamp = System.currentTimeMillis()
@@ -221,12 +247,15 @@ class ChatViewModel(
 
                 val assembledMessages = phiMiddleware.assemble(
                     characterCard = _uiState.value.activeCharacterCard,
-                    dynamicContext = dynamicContext,
+                    dynamicContext = effectiveDynamicContext,
                     historyMessages = history,
                     moodState = currentMood,
                     sessionId = sessionId,
                     charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
-                    turnCount = turnCount
+                    turnCount = turnCount,
+                    // 有可用工具时才注入"动作伴随语"契约：
+                    // 无工具的纯聊天不需要这段约束，多注入反而稀释其他铁律的权重
+                    includeToolPersonaContract = toolAgent != null
                 )
 
                 // 5. 流式打字机累积与系统工具闭环 (最多 MAX_TOOL_ITERATIONS 轮)
@@ -377,5 +406,30 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * 拉取关心提示。
+     *
+     * 返回 null（而非空列表）表示"本次不注入"——检测器缺位、DAO 缺位或任何
+     * 读取异常都走这条路。关心提示缺了不该阻断对话：宁可漏一次关心，
+     * 不可让主链路挂掉（与 Python 参考实现 collect_care_lines 的失败语义一致）。
+     */
+    private suspend fun collectCareHintsOrNull(currentUserTimestamp: Long): List<String>? {
+        val detector = careHintDetector ?: return null
+        val dao = chatDialogueDao ?: return null
+        return runCatching {
+            val nowMs = System.currentTimeMillis()
+            val sinceMs = nowMs - CareHintDetector.NIGHT_COUNT_WINDOW_DAYS * 86_400_000L
+            val recentTimes = dao.getUserTimestampsSince(sinceMs, currentUserTimestamp)
+                .map { Instant.ofEpochMilli(it) }
+            val lastTime = dao.getLastUserTimestampBefore(currentUserTimestamp)
+                ?.let { Instant.ofEpochMilli(it) }
+            detector.collectHintTexts(
+                now = Instant.ofEpochMilli(nowMs),
+                recentUserMessageTimes = recentTimes,
+                lastUserMessageTime = lastTime
+            )
+        }.getOrNull()
     }
 }

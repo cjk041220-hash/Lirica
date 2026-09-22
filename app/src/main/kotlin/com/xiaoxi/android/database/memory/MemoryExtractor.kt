@@ -34,6 +34,16 @@ class MemoryExtractor(
         /** 单条记忆最大长度，超过视为幻觉产物丢弃 */
         const val MAX_MEMORY_LENGTH = 200
 
+        /**
+         * 连续失败退避基数：第 n 次连续失败后，下次自动触发需等待 60s·2^(n-1)，
+         * 上限 [FAILURE_BACKOFF_MAX_MS]。弱网下"回填→重发→再失败"每轮对话都会打一次
+         * 必然失败的 LLM 请求（重试风暴），退避让批次在队列里自然等待而非立刻重试。
+         */
+        const val FAILURE_BACKOFF_BASE_MS = 60_000L
+
+        /** 退避上限：封顶 15 分钟，避免长时间弱网下退避无限拉长、积压批次越滚越大 */
+        const val FAILURE_BACKOFF_MAX_MS = 15 * 60_000L
+
         private val EXTRACTION_SYSTEM_PROMPT = """
             你是记忆抽取器。从对话的用户发言中提取值得长期记住的用户事实（偏好、习惯、人际关系、作息、计划、身份信息等）。
             规则：
@@ -50,14 +60,24 @@ class MemoryExtractor(
     private var batchStartTimestamp: Long = 0L
     private var lastExtractionTimestamp: Long = 0L
 
+    /** LLM 抽取连续失败计数；成功后归零。退避窗口由它驱动 */
+    private var consecutiveFailures: Int = 0
+
+    /** 最近一次失败的时间戳，配合 [consecutiveFailures] 计算退避窗口 */
+    private var lastFailureTimestamp: Long = 0L
+
     fun getPendingTurnCount(): Int = synchronized(this) { pendingTurns.size }
 
     fun getLastExtractionTime(): Long = synchronized(this) { lastExtractionTimestamp }
+
+    fun getConsecutiveFailureCount(): Int = synchronized(this) { consecutiveFailures }
 
     fun resetWatermark() = synchronized(this) {
         pendingTurns.clear()
         batchStartTimestamp = 0L
         lastExtractionTimestamp = 0L
+        consecutiveFailures = 0
+        lastFailureTimestamp = 0L
     }
 
     @Serializable
@@ -99,9 +119,17 @@ class MemoryExtractor(
 
             val count = pendingTurns.size
             val timeElapsed = if (batchStartTimestamp > 0) nowMs - batchStartTimestamp else 0L
-            val shouldTrigger = force ||
-                (count >= minTurnsAccumulated) ||
-                (batchStartTimestamp > 0 && timeElapsed >= throttleIntervalMs && count > 0)
+
+            // 退避闸门：连续失败后的冷却期内不自动触发，批次继续积攒（数据不丢，
+            // 只是不立刻重发）。force = true 为显式人工动作，不受退避限制。
+            val backoffActive = consecutiveFailures > 0 && !force &&
+                (nowMs - lastFailureTimestamp) < backoffMillis(consecutiveFailures)
+
+            val shouldTrigger = !backoffActive && (
+                force ||
+                    (count >= minTurnsAccumulated) ||
+                    (batchStartTimestamp > 0 && timeElapsed >= throttleIntervalMs && count > 0)
+                )
 
             if (shouldTrigger && pendingTurns.isNotEmpty()) {
                 batchContext = pendingTurns.joinToString("\n---\n")
@@ -120,15 +148,29 @@ class MemoryExtractor(
 
         return try {
             val response = requestExtraction(batchContext)
-            parseAndStore(response)
+            val stored = parseAndStore(response)
+            // LLM 调用本身已成功（解析失败不算失败），退避计数归零
+            synchronized(this) { consecutiveFailures = 0 }
+            stored
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
-            // LLM 请求失败（网络瞬态错误等）：回填批次，避免整批对话上下文永久丢失（方案 #13）。
-            // 注意 parseAndStore 内部的解析失败返回 0 不走此路径——持续性解析失败回填会引发重试风暴。
+            // LLM 请求失败（网络瞬态错误等）：回填批次，避免整批对话上下文永久丢失（方案 #13），
+            // 同时递增失败计数进入指数退避——弱网下不再每轮对话都重发一次必然失败的请求。
+            // 注意 parseAndStore 内部的解析失败返回 0 不走此路径。
+            synchronized(this) {
+                consecutiveFailures += 1
+                lastFailureTimestamp = nowMs
+            }
             restoreFailedBatch(batchContext, failedBatchStart)
             0
         }
+    }
+
+    /** 第 failures 次连续失败后的退避窗口：60s 起指数翻倍，封顶 15 分钟。internal 供单测断言 */
+    internal fun backoffMillis(failures: Int): Long {
+        val shift = (failures - 1).coerceIn(0, 4)
+        return (FAILURE_BACKOFF_BASE_MS shl shift).coerceAtMost(FAILURE_BACKOFF_MAX_MS)
     }
 
     /**

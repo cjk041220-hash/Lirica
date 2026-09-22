@@ -60,8 +60,13 @@ class HelixGuiCoordinatorImpl(
     private val serviceHolder: AccessibilityServiceHolder = AccessibilityServiceHolder,
     private val rootNodeProvider: () -> AccessibilityNodeInfo? = { serviceHolder.get()?.rootInActiveWindow },
     private val currentPackageProvider: () -> String? = { serviceHolder.get()?.rootInActiveWindow?.packageName?.toString() },
-    private val screenWidthProvider: () -> Int = { 1080 },
-    private val screenHeightProvider: () -> Int = { 2400 },
+    // 屏幕尺寸默认值必须是 0（= 未知）而非一个看似合理的 1080x2400：
+    // 1080 兜底在 1440p 等其他分辨率设备上会算出错位手势且无任何报错，
+    // 属于最难排查的静默故障。生产装配必须显式注入真实 provider
+    // （XiaoxiApplication 用 DisplayManager 物理显示读取）；provider 返回 0 时
+    // 接地引擎会明确返回 NotFound，故障暴露在日志与自愈链路里。
+    private val screenWidthProvider: () -> Int = { 0 },
+    private val screenHeightProvider: () -> Int = { 0 },
     private val confirmationTimeoutMs: Long = 300_000L
 ) : HelixGuiCoordinator {
 

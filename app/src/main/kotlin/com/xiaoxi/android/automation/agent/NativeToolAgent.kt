@@ -42,6 +42,12 @@ class NativeToolAgent(
     private val coordinator: HelixGuiCoordinator,
     private val intentDispatcher: IntentActionDispatcher,
     private val scheduleWakeManager: ScheduleWakeManager? = null,
+    /**
+     * 生活工具（天气、日程…）。与设备操控无关的纯网络/纯本地能力，
+     * 通过 [LifeTool] 契约挂载，避免 agent 的 when 分支随工具数膨胀。
+     * 默认空列表：既有调用方与测试无需改动。
+     */
+    private val lifeTools: List<LifeTool> = emptyList(),
     private val timeProvider: () -> Long = { System.currentTimeMillis() },
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true }
 ) {
@@ -196,7 +202,7 @@ class NativeToolAgent(
                     }
                 )
             )
-        )
+        ) + lifeTools.flatMap { it.definitions }
     }
 
     suspend fun executeToolCall(call: ToolCall): ToolExecutionResult {
@@ -215,6 +221,16 @@ class NativeToolAgent(
         // 整体异常兜底：任何工具实现抛出的异常（如精确闹钟 SecurityException、DAO 故障）
         // 都转为 tool 结果返回给模型，绝不击穿对话主链路；CancellationException 原样上抛保协程取消语义。
         return try {
+            // 生活工具优先派发。它们与设备操控无关，且契约保证"不是我的工具
+            // 返回 null 而不是抛异常"，因此先问一遍再落到设备工具的 when，
+            // 后续扩工具不动这个分支结构。
+            for (lifeTool in lifeTools) {
+                val lifeResult = lifeTool.execute(call.name, args, call.id)
+                if (lifeResult != null) {
+                    return lifeResult
+                }
+            }
+
             when (call.name) {
             "open_app" -> {
                 val appName = args["app_name"]?.jsonPrimitive?.content ?: ""

@@ -23,8 +23,16 @@ class HybridGroundingEngineImpl(
         screenWidth: Int,
         screenHeight: Int
     ): GroundingResult {
-        val safeW = if (screenWidth <= 0) 1080 else screenWidth
-        val safeH = if (screenHeight <= 0) 2400 else screenHeight
+        // 屏幕尺寸未知（<=0）时直接返回 NotFound，绝不用 1080x2400 兜底：
+        // 兜底会让归一化坐标按错误比例换算，产生"看起来成功、实际点错位置"的静默故障；
+        // 明确失败可交由上层自愈链路（重新抓树 / 重试）或日志暴露装配问题。
+        if (screenWidth <= 0 || screenHeight <= 0) {
+            return GroundingResult.NotFound(
+                "Screen size unavailable (w=$screenWidth, h=$screenHeight): grounding requires real display metrics"
+            )
+        }
+        val safeW = screenWidth
+        val safeH = screenHeight
 
         val visibleNodes = tree?.filter { it.isVisibleToUser } ?: emptyList()
 

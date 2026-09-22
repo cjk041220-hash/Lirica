@@ -3,6 +3,9 @@ package com.xiaoxi.android
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
+import android.hardware.display.DisplayManager
+import android.util.DisplayMetrics
+import android.view.Display
 import com.xiaoxi.android.automation.agent.NativeToolAgent
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinator
 import com.xiaoxi.android.automation.coordinator.HelixGuiCoordinatorImpl
@@ -18,6 +21,10 @@ import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.emotion.EmotionEngine
+import com.xiaoxi.android.life.CareHintDetector
+import com.xiaoxi.android.life.EventLifeTool
+import com.xiaoxi.android.life.SharedPreferencesCareLedger
+import com.xiaoxi.android.life.WeatherLifeTool
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.perception.AccessibilityServiceHolder
@@ -107,6 +114,14 @@ class XiaoxiApplication : Application() {
         private set
 
     /**
+     * 异常感知关心检测器（深夜 / 久未出现）。
+     * 冷却台账用 SharedPreferences 而非 Room 表：只有三条记录、单值读取，
+     * 不值得为它付一次 schema 迁移（详见 CareLedger 的说明）。
+     */
+    lateinit var careHintDetector: CareHintDetector
+        private set
+
+    /**
      * 后台任务（记忆抽取等）共用的 LLM 配置
      */
     val backgroundLlmConfig: LlmConfig by lazy {
@@ -154,7 +169,14 @@ class XiaoxiApplication : Application() {
 
         // 注入真实屏幕宽高：滑动比例与接地坐标换算依赖真实尺寸，
         // 默认 1080x2400 硬编码在其他分辨率设备上会产生错位手势；
-        // 每次调用时实时读取，规避 Application 早期系统 displayMetrics 尚未就绪的问题
+        // 每次调用时实时读取，规避 Application 早期系统 displayMetrics 尚未就绪的问题。
+        // 尺寸源用 DisplayManager 的物理显示（getRealMetrics，含系统装饰区），而非
+        // Resources.getSystem()：后者跟随系统配置变化，分屏/自由窗口下可能拿到
+        // 窗口尺寸而非整屏尺寸，而无障碍 bounds 与手势坐标始终是屏幕绝对坐标系，
+        // 必须用整屏口径。getRealMetrics 在 API 31+ 标记 deprecated，但仍是 minSdk 26
+        // 下语义最直接的全版本读取方式（WindowMetrics 需 API 30+ 且 Application
+        // 非可视上下文会抛 UnsupportedOperationException）。
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         helixCoordinator = HelixGuiCoordinatorImpl(
             intentDispatcher = intentDispatcher,
             treeExtractor = treeExtractor,
@@ -163,14 +185,40 @@ class XiaoxiApplication : Application() {
             gestureExecutor = gestureExecutor,
             textInputExecutor = textInputExecutor,
             watchdog = watchdog,
-            screenWidthProvider = { android.content.res.Resources.getSystem().displayMetrics.widthPixels },
-            screenHeightProvider = { android.content.res.Resources.getSystem().displayMetrics.heightPixels }
+            screenWidthProvider = {
+                runCatching {
+                    val metrics = DisplayMetrics()
+                    displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.getRealMetrics(metrics)
+                    metrics.widthPixels
+                }.getOrDefault(0)
+            },
+            screenHeightProvider = {
+                runCatching {
+                    val metrics = DisplayMetrics()
+                    displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.getRealMetrics(metrics)
+                    metrics.heightPixels
+                }.getOrDefault(0)
+            }
         )
 
         nativeToolAgent = NativeToolAgent(
             coordinator = helixCoordinator,
             intentDispatcher = intentDispatcher,
-            scheduleWakeManager = scheduleWakeManager
+            scheduleWakeManager = scheduleWakeManager,
+            // 生活工具挂载：天气（Open-Meteo，免 Key）+ 日程（create_event/list_events，
+            // 落 scheduled_alarms 表并注册系统闹钟）。后续搜索等按同一 LifeTool
+            // 契约追加，不动 agent 主体
+            lifeTools = listOf(
+                WeatherLifeTool(),
+                EventLifeTool(
+                    scheduleWakeManager = scheduleWakeManager,
+                    scheduledAlarmDao = database.scheduledAlarmDao()
+                )
+            )
+        )
+
+        careHintDetector = CareHintDetector(
+            careLedger = SharedPreferencesCareLedger.create(this)
         )
 
         registerAutonomousLife()

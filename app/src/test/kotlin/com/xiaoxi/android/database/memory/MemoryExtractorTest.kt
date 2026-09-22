@@ -194,10 +194,14 @@ class MemoryExtractorTest {
         val firstCount = extractor.maybeExtract("我最近每天晚上都会去江边跑步，感觉很解压。")
         assertEquals(0, firstCount)
         assertEquals("失败批次必须回填到 pendingTurns", 1, extractor.getPendingTurnCount())
+        assertEquals("失败后进入退避计数", 1, extractor.getConsecutiveFailureCount())
 
-        // 第二次：网络恢复，回填的批次内容应随重试被成功抽取
+        // 第二次：网络恢复，且 nowMs 已越过退避窗口，回填的批次内容应随自动重试被成功抽取
         shouldFail = false
-        val secondCount = extractor.maybeExtract("今晚又去江边跑了五公里，状态回来了。")
+        val secondCount = extractor.maybeExtract(
+            "今晚又去江边跑了五公里，状态回来了。",
+            nowMs = System.currentTimeMillis() + MemoryExtractor.FAILURE_BACKOFF_BASE_MS + 1_000L
+        )
         assertEquals(1, secondCount)
         coVerify(exactly = 1) {
             userMemoryDao.insert(withArg { entity: UserMemoryEntity ->
@@ -252,6 +256,76 @@ class MemoryExtractorTest {
         }
         // 三条 turn 都已消耗（含回填的失败批次与两轮新 turn）
         assertEquals(0, extractor.getPendingTurnCount())
+    }
+
+    @Test
+    fun testMaybeExtract_failureBackoff_blocksAutoRetryUntilWindowElapses() = runTest {
+        // 弱网重试风暴回归：连续失败后的退避窗口内，自动触发不得发起 LLM 请求；
+        // 批次继续积攒不丢；force 显式调用绕过退避；成功后计数归零
+        var engineCalls = 0
+        var shouldFail = true
+        val mockEngine = MockEngine { _ ->
+            engineCalls++
+            if (shouldFail) throw RuntimeException("network down")
+            respond(
+                content = sseResponse("{\"memories\":[{\"content\":\"用户喜欢咖啡\"}]}"),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) {
+                json(testJson)
+            }
+        }
+        val extractor = MemoryExtractor(
+            llmClient = XiaoxiLlmClient(httpClient = httpClient),
+            userMemoryDao = userMemoryDao,
+            llmConfig = LlmConfig(apiKey = "test-key"),
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 1
+        )
+        coEvery { userMemoryDao.insert(any()) } returns 1L
+        val baseNow = 1_000_000_000L
+
+        // 第一次触发：失败 → 计数 1，批次回填
+        assertEquals(0, extractor.maybeExtract("第一条：今晚吃了火锅，好撑。", nowMs = baseNow))
+        assertEquals(1, extractor.getConsecutiveFailureCount())
+        assertEquals(1, engineCalls)
+
+        // 退避窗口内（<60s）来了新 turn：不得自动重发——LLM 引擎零调用，批次只积攒
+        assertEquals(0, extractor.maybeExtract("第二条：还是想吃炸鸡。", nowMs = baseNow + 30_000L))
+        assertEquals("退避期内不得发起 LLM 请求", 1, engineCalls)
+        assertEquals("退避期内批次继续积攒不丢", 2, extractor.getPendingTurnCount())
+
+        // force 显式调用绕过退避：立即触发，此时网络已恢复
+        shouldFail = false
+        val count = extractor.maybeExtract("第三条：显式触发抽取。", nowMs = baseNow + 40_000L, force = true)
+        assertEquals(1, count)
+        assertEquals(2, engineCalls)
+        assertEquals("成功后退避计数归零", 0, extractor.getConsecutiveFailureCount())
+        assertEquals(0, extractor.getPendingTurnCount())
+    }
+
+    @Test
+    fun testBackoffMillis_exponentialGrowthWithCap() {
+        val extractor = buildExtractor(sseResponse("{}"))
+        assertEquals(60_000L, extractor.backoffMillis(1))
+        assertEquals(120_000L, extractor.backoffMillis(2))
+        assertEquals(240_000L, extractor.backoffMillis(3))
+        assertEquals(480_000L, extractor.backoffMillis(4))
+        // 第 5 次起 60s·2⁴ = 960s 已越过 15 分钟上限，被封顶压到 900s
+        assertEquals(
+            "第 5 次失败触及 15 分钟上限",
+            MemoryExtractor.FAILURE_BACKOFF_MAX_MS,
+            extractor.backoffMillis(5)
+        )
+        assertEquals(
+            "上限之后不再增长",
+            MemoryExtractor.FAILURE_BACKOFF_MAX_MS,
+            extractor.backoffMillis(20)
+        )
     }
 
     @Test

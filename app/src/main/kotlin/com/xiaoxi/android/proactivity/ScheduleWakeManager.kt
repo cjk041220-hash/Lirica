@@ -40,7 +40,8 @@ class AndroidSystemAlarmScheduler(
         val pendingIntent = PendingIntent.getBroadcast(context, alarmId.hashCode(), intent, flags)
 
         // Android 12+ 精确闹钟受 SCHEDULE_EXACT_ALARM 门控且用户可随时撤销；
-        // 无权限时降级 setWindow（±10 分钟窗口），杜绝 SecurityException 击穿调用链。
+        // 无权限时降级 setWindow——触发点不保证精确，落在 [triggerAt, triggerAt+10min]
+        // 窗口内的任意时刻（并非 ±10 分钟），杜绝 SecurityException 击穿调用链。
         val canScheduleExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
             alarmManager.canScheduleExactAlarms()
 

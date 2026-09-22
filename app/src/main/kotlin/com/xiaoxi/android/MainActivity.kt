@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
                     ),
                     // 接通系统工具闭环：toolAgent 缺位时 LLM 拿不到 tools 声明，代行/闹钟/输入等能力全部死路
                     toolAgent = app.nativeToolAgent,
+                    // 异常感知关心检测（深夜/久未出现）；缺位时 ChatViewModel 内部自动跳过
+                    careHintDetector = app.careHintDetector,
                     // 共享全局交接快照单例，VM 重建后长程会话上下文不丢
                     handoffManager = app.handoffManager
                 ) as T
