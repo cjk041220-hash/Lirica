@@ -62,18 +62,23 @@ lirica-android/
 
 ---
 
-## 🔑 API Key 配置（构建必需）
+## 🔑 API Key 与本地配置
 
-自 2026-09-21 起，缺失 `DEEPSEEK_API_KEY` 时构建会**直接失败**（不再回退占位符，防止占位 Key 烘进 APK）。三种配置方式，按优先级：
+随着 M3.1 BYOK 多模型网关落地，**无 Key 构建不会硬阻断**（支持零配置打包生成 APK，并在首启时由 Onboarding 向导引导配置）。但在本地开发时，推荐在根目录配置开发 Key：
 
 1. **本机开发（推荐）**：项目根目录 `local.properties` 添加一行（该文件不入库）：
-   ```
+   ```properties
    DEEPSEEK_API_KEY=sk-xxxxxxxx
    ```
 2. **命令行临时传参**：`./gradlew assembleDebug -PDEEPSEEK_API_KEY=sk-xxxxxxxx`
 3. **CI / 环境变量**：设置同名环境变量 `DEEPSEEK_API_KEY`。
 
-> 注意：Key 会编译期注入 `BuildConfig` 并随 APK 分发，**请勿将打出的 APK 分发给他人**；运行时自备 Key（BYOK）能力见上方核心能力第 5 条（experimental）。
+---
+
+## 🤝 团队协作与开发规范
+
+如果你或你的伙伴参与 Lirica 的开发，请务必阅读协作军规与分支规范：
+👉 **[`CONTRIBUTING.md`](./CONTRIBUTING.md)**（涵盖：516 项单测基线、零信任物理隐私断流、中文无障碍分流铁律、任务认领看板）
 
 ---
 
