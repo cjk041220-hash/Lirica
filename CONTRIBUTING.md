@@ -20,7 +20,7 @@ Lirica 是一个运行在 Android 原生端侧的自主人格伴生智能体（A
 
 - **开发语言**：100% Native Kotlin（协程 Flow / StateFlow / 挂起函数）。
 - **界面层**：Jetpack Compose + Material 3（声明式 UI，主界面 + 跨应用常驻悬浮窗）。
-- **数据持久化**：Room SQLite（`xiaoxi_aether.db`，双轨记忆库、未完成念头、会话历史）。
+- **数据持久化**：Room SQLite（`lirica_aether.db`，双轨记忆库、未完成念头、会话历史）。
 - **网络通信**：Ktor Client（SSE 增量流式解析 + BYOK 多模型适配网关）。
 - **后台守护**：Android 前台服务 (`KeepAliveService`, `specialUse`) + WorkManager。
 - **自动化底座**：AccessibilityService（拟人手势/读屏）+ Shizuku（ADB 特权手势/按键穿透）。
@@ -168,7 +168,7 @@ git push -u origin feat/m34-hardware-bus
 - [ ] 本地运行 `./gradlew testDebugUnitTest` 全绿通过（当前基线 516 项）。
 - [ ] 本地运行 `./gradlew assembleDebug` 打包成功。
 - [ ] 针对新增功能或 Bug 修复补充了对应的单元测试。
-- [ ] 未改动包名 `com.xiaoxi.android` 与数据库名 `xiaoxi_aether.db`。
+- [ ] 未改动包名 `com.xiaoxi.android` 与数据库名 `lirica_aether.db`。
 - [ ] 没有将个人 API Key 或敏感文件引入 Git 追踪。
 - [ ] 涉及 UI 文本和角色提示词时，使用新产品名 **Lirica**。
 - [ ] 同步更新了 `docs/PROGRESS_TRACKER.md` 的对应任务状态。

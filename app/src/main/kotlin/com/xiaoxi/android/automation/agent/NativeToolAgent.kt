@@ -197,7 +197,7 @@ class NativeToolAgent(
                             }
                             putJsonObject("bot_note") {
                                 put("type", "string")
-                                put("description", "Lirica自己用第一人称记录的定闹钟原因（例如：'半小时后提醒JK喝水'）")
+                                put("description", "Lirica自己用第一人称记录的定闹钟原因（例如：'半小时后提醒喝水'）")
                             }
                             putJsonObject("block_delivery") {
                                 put("type", "boolean")

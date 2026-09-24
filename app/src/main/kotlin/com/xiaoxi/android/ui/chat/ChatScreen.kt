@@ -242,7 +242,7 @@ fun ChatScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = "🐬",
+                                    text = "✨",
                                     fontSize = 44.sp
                                 )
                                 Text(

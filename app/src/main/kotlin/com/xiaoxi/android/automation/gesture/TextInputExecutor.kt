@@ -39,7 +39,7 @@ class TextInputExecutor(
         // 2. 降级路径：剪贴板安全注入（严格实施物理快照还原）
         val originalClip: ClipData? = clipboardManager.primaryClip
         return try {
-            clipboardManager.setPrimaryClip(ClipData.newPlainText("xiaoxi_agent_type", text))
+            clipboardManager.setPrimaryClip(ClipData.newPlainText("lirica_agent_type", text))
             // 先通过拟人化点击获取输入框光标焦点
             gestureExecutor.execute(GestureSpec.Click(targetBounds.centerX.toFloat(), targetBounds.centerY.toFloat()))
             delay(100)

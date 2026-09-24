@@ -29,6 +29,6 @@ class SubconsciousDreamWorkerTest {
         assertEquals(TimeUnit.HOURS.toMillis(24), workSpec.intervalDuration)
 
         // 3. 验证 Worker 唯一任务标识
-        assertEquals("xiaoxi_subconscious_dream_worker", SubconsciousDreamWorker.WORK_NAME)
+        assertEquals("lirica_subconscious_dream_worker", SubconsciousDreamWorker.WORK_NAME)
     }
 }

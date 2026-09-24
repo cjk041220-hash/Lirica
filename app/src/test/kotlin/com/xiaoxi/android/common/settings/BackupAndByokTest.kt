@@ -45,7 +45,7 @@ class BackupAndByokTest {
 
         val dataRulesContent = dataRulesFile.readText()
         assertTrue(dataRulesContent.contains(XiaoxiDatabase.DATABASE_NAME))
-        assertTrue(dataRulesContent.contains("xiaoxi_byok_prefs"))
+        assertTrue(dataRulesContent.contains(ByokSettingsRepository.PREFS_NAME))
         // 库文件三件套（主库 + shm + wal）必须全部排除，防止亲密记忆随备份外流
         assertTrue(dataRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-shm"))
         assertTrue(dataRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-wal"))
@@ -53,7 +53,7 @@ class BackupAndByokTest {
 
         val backupRulesContent = backupRulesFile.readText()
         assertTrue(backupRulesContent.contains(XiaoxiDatabase.DATABASE_NAME))
-        assertTrue(backupRulesContent.contains("xiaoxi_byok_prefs"))
+        assertTrue(backupRulesContent.contains(ByokSettingsRepository.PREFS_NAME))
         assertTrue(backupRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-shm"))
         assertTrue(backupRulesContent.contains("${XiaoxiDatabase.DATABASE_NAME}-wal"))
         assertFalse("不得残留错误的旧库名 xiaoxi_database", backupRulesContent.contains("xiaoxi_database"))

@@ -112,7 +112,7 @@ private fun MoodAvatar(
         MoodState.RELIEVED -> "😌"
         MoodState.RELAXED -> "☕"
         MoodState.MISSING -> "💭"
-        null -> "🐬"
+        null -> "✨"
     }
 
     Box(

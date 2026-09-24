@@ -44,36 +44,36 @@ class HybridExecutionManagerTest {
     @Test
     fun testInputText_pureAscii_prefersShizukuWhenAvailable() = runTest {
         coEvery { shizukuBackend.isAvailable() } returns true
-        coEvery { shizukuBackend.inputText("xiaoxi") } returns true
+        coEvery { shizukuBackend.inputText("lirica") } returns true
 
         val manager = HybridExecutionManager(
             accessibilityBackend = accessibilityBackend,
             shizukuBackend = shizukuBackend
         )
 
-        val result = manager.inputText("xiaoxi")
+        val result = manager.inputText("lirica")
         assertTrue(result)
 
-        coVerify(exactly = 1) { shizukuBackend.inputText("xiaoxi") }
+        coVerify(exactly = 1) { shizukuBackend.inputText("lirica") }
         coVerify(exactly = 0) { accessibilityBackend.inputText(any()) }
     }
 
     @Test
     fun testInputText_pureAscii_whenShizukuFails_fallsBackToAccessibility() = runTest {
         coEvery { shizukuBackend.isAvailable() } returns true
-        coEvery { shizukuBackend.inputText("xiaoxi") } returns false
-        coEvery { accessibilityBackend.inputText("xiaoxi") } returns true
+        coEvery { shizukuBackend.inputText("lirica") } returns false
+        coEvery { accessibilityBackend.inputText("lirica") } returns true
 
         val manager = HybridExecutionManager(
             accessibilityBackend = accessibilityBackend,
             shizukuBackend = shizukuBackend
         )
 
-        val result = manager.inputText("xiaoxi")
+        val result = manager.inputText("lirica")
         assertTrue(result)
 
-        coVerify(exactly = 1) { shizukuBackend.inputText("xiaoxi") }
-        coVerify(exactly = 1) { accessibilityBackend.inputText("xiaoxi") }
+        coVerify(exactly = 1) { shizukuBackend.inputText("lirica") }
+        coVerify(exactly = 1) { accessibilityBackend.inputText("lirica") }
     }
 
     @Test

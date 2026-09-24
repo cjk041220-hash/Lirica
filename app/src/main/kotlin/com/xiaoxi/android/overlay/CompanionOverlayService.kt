@@ -449,7 +449,7 @@ class CompanionOverlayService : LifecycleService() {
 
     companion object {
         private const val TAG = "CompanionOverlayService"
-        const val NOTIFICATION_CHANNEL_TASK_EXECUTION = "xiaoxi_task_execution"
+        const val NOTIFICATION_CHANNEL_TASK_EXECUTION = "lirica_task_execution"
         const val NOTIFICATION_ID_TASK_EXECUTION = 1002
 
         fun createDefaultLayoutParams(

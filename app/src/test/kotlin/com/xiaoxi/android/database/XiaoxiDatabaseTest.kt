@@ -197,7 +197,7 @@ class XiaoxiDatabaseTest {
         val now = 1726700000000L
         val thought1 = UnspokenThoughtEntity(
             id = "thought_01",
-            thought = "看到冷冷刚才叹了一口气，等会儿她停下来时问问要不要喝杯热饮",
+            thought = "看到你刚才叹了一口气，等会儿停下来时问问要不要喝杯热饮",
             triggerContext = "app:com.tencent.mm, time:late_night",
             urgency = 0.85f,
             decayScore = 1.0f,
@@ -208,7 +208,7 @@ class XiaoxiDatabaseTest {
         )
         val thought2 = UnspokenThoughtEntity(
             id = "thought_02",
-            thought = "下周好像有一场画展，她之前说过喜欢这个作者",
+            thought = "下周好像有一场画展，之前说过喜欢这个作者",
             triggerContext = "news:art_exhibition",
             urgency = 0.4f,
             decayScore = 1.0f,

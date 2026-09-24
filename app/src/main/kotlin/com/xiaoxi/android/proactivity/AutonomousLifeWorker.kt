@@ -39,7 +39,7 @@ class AutonomousLifeWorker(
     }
 
     companion object {
-        const val WORK_NAME = "xiaoxi_autonomous_life_worker"
+        const val WORK_NAME = "lirica_autonomous_life_worker"
 
         /**
          * 构建具有高严密能耗约束的 WorkRequest

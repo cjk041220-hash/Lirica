@@ -43,7 +43,7 @@ interface ByokSettingsRepository {
     fun clearCustomSettings()
 
     companion object {
-        const val PREFS_NAME = "xiaoxi_byok_prefs"
+        const val PREFS_NAME = "lirica_byok_prefs"
         const val KEY_API_KEY = "byok_api_key"
         const val KEY_BASE_URL = "byok_base_url"
         const val KEY_MODEL = "byok_model"

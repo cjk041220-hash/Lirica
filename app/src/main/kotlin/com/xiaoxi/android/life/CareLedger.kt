@@ -45,7 +45,7 @@ class SharedPreferencesCareLedger(
 ) : CareLedger {
 
     companion object {
-        const val PREFS_NAME = "xiaoxi_care_ledger"
+        const val PREFS_NAME = "lirica_care_ledger"
         private const val KEY_PREFIX = "care_last_at_"
 
         fun create(context: Context): SharedPreferencesCareLedger =

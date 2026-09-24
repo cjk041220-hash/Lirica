@@ -52,7 +52,7 @@ class SubconsciousDreamWorker(
     }
 
     companion object {
-        const val WORK_NAME = "xiaoxi_subconscious_dream_worker"
+        const val WORK_NAME = "lirica_subconscious_dream_worker"
 
         fun createPeriodicWorkRequest(): PeriodicWorkRequest {
             val constraints = Constraints.Builder()

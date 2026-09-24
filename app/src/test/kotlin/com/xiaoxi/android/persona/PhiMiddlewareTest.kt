@@ -28,7 +28,7 @@ class PhiMiddlewareTest {
 
     @Test
     fun testContextAssemblySequenceOrder() {
-        val systemPrompt = "基础人设：你是 Lirica，来自映海的鲸族少女。"
+        val systemPrompt = "基础人设：你是 Lirica，生活在数字与现实交界处的原生伴生智能体。"
         val dynamicContext = "【情境与记忆】当前时间：14:00，用户记忆：喜欢喝冰乌龙茶。"
         val history = listOf(
             ChatMessage(role = "user", content = "今天好热，喝点什么好？")
@@ -242,20 +242,20 @@ class PhiMiddlewareTest {
         val assembled = phiMiddleware.assemble(
             characterCard = card,
             historyMessages = history,
-            userName = "小月",
+            userName = "阿泽",
             charName = "Lirica"
         )
 
         // 系统主提示词宏展开验证
         val systemMessage = assembled.first()
         assertEquals("system", systemMessage.role)
-        assertTrue(systemMessage.content.orEmpty().contains("你是Lirica，陪伴在小月身边的伴生智能体。"))
+        assertTrue(systemMessage.content.orEmpty().contains("你是Lirica，陪伴在阿泽身边的伴生智能体。"))
 
         // 尾部 PHI 宏展开与卡片指令注入验证
         val phiMessage = assembled.last()
         assertEquals("system", phiMessage.role)
         val phiContent = phiMessage.content.orEmpty()
-        assertTrue(phiContent.contains("Lirica务必记住：对小月保持真诚，绝不敷衍。"))
+        assertTrue(phiContent.contains("Lirica务必记住：对阿泽保持真诚，绝不敷衍。"))
         assertTrue(phiContent.contains("语气铁律"))
     }
 
@@ -330,8 +330,8 @@ class PhiMiddlewareTest {
         )
 
         val tailContent = assembled.last().content.orEmpty()
-        // 关键断言：自定义角色卡在第 8 轮触发抗漂移时，绝不能被注入硬编码的“映海来的鲸族少女Lirica”！
-        assertFalse("自定义角色卡严禁被 Lirica 人设污染", tailContent.contains("映海来的鲸族少女"))
+        // 关键断言：自定义角色卡在第 8 轮触发抗漂移时，绝不能被注入默认的 Lirica 人设！
+        assertFalse("自定义角色卡严禁被 Lirica 人设污染", tailContent.contains("数字与现实交界处"))
         assertTrue("必须包含该角色的姓名重锚", tailContent.contains("夏洛克·福尔摩斯"))
         assertTrue("必须包含该角色的核心性格重锚", tailContent.contains("敏锐毒舌、极度理性的咨询侦探"))
     }

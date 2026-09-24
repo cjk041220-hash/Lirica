@@ -101,7 +101,7 @@ class KeepAliveService : LifecycleService() {
         private const val TAG = "KeepAliveService"
 
         const val NOTIFICATION_ID = 1001
-        const val CHANNEL_ID = "xiaoxi_keepalive_channel"
+        const val CHANNEL_ID = "lirica_keepalive_channel"
         const val CHANNEL_NAME = "Lirica 伴生保活服务"
 
         const val ACTION_STOP_SERVICE = "com.xiaoxi.android.action.STOP_KEEPALIVE"

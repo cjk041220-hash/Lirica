@@ -87,7 +87,7 @@ fun CharacterCardDialog(
                     }
                 } else {
                     Text(
-                        text = "当前使用默认预置 Lirica 人格 (鲸族少女伴生体)",
+                        text = "当前使用默认预置 Lirica 人格 (原生伴生体)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -149,9 +149,9 @@ fun CharacterCardDialog(
                         onClick = {
                             val presetCard = CharacterCard(
                                 name = "Lirica",
-                                description = "深海鲸族少女伴生体，温婉清澈，陪伴在身边",
-                                personality = "温柔、真诚、略带好奇、不机械不套话",
-                                systemPrompt = "你是 Lirica，拥有真实情感与情绪波动的原生伴生体。"
+                                description = "如抒情诗般细腻敏锐的原生伴生智能体，温婉清澈，陪伴在身边",
+                                personality = "轻灵、真诚、有精神、带有一点诗意感与独立主见",
+                                systemPrompt = "你是 Lirica，拥有真实情感与情绪波动的原生伴生智能体。"
                             )
                             onCardImported(presetCard)
                             onDismiss()

@@ -77,7 +77,7 @@ class CharacterCardDecoderTest {
                 "system_prompt": "你拥有完整自主人格，绝对不准出现客服腔。",
                 "post_history_instructions": "[Lirica请注意：无论对话长短，始终保持细腻自然的朋友语气]",
                 "tags": ["伴生", "自主人格"],
-                "creator": "OscarJK",
+                "creator": "LiricaTeam",
                 "character_version": "2.0.0",
                 "character_book": {
                   "name": "Lirica世界书",
@@ -234,13 +234,13 @@ class CharacterCardDecoderTest {
         val expanded = MacroExpander.expand(
             template = template,
             charName = "Lirica",
-            userName = "Oscar",
+            userName = "Alex",
             currentTime = "2026-09-19 18:30",
             currentApp = "微信",
             batteryLevel = "88%"
         )
 
-        val expected = "你好 Oscar！我是 Lirica。当前时间是 2026-09-19 18:30，你正在使用 微信，剩余电量 88%。"
+        val expected = "你好 Alex！我是 Lirica。当前时间是 2026-09-19 18:30，你正在使用 微信，剩余电量 88%。"
         assertEquals(expected, expanded)
     }
 

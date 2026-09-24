@@ -52,7 +52,7 @@ abstract class XiaoxiDatabase : RoomDatabase() {
     abstract fun scheduledAlarmDao(): ScheduledAlarmDao
 
     companion object {
-        const val DATABASE_NAME = "xiaoxi_aether.db"
+        const val DATABASE_NAME = "lirica_aether.db"
 
         @JvmField
         val MIGRATION_1_2 = object : Migration(1, 2) {

@@ -41,7 +41,7 @@ class DefaultSecureKeyStore(
 
     companion object {
         private const val TAG = "SecureKeyStore"
-        const val KEY_ALIAS_DEFAULT = "xiaoxi_byok_aes_master_key"
+        const val KEY_ALIAS_DEFAULT = "lirica_byok_aes_master_key"
         private const val ANDROID_KEY_STORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_IV_LENGTH_BYTES = 12
