@@ -187,7 +187,7 @@ class NativeToolAgent(
                 type = "function",
                 function = ToolFunction(
                     name = "schedule_wake",
-                    description = "小汐为自己设定一个未来定时提醒闹钟约定，到达指定时间后自动唤醒心智并生成第一人称念头活水",
+                    description = "Lirica为自己设定一个未来定时提醒闹钟约定，到达指定时间后自动唤醒心智并生成第一人称念头活水",
                     parameters = buildJsonObject {
                         put("type", "object")
                         putJsonObject("properties") {
@@ -197,7 +197,7 @@ class NativeToolAgent(
                             }
                             putJsonObject("bot_note") {
                                 put("type", "string")
-                                put("description", "小汐自己用第一人称记录的定闹钟原因（例如：'半小时后提醒JK喝水'）")
+                                put("description", "Lirica自己用第一人称记录的定闹钟原因（例如：'半小时后提醒JK喝水'）")
                             }
                             putJsonObject("block_delivery") {
                                 put("type", "boolean")

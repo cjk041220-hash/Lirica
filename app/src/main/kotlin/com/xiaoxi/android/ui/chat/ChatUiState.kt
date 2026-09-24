@@ -40,5 +40,7 @@ data class ChatUiState(
     val activeCharacterCard: CharacterCard? = null,
     val isCharacterCardDialogOpen: Boolean = false,
     val isMoodDebugPanelVisible: Boolean = false,
+    val isApiKeyConfigured: Boolean = true,
+    val isKeyPromptBannerVisible: Boolean = false,
     val errorMessage: String? = null
 )

@@ -3,6 +3,7 @@ package com.xiaoxi.android.overlay.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
@@ -42,7 +43,8 @@ class OverlayExpandViewModel(
         apiKey = BuildConfig.DEEPSEEK_API_KEY,
         provider = LlmProvider.DEEPSEEK,
         model = "deepseek-chat"
-    )
+    ),
+    val byokRepository: ByokSettingsRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -206,11 +208,14 @@ class OverlayExpandViewModel(
                     dynamicContext = dynamicContext,
                     historyMessages = listOf(userMsg),
                     moodState = currentMood,
-                    charName = "小汐"
+                    charName = "Lirica"
                 )
 
                 val accumulated = StringBuilder()
-                llmClient.streamChat(llmConfig, assembledMessages).collect { event ->
+                val effectiveConfig = byokRepository?.getEffectiveLlmConfig() ?: llmConfig
+                if (effectiveConfig.apiKey.isBlank()) return@launch
+
+                llmClient.streamChat(effectiveConfig, assembledMessages).collect { event ->
                     when (event) {
                         is LlmStreamEvent.Token -> {
                             accumulated.append(event.text)

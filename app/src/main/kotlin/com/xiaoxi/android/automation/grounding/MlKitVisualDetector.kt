@@ -80,6 +80,9 @@ class MlKitVisualDetector(
         val image = InputImage.fromBitmap(bitmap, 0)
 
         return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation {
+                runCatching { bitmap.recycle() }
+            }
             recognizer.process(image)
                 .addOnSuccessListener { visionText ->
                     val results = mutableListOf<VisualDetection>()
@@ -104,6 +107,10 @@ class MlKitVisualDetector(
                 .addOnFailureListener { exception ->
                     XiaoxiLog.e("MlKitVisualDetector", "ML Kit 文字识别异常", exception)
                     continuation.resume(emptyList())
+                }
+                .addOnCompleteListener {
+                    // 识别任务结束后显式回收位图内存，防止高频截帧检测时诱发 GC 抖动
+                    runCatching { bitmap.recycle() }
                 }
         }
     }

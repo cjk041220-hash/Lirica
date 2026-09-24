@@ -7,7 +7,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
- * 小汐 2.0 统一日志门面与内存定长环形缓冲器
+ * Lirica 统一日志门面与内存定长环形缓冲器
  *
  * 既输出到 Android LogCat，又在内存维护最近 200 条系统轨迹，为崩溃报告提供现场上下文。
  */

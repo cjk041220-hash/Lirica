@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * 核心数学微分更新方程：
  * ΔE = α · Stimulus - β · (E - E_0)
  *
- * @param baseline 人格基线情绪锚点 E_0，默认小汐为 (0.20f, 0.10f)（轻度正向、稍醒）
+ * @param baseline 人格基线情绪锚点 E_0，默认 Lirica 为 (0.20f, 0.10f)（轻度正向、稍醒）
  * @param dampingBeta 阻尼衰减系数 β ∈ (0, 1)，无外界刺激时向基线回归的速率
  * @param sensitivityAlpha 冲激敏感度 α > 0，外部事件转化为情绪增量的放大系数
  */

@@ -130,17 +130,17 @@ class CompanionOverlayService : LifecycleService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_TASK_EXECUTION,
-                "小汐任务执行通知",
+                "Lirica 任务执行通知",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "小汐在前台代行操作时的任务执行状态提示"
+                description = "Lirica 在前台代行操作时的任务执行状态提示"
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(channel)
         }
 
         val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_TASK_EXECUTION)
-            .setContentTitle("小汐正在代行操作")
+            .setContentTitle("Lirica 正在代行操作")
             .setContentText(taskDescription)
             .setSmallIcon(android.R.drawable.ic_menu_agenda)
             .setOngoing(true)

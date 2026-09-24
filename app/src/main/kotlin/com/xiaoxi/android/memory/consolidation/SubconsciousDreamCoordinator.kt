@@ -5,6 +5,8 @@ import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.dao.UserMemoryDao
 import com.xiaoxi.android.database.dao.WorldviewDao
 import com.xiaoxi.android.database.entity.UserMemoryEntity
+import com.xiaoxi.android.network.XiaoxiLlmClient
+import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.proactivity.DiaryEngine
 
 data class DreamCycleReport(
@@ -38,7 +40,10 @@ class SubconsciousDreamCoordinator(
     private val timeDisambiguator: TimeDisambiguator = TimeDisambiguator(),
     private val beliefRevisionEngine: BeliefRevisionEngine = BeliefRevisionEngine(),
     private val worldviewPromoter: WorldviewPromoter = WorldviewPromoter(),
-    private val emergenceSynthesizer: DreamEmergenceSynthesizer = DreamEmergenceSynthesizer()
+    private val emergenceSynthesizer: DreamEmergenceSynthesizer = DreamEmergenceSynthesizer(),
+    private val llmClient: XiaoxiLlmClient? = null,
+    private val llmConfig: LlmConfig? = null,
+    private val charName: String = "Lirica"
 ) {
 
     suspend fun runDreamCycle(nowMs: Long = System.currentTimeMillis()): DreamCycleReport {
@@ -46,7 +51,7 @@ class SubconsciousDreamCoordinator(
         val allActive = userMemoryDao.getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 500)
         val originalCount = allActive.size
         if (allActive.isEmpty()) {
-            diaryEngine?.generateDailyDiary(nowMs)
+            diaryEngine?.generateDailyDiary(nowMs, charName, llmClient, llmConfig)
             return DreamCycleReport(0, 0, 0, 0, 0, 0, null)
         }
 
@@ -73,16 +78,18 @@ class SubconsciousDreamCoordinator(
             userMemoryDao.update(surviving)
         }
 
-        // 4. 流水线三：矛盾消歧与信念修正
+        // 4. 流水线三：矛盾消歧与信念修正 (LLM 增强)
         // 在剩余活跃记忆内部检测新旧事实冲突（按创建时间先后顺序）
         val sortedByDate = dedupResult.survivingMemories.sortedBy { it.createdAt }
         val olderMemories = sortedByDate.take(sortedByDate.size / 2 + 1)
         val newerMemories = sortedByDate.drop(sortedByDate.size / 2 + 1)
 
-        val revisionResult = beliefRevisionEngine.detectAndRevise(
+        val revisionResult = beliefRevisionEngine.detectAndReviseWithLlm(
             existingMemories = olderMemories,
             newMemories = newerMemories,
-            nowMs = nowMs
+            nowMs = nowMs,
+            llmClient = llmClient,
+            llmConfig = llmConfig
         )
 
         for (superseded in revisionResult.supersededMemories) {
@@ -101,14 +108,17 @@ class SubconsciousDreamCoordinator(
             worldviewDao.insertAll(promotedWorldviews)
         }
 
-        // 6. 流水线五：夜间日记沉淀生成（替换占位模板日记）
-        diaryEngine?.generateDailyDiary(nowMs)
+        // 6. 流水线五：夜间日记沉淀生成（LLM 动态第一人称自叙日记）
+        diaryEngine?.generateDailyDiary(nowMs, charName, llmClient, llmConfig)
 
-        // 7. 流水线六：次日清晨梦醒浮现活水注入念头池
-        val emergenceThought = emergenceSynthesizer.synthesize(
+        // 7. 流水线六：次日清晨梦醒浮现活水注入念头池 (LLM 增强)
+        val emergenceThought = emergenceSynthesizer.synthesizeWithLlm(
             worldviews = promotedWorldviews,
             supersededMemories = revisionResult.supersededMemories,
-            nowMs = nowMs
+            nowMs = nowMs,
+            charName = charName,
+            llmClient = llmClient,
+            llmConfig = llmConfig
         )
         unspokenThoughtDao.insert(emergenceThought)
 

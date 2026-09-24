@@ -14,14 +14,11 @@ val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-// 三者皆缺失时构建直接失败——禁止把占位符 Key 烘进 APK（防止静态提取，见评审报告严重#3）。
+// 允许缺失（回退为空字符串）。缺失时由运行时 Onboarding 向导引导配置，支持无 local.properties 也能成功构建。
 val deepseekApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY")
     ?: (project.findProperty("DEEPSEEK_API_KEY") as String?)
     ?: System.getenv("DEEPSEEK_API_KEY")
-    ?: error(
-        "DEEPSEEK_API_KEY 未配置：请在项目根目录 local.properties 添加一行 DEEPSEEK_API_KEY=sk-xxxx（该文件不入库），" +
-            "或在 CI 中通过 -PDEEPSEEK_API_KEY=xxx / 环境变量 DEEPSEEK_API_KEY 提供。"
-    )
+    ?: ""
 
 android {
     namespace = "com.xiaoxi.android"

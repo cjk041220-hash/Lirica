@@ -1,18 +1,33 @@
 package com.xiaoxi.android
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.ui.chat.ChatScreen
 import com.xiaoxi.android.ui.chat.ChatViewModel
+import com.xiaoxi.android.ui.onboarding.OnboardingScreen
+import com.xiaoxi.android.ui.settings.SettingsScreen
+
+enum class AppNavScreen {
+    ONBOARDING,
+    CHAT,
+    SETTINGS
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -33,12 +48,11 @@ class MainActivity : ComponentActivity() {
                         userMemoryDao = app.database.userMemoryDao(),
                         llmConfig = app.backgroundLlmConfig
                     ),
-                    // 接通系统工具闭环：toolAgent 缺位时 LLM 拿不到 tools 声明，代行/闹钟/输入等能力全部死路
                     toolAgent = app.nativeToolAgent,
-                    // 异常感知关心检测（深夜/久未出现）；缺位时 ChatViewModel 内部自动跳过
                     careHintDetector = app.careHintDetector,
-                    // 共享全局交接快照单例，VM 重建后长程会话上下文不丢
-                    handoffManager = app.handoffManager
+                    scheduledAlarmDao = app.database.scheduledAlarmDao(),
+                    handoffManager = app.handoffManager,
+                    byokRepository = app.byokSettingsRepository
                 ) as T
             }
         }
@@ -46,10 +60,53 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val app = application as XiaoxiApplication
+        val prefs = getSharedPreferences(ByokSettingsRepository.PREFS_NAME, Context.MODE_PRIVATE)
+        val isOnboardingCompleted = prefs.getBoolean("byok_onboarding_completed", false)
+        val hasKey = app.byokSettingsRepository.settings.value.hasValidKey
+
+        val startScreen = if (!isOnboardingCompleted && !hasKey) {
+            AppNavScreen.ONBOARDING
+        } else {
+            AppNavScreen.CHAT
+        }
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ChatScreen(viewModel = chatViewModel)
+                    var currentScreen by remember { mutableStateOf(startScreen) }
+
+                    when (currentScreen) {
+                        AppNavScreen.ONBOARDING -> {
+                            OnboardingScreen(
+                                byokRepository = app.byokSettingsRepository,
+                                onFinish = {
+                                    prefs.edit().putBoolean("byok_onboarding_completed", true).apply()
+                                    currentScreen = AppNavScreen.CHAT
+                                }
+                            )
+                        }
+                        AppNavScreen.CHAT -> {
+                            ChatScreen(
+                                viewModel = chatViewModel,
+                                onOpenSettings = {
+                                    currentScreen = AppNavScreen.SETTINGS
+                                }
+                            )
+                        }
+                        AppNavScreen.SETTINGS -> {
+                            BackHandler {
+                                currentScreen = AppNavScreen.CHAT
+                            }
+                            SettingsScreen(
+                                byokRepository = app.byokSettingsRepository,
+                                onBack = {
+                                    currentScreen = AppNavScreen.CHAT
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }

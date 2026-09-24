@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">小汐</string>
-    <string name="accessibility_service_description">小汐伴生智能体感知与协助服务：仅在用户授权下用于屏幕语义理解与手势代行。绝对不收集密码、银行等隐私数据。</string>
-    <string name="notification_listener_description">小汐伴生通知监听服务：用于捕获系统通知以实现智能主动关怀。</string>
-    <string name="overlay_service_description">小汐桌面伴生悬浮窗常驻服务</string>
-    <string name="keep_alive_service_description">小汐前台伴生保活与协同服务</string>
+    <string name="app_name">Lirica</string>
+    <string name="accessibility_service_description">Lirica 伴生智能体感知与协助服务：仅在用户授权下用于屏幕语义理解与手势代行。绝对不收集密码、银行等隐私数据。</string>
+    <string name="notification_listener_description">Lirica 伴生通知监听服务：用于捕获系统通知以实现智能主动关怀。</string>
+    <string name="overlay_service_description">Lirica 桌面伴生悬浮窗常驻服务</string>
+    <string name="keep_alive_service_description">Lirica 前台伴生保活与协同服务</string>
 </resources>

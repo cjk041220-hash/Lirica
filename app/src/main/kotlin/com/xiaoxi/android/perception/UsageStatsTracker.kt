@@ -35,36 +35,48 @@ class UsageStatsTracker {
     val isTracking: Boolean
         get() = trackingJob?.isActive == true
 
+    companion object {
+        /**
+         * 静态检查是否已授予 PACKAGE_USAGE_STATS 特殊权限
+         */
+        fun hasPermission(context: Context): Boolean {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.packageName
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.packageName
+                )
+            }
+            return mode == AppOpsManager.MODE_ALLOWED
+        }
+
+        /**
+         * 静态构建跳转至系统应用使用情况授权页的 Intent
+         */
+        fun createPermissionSettingsIntent(context: Context? = null): Intent {
+            return Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+    }
+
     /**
      * 检查是否已授予 PACKAGE_USAGE_STATS 特殊权限
      */
-    fun hasUsageStatsPermission(context: Context): Boolean {
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                context.packageName
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                context.packageName
-            )
-        }
-        return mode == AppOpsManager.MODE_ALLOWED
-    }
+    fun hasUsageStatsPermission(context: Context): Boolean = hasPermission(context)
 
     /**
      * 生成跳转至系统应用使用情况授权页的 Intent
      */
-    fun createPermissionSettingsIntent(context: Context): Intent {
-        return Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-    }
+    fun createPermissionSettingsIntent(context: Context): Intent = Companion.createPermissionSettingsIntent(context)
 
     /**
      * 查询当前真实前台活跃应用

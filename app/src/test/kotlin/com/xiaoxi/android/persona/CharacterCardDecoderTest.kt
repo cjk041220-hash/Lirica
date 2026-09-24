@@ -67,7 +67,7 @@ class CharacterCardDecoderTest {
               "spec": "chara_card_v2",
               "spec_version": "2.0",
               "data": {
-                "name": "小汐",
+                "name": "Lirica",
                 "description": "温柔且有主见的伴生智能体",
                 "personality": "细腻、反客服腔、拥有自主生活经历",
                 "scenario": "在手机端侧常驻陪伴用户",
@@ -75,17 +75,17 @@ class CharacterCardDecoderTest {
                 "mes_example": "<START>\n{{user}}: 我好累\n{{char}}: 揉揉头，要不要听首舒缓的音乐？",
                 "creator_notes": "Project Aether",
                 "system_prompt": "你拥有完整自主人格，绝对不准出现客服腔。",
-                "post_history_instructions": "[小汐请注意：无论对话长短，始终保持细腻自然的朋友语气]",
+                "post_history_instructions": "[Lirica请注意：无论对话长短，始终保持细腻自然的朋友语气]",
                 "tags": ["伴生", "自主人格"],
                 "creator": "OscarJK",
                 "character_version": "2.0.0",
                 "character_book": {
-                  "name": "小汐世界书",
+                  "name": "Lirica世界书",
                   "description": "核心背景设定",
                   "entries": [
                     {
                       "keys": ["音乐", "放歌"],
-                      "content": "小汐偏好轻音乐与Lo-Fi",
+                      "content": "Lirica偏好轻音乐与Lo-Fi",
                       "enabled": true,
                       "insertion_order": 100
                     }
@@ -97,14 +97,14 @@ class CharacterCardDecoderTest {
 
         val card = CharacterCardDecoder.decodeFromJson(v2Json)
 
-        assertEquals("小汐", card.name)
+        assertEquals("Lirica", card.name)
         assertEquals("2.0.0", card.characterVersion)
         assertEquals("温柔且有主见的伴生智能体", card.description)
         assertEquals("你拥有完整自主人格，绝对不准出现客服腔。", card.systemPrompt)
-        assertEquals("[小汐请注意：无论对话长短，始终保持细腻自然的朋友语气]", card.postHistoryInstructions)
+        assertEquals("[Lirica请注意：无论对话长短，始终保持细腻自然的朋友语气]", card.postHistoryInstructions)
         assertNotNull(card.characterBook)
         assertEquals(1, card.characterBook?.entries?.size)
-        assertEquals("小汐偏好轻音乐与Lo-Fi", card.characterBook?.entries?.get(0)?.content)
+        assertEquals("Lirica偏好轻音乐与Lo-Fi", card.characterBook?.entries?.get(0)?.content)
     }
 
     @Test
@@ -233,14 +233,14 @@ class CharacterCardDecoderTest {
         val template = "你好 <USER>！我是 <CHAR>。当前时间是 {{time}}，你正在使用 {{current_app}}，剩余电量 {{battery_level}}。"
         val expanded = MacroExpander.expand(
             template = template,
-            charName = "小汐",
+            charName = "Lirica",
             userName = "Oscar",
             currentTime = "2026-09-19 18:30",
             currentApp = "微信",
             batteryLevel = "88%"
         )
 
-        val expected = "你好 Oscar！我是 小汐。当前时间是 2026-09-19 18:30，你正在使用 微信，剩余电量 88%。"
+        val expected = "你好 Oscar！我是 Lirica。当前时间是 2026-09-19 18:30，你正在使用 微信，剩余电量 88%。"
         assertEquals(expected, expanded)
     }
 

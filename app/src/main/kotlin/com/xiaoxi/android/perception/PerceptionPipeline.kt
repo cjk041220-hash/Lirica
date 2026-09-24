@@ -6,6 +6,7 @@ import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.perception.model.ForegroundAppInfo
+import com.xiaoxi.android.perception.model.HardwareEnvironmentState
 import com.xiaoxi.android.perception.model.NotificationCategory
 import com.xiaoxi.android.perception.model.NotificationEvent
 import com.xiaoxi.android.perception.model.PageContentSnapshot
@@ -39,7 +40,8 @@ class PerceptionPipeline(
     private val pageContentFlow: SharedFlow<PageContentSnapshot>,
     private val privacyBreaker: PrivacyBreaker = PrivacyBreaker(),
     private val emotionEngine: EmotionEngine? = null,
-    private val unspokenThoughtDao: UnspokenThoughtDao? = null
+    private val unspokenThoughtDao: UnspokenThoughtDao? = null,
+    private val hardwareStateFlow: StateFlow<HardwareEnvironmentState>? = null
 ) {
 
     private val _snapshotFlow = MutableStateFlow(PerceptionSnapshot())
@@ -140,6 +142,21 @@ class PerceptionPipeline(
                         isPrivacyFusing = isSensitive,
                         perceivedSummary = buildPerceivedSummary(current.foregroundApp, current.screenState, isSensitive)
                     )
+                }
+            }
+        }
+
+        // 5. 监听硬件环境态变动 (M3.4 硬件环境态总线)
+        hardwareStateFlow?.let { flow ->
+            pipelineScope.launch {
+                flow.collect { hwState ->
+                    synchronized(this@PerceptionPipeline) {
+                        val current = _snapshotFlow.value
+                        _snapshotFlow.value = current.copy(
+                            timestamp = System.currentTimeMillis(),
+                            hardwareEnvironment = hwState
+                        )
+                    }
                 }
             }
         }

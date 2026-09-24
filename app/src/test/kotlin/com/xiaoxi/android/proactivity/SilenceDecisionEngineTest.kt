@@ -109,6 +109,27 @@ class SilenceDecisionEngineTest {
         assertEquals(InterruptibilityEstimator.MAX_COST, cost, 0.01)
     }
 
+    @Test
+    fun testEstimator_phoneInCall_fusesToMaxCost() {
+        val snapshot = createSnapshot(packageName = "com.android.launcher").copy(
+            hardwareEnvironment = com.xiaoxi.android.perception.model.HardwareEnvironmentState(isPhoneInCall = true)
+        )
+        val cost = estimator.estimateCost(snapshot, 0L, 100_000L)
+        assertEquals(InterruptibilityEstimator.MAX_COST, cost, 0.01)
+    }
+
+    @Test
+    fun testEstimator_audioPlaying_increasesCost() {
+        val baseSnapshot = createSnapshot(packageName = "com.android.launcher")
+        val baseCost = estimator.estimateCost(baseSnapshot, 0L, 100_000L)
+
+        val audioSnapshot = baseSnapshot.copy(
+            hardwareEnvironment = com.xiaoxi.android.perception.model.HardwareEnvironmentState(isAudioPlaying = true)
+        )
+        val audioCost = estimator.estimateCost(audioSnapshot, 0L, 100_000L)
+        assertEquals(baseCost + 1.0, audioCost, 0.01)
+    }
+
     // --- BreakpointDetector Tests ---
 
     @Test

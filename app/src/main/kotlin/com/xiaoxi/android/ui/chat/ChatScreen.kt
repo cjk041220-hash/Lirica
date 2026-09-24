@@ -2,6 +2,7 @@ package com.xiaoxi.android.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,7 +52,8 @@ import com.xiaoxi.android.ui.chat.components.MoodDebugPanel
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenSettings: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
@@ -102,7 +104,7 @@ fun ChatScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = uiState.activeCharacterCard?.name ?: "小汐",
+                            text = uiState.activeCharacterCard?.name ?: "Lirica",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp
                         )
@@ -145,13 +147,29 @@ fun ChatScreen(
                     // 角色卡弹窗入口
                     Surface(
                         modifier = Modifier
-                            .padding(end = 12.dp)
+                            .padding(end = 6.dp)
                             .clip(RoundedCornerShape(8.dp))
                             .clickable { viewModel.toggleCharacterCardDialog() },
                         color = MaterialTheme.colorScheme.surfaceVariant
                     ) {
                         Text(
                             text = "🎭 角色卡",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    // 设置与体检入口
+                    Surface(
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onOpenSettings() },
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = "⚙️ 设置",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -176,6 +194,37 @@ fun ChatScreen(
                 vector = uiState.currentEmotionVector
             )
 
+            // 未配置 API Key 警告条 (T1.4)
+            if (!uiState.isApiKeyConfigured || uiState.isKeyPromptBannerVisible) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable { onOpenSettings() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "⚠️ 未配置模型 API Key，点击前往配置",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "去配置 ›",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+
             // 对话流 LazyColumn
             LazyColumn(
                 state = listState,
@@ -197,7 +246,7 @@ fun ChatScreen(
                                     fontSize = 44.sp
                                 )
                                 Text(
-                                    text = "我是小汐，正在静静陪伴着你",
+                                    text = "我是 Lirica，正在静静陪伴着你",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.outline,
                                     modifier = Modifier.padding(top = 8.dp)
@@ -226,7 +275,7 @@ fun ChatScreen(
                 OutlinedTextField(
                     value = uiState.inputText,
                     onValueChange = { viewModel.onInputTextChanged(it) },
-                    placeholder = { Text("对小汐说点什么...") },
+                    placeholder = { Text("对 Lirica 说点什么...") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(24.dp),
                     maxLines = 4

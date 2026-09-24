@@ -44,7 +44,7 @@ class XiaoxiCrashHandlerTest {
         assertTrue(file!!.exists())
         val content = file.readText()
 
-        assertTrue(content.contains("=== 小汐 2.0 崩溃诊断报告 ==="))
+        assertTrue(content.contains("=== Lirica 崩溃诊断报告 ==="))
         assertTrue(content.contains("NullPointerException"))
         assertTrue(content.contains("屏幕无障碍树节点为空"))
         assertTrue(content.contains("崩溃线程: ${thread.name}"))

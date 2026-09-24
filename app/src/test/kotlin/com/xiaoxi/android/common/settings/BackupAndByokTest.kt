@@ -136,14 +136,36 @@ class BackupAndByokTest {
     }
 
     @Test
-    fun testByokSettingsRepository_clearSettings_revertsToDefault() {
-        repository.saveCustomApiKey("sk-custom-secret-key")
-        assertTrue(repository.settings.value.isCustomKeyConfigured)
+    fun testByokSettingsRepository_apiKeyEncryptedInPreferences() {
+        val rawKey = "sk-custom-secret-key-to-encrypt"
+        repository.saveCustomApiKey(rawKey)
 
-        repository.clearCustomSettings()
-        assertFalse(repository.settings.value.isCustomKeyConfigured)
+        val prefs = context.getSharedPreferences("test_byok_prefs", Context.MODE_PRIVATE)
+        val storedRaw = prefs.getString(ByokSettingsRepository.KEY_API_KEY, null)
+        assertNotNull("存储的密文不能为空", storedRaw)
+        assertFalse("存储的必须是密文，不得为明文", storedRaw == rawKey)
 
-        val config = repository.getEffectiveLlmConfig()
-        assertEquals(BuildConfig.DEEPSEEK_API_KEY, config.apiKey)
+        assertEquals("读取有效配置时自动无感解密", rawKey, repository.getEffectiveLlmConfig().apiKey)
+    }
+
+    @Test
+    fun testByokSettingsRepository_legacyPlaintextKeyAutoMigrated() {
+        val legacyPlaintextKey = "sk-legacy-plaintext-key-999"
+        val prefs = context.getSharedPreferences("test_byok_migration_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, legacyPlaintextKey).commit()
+
+        val repoWithMigration = ByokSettingsRepositoryImpl(prefs)
+        assertEquals("旧明文自动正确解析", legacyPlaintextKey, repoWithMigration.getEffectiveLlmConfig().apiKey)
+
+        val storedAfterMigration = prefs.getString(ByokSettingsRepository.KEY_API_KEY, null)
+        assertNotNull(storedAfterMigration)
+        assertFalse("旧明文已被迁移为密文", storedAfterMigration == legacyPlaintextKey)
+    }
+
+    @Test
+    fun testByokSettingsRepository_providerSelection() {
+        repository.saveCustomProvider(com.xiaoxi.android.network.model.LlmProvider.OPENAI)
+        assertEquals(com.xiaoxi.android.network.model.LlmProvider.OPENAI, repository.settings.value.customProvider)
+        assertEquals(com.xiaoxi.android.network.model.LlmProvider.OPENAI, repository.getEffectiveLlmConfig().provider)
     }
 }

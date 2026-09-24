@@ -66,7 +66,7 @@ class DiaryEngineTest {
         assertNotNull(entry)
         assertEquals(SelfExperienceEntity.STATUS_FRESH, entry.status)
         assertEquals("夜间日记", entry.domainTag)
-        assertTrue("Content should be in first person: ${entry.content}", entry.content.contains("我") || entry.content.contains("小汐"))
+        assertTrue("Content should be in first person: ${entry.content}", entry.content.contains("我") || entry.content.contains("Lirica"))
         coVerify(exactly = 1) { selfExperienceDao.insert(any()) }
         assertEquals(entry.id, slot.captured.id)
     }

@@ -1,9 +1,10 @@
 package com.xiaoxi.android.common.settings
 
-import android.content.Context
 import android.content.SharedPreferences
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.network.model.LlmConfig
+import com.xiaoxi.android.network.model.LlmProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,18 +12,25 @@ import kotlinx.coroutines.flow.asStateFlow
 data class ByokSettings(
     val customApiKey: String? = null,
     val customBaseUrl: String? = null,
-    val customModel: String? = null
+    val customModel: String? = null,
+    val customProvider: LlmProvider? = null
 ) {
     val isCustomKeyConfigured: Boolean get() = !customApiKey.isNullOrBlank()
+
+    /**
+     * 判断当前系统是否拥有可用的 API Key（自备 Key 或 BuildConfig 内置 Key 任一有效）。
+     */
+    val hasValidKey: Boolean
+        get() = isCustomKeyConfigured || BuildConfig.DEEPSEEK_API_KEY.isNotBlank()
 }
 
 /**
- * BYOK（用户自备 API Key）存储抽象。
+ * BYOK（用户自备 API Key）安全存储仓库。
  *
- * [EXPERIMENTAL / 未接线]：当前无 Application 装配、无 UI 配置入口，
- * LLM 配置消费方仍直取 BuildConfig.DEEPSEEK_API_KEY —— 本仓库为零消费死代码。
- * 接通方案见 docs/优化方案——外部报告核对与合并修复计划_2026-09-21.md #10；
- * 在接线完成前，请勿在文档或对外口径中将 BYOK 宣称为已交付能力。
+ * 安全规范（M3.1 T1.5）：
+ * 1. API Key 不再明文落盘于 SharedPreferences，必须经由 SecureKeyStore (AES-GCM) 加密后存入；
+ * 2. 具备自动明文迁移能力：若检测到旧版明文 Key，首启时无感升级为密文存储；
+ * 3. 支持动态切换 Provider（DeepSeek、OpenAI 兼容服务、Claude 原生等）。
  */
 interface ByokSettingsRepository {
     val settings: StateFlow<ByokSettings>
@@ -31,6 +39,7 @@ interface ByokSettingsRepository {
     fun saveCustomApiKey(apiKey: String)
     fun saveCustomBaseUrl(baseUrl: String)
     fun saveCustomModel(model: String)
+    fun saveCustomProvider(provider: LlmProvider)
     fun clearCustomSettings()
 
     companion object {
@@ -38,23 +47,49 @@ interface ByokSettingsRepository {
         const val KEY_API_KEY = "byok_api_key"
         const val KEY_BASE_URL = "byok_base_url"
         const val KEY_MODEL = "byok_model"
+        const val KEY_PROVIDER = "byok_provider"
         const val DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
         const val DEFAULT_MODEL = "deepseek-chat"
     }
 }
 
 class ByokSettingsRepositoryImpl(
-    private val prefs: SharedPreferences
+    private val prefs: SharedPreferences,
+    private val secureKeyStore: SecureKeyStore = DefaultSecureKeyStore()
 ) : ByokSettingsRepository {
 
-    private val _settings = MutableStateFlow(loadSettings())
+    private val _settings = MutableStateFlow(loadSettingsAndMigrate())
     override val settings: StateFlow<ByokSettings> = _settings.asStateFlow()
 
-    private fun loadSettings(): ByokSettings {
+    private fun loadSettingsAndMigrate(): ByokSettings {
+        val rawStoredKey = prefs.getString(ByokSettingsRepository.KEY_API_KEY, null)?.takeIf { it.isNotBlank() }
+        val effectiveApiKey = if (rawStoredKey != null) {
+            val decrypted = secureKeyStore.decrypt(rawStoredKey)
+            if (decrypted != null) {
+                decrypted
+            } else {
+                // 解密失败说明是升级前的旧明文 Key，执行自动迁移：加密写回
+                XiaoxiLog.i("ByokSettings", "检测到旧版明文 API Key，执行 AES-GCM 安全迁移")
+                val encrypted = secureKeyStore.encrypt(rawStoredKey)
+                if (encrypted.isNotBlank()) {
+                    prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, encrypted).apply()
+                }
+                rawStoredKey
+            }
+        } else {
+            null
+        }
+
+        val providerStr = prefs.getString(ByokSettingsRepository.KEY_PROVIDER, null)
+        val provider = providerStr?.let {
+            runCatching { LlmProvider.valueOf(it) }.getOrNull()
+        }
+
         return ByokSettings(
-            customApiKey = prefs.getString(ByokSettingsRepository.KEY_API_KEY, null)?.takeIf { it.isNotBlank() },
+            customApiKey = effectiveApiKey,
             customBaseUrl = prefs.getString(ByokSettingsRepository.KEY_BASE_URL, null)?.takeIf { it.isNotBlank() },
-            customModel = prefs.getString(ByokSettingsRepository.KEY_MODEL, null)?.takeIf { it.isNotBlank() }
+            customModel = prefs.getString(ByokSettingsRepository.KEY_MODEL, null)?.takeIf { it.isNotBlank() },
+            customProvider = provider
         )
     }
 
@@ -63,7 +98,7 @@ class ByokSettingsRepositoryImpl(
         val effectiveKey = if (current.isCustomKeyConfigured) {
             current.customApiKey!!.trim()
         } else {
-            BuildConfig.DEEPSEEK_API_KEY
+            BuildConfig.DEEPSEEK_API_KEY.trim()
         }
 
         val effectiveBaseUrl = if (!current.customBaseUrl.isNullOrBlank()) {
@@ -78,8 +113,15 @@ class ByokSettingsRepositoryImpl(
             ByokSettingsRepository.DEFAULT_MODEL
         }
 
+        val effectiveProvider = current.customProvider ?: when {
+            effectiveBaseUrl.contains("anthropic", ignoreCase = true) -> LlmProvider.CUSTOM
+            effectiveBaseUrl.contains("deepseek", ignoreCase = true) -> LlmProvider.DEEPSEEK
+            else -> LlmProvider.OPENAI
+        }
+
         return LlmConfig(
             apiKey = effectiveKey,
+            provider = effectiveProvider,
             baseUrl = effectiveBaseUrl,
             model = effectiveModel
         )
@@ -87,7 +129,8 @@ class ByokSettingsRepositoryImpl(
 
     override fun saveCustomApiKey(apiKey: String) {
         val trimmed = apiKey.trim()
-        prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, trimmed).apply()
+        val cipherText = secureKeyStore.encrypt(trimmed)
+        prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, cipherText).apply()
         _settings.value = _settings.value.copy(customApiKey = trimmed)
     }
 
@@ -103,11 +146,17 @@ class ByokSettingsRepositoryImpl(
         _settings.value = _settings.value.copy(customModel = trimmed)
     }
 
+    override fun saveCustomProvider(provider: LlmProvider) {
+        prefs.edit().putString(ByokSettingsRepository.KEY_PROVIDER, provider.name).apply()
+        _settings.value = _settings.value.copy(customProvider = provider)
+    }
+
     override fun clearCustomSettings() {
         prefs.edit()
             .remove(ByokSettingsRepository.KEY_API_KEY)
             .remove(ByokSettingsRepository.KEY_BASE_URL)
             .remove(ByokSettingsRepository.KEY_MODEL)
+            .remove(ByokSettingsRepository.KEY_PROVIDER)
             .apply()
         _settings.value = ByokSettings()
     }

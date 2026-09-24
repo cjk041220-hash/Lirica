@@ -37,7 +37,7 @@ class LorebookActivatorTest {
                 CharacterBookEntry(
                     id = 1,
                     keys = listOf("coffee", "咖啡"),
-                    content = "小汐喜欢喝手冲咖啡",
+                    content = "Lirica喜欢喝手冲咖啡",
                     caseSensitive = false
                 ),
                 CharacterBookEntry(
@@ -52,7 +52,7 @@ class LorebookActivatorTest {
         // 命中不区分大小写
         val activated1 = LorebookActivator.activateEntries(book, "I want some COFFEE today.")
         assertEquals(1, activated1.size)
-        assertEquals("小汐喜欢喝手冲咖啡", activated1[0].content)
+        assertEquals("Lirica喜欢喝手冲咖啡", activated1[0].content)
 
         // 验证区分大小写
         val activatedLowerApple = LorebookActivator.activateEntries(book, "i have an apple.")

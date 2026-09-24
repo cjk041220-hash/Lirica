@@ -77,7 +77,7 @@ fun TaskTraceCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "小汐正在代行操作",
+                        text = "Lirica 正在代行操作",
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold

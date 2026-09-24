@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import com.xiaoxi.android.perception.model.ForegroundAppInfo
 import com.xiaoxi.android.perception.model.LightweightAccessibilityEvent
 import com.xiaoxi.android.perception.model.PageContentSnapshot
 import kotlinx.coroutines.CoroutineScope
@@ -58,6 +59,13 @@ class XiaoxiAccessibilityService : AccessibilityService() {
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         val pageContentEvents: SharedFlow<PageContentSnapshot> = _pageContentEvents.asSharedFlow()
+
+        private val _windowForegroundAppEvents = MutableSharedFlow<ForegroundAppInfo>(
+            replay = 1,
+            extraBufferCapacity = 16,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+        val windowForegroundAppEvents: SharedFlow<ForegroundAppInfo> = _windowForegroundAppEvents.asSharedFlow()
 
         /**
          * 检查用户是否已在系统设置中开启本无障碍服务
@@ -134,6 +142,17 @@ class XiaoxiAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString().orEmpty()
         if (pkg.isEmpty()) return
 
+        // 零轮询前台应用秒级感知 (M3.4)：无需跨进程读树，直接在 Binder 回调中极速分发
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && !isIgnoredPackage(pkg)) {
+            _windowForegroundAppEvents.tryEmit(
+                ForegroundAppInfo(
+                    packageName = pkg,
+                    timestamp = System.currentTimeMillis(),
+                    dwellDurationMs = 0L
+                )
+            )
+        }
+
         // 仅抓取核心轻量元组，绝不在 Binder 线程取 root 节点或遍历树
         val lightEvent = LightweightAccessibilityEvent(
             eventType = event.eventType,
@@ -165,13 +184,16 @@ class XiaoxiAccessibilityService : AccessibilityService() {
         eventSignal.trySend(Unit)
     }
 
+    private fun isIgnoredPackage(pkg: String): Boolean {
+        return pkg.startsWith("com.google.android.inputmethod") ||
+                pkg.startsWith("com.sohu.inputmethod") ||
+                pkg.startsWith("com.baidu.input")
+    }
+
     private fun processBackgroundEvent(event: LightweightAccessibilityEvent) {
         // L0 快速拦截：输入法与状态栏微小变更过滤
         val pkg = event.packageName
-        if (pkg.startsWith("com.google.android.inputmethod") ||
-            pkg.startsWith("com.sohu.inputmethod") ||
-            pkg.startsWith("com.baidu.input")
-        ) {
+        if (isIgnoredPackage(pkg)) {
             return
         }
 

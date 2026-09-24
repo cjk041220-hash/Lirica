@@ -1,7 +1,7 @@
 # 外部项目借鉴评估：AcidGr / agent-mobile-use（Android 虚拟副屏无感后台控制底座）
 
 > **评估日期**：2026-09-20
-> **评估对象**：`E:\sonetto-android`（小汐 2.0 / Project Aether，Phase 4 已达成，Phase 5「手机操控与任务代行」待启动）
+> **评估对象**：`E:\Lirica-android`（Lirica / Project Aether，Phase 4 已达成，Phase 5「手机操控与任务代行」待启动）
 > **被评估外部项目**：https://github.com/AcidGr/agent-mobile-use
 > **评估方式**：仓库元数据与源码实测（README / `ksu-module/system/bin/vd` / `vd-tool-java/src/com/agent/ToolMain.java`）+ 官方平台文档核验 + 与你现有代码的逐条对照
 

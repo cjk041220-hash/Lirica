@@ -20,7 +20,7 @@ import com.xiaoxi.android.database.entity.UserMemoryEntity
 import com.xiaoxi.android.database.entity.WorldviewEntity
 
 /**
- * 小汐 2.0 核心 Room 数据库（XiaoxiDatabase）
+ * Lirica 核心 Room 数据库（XiaoxiDatabase）
  *
  * 管理六大心智与交互核心表：
  * 1. user_memories (用户轨画像与事实记忆)

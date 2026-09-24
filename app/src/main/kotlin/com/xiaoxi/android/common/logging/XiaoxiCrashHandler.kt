@@ -10,7 +10,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 小汐 2.0 本地私密崩溃守护器
+ * Lirica 本地私密崩溃守护器
  *
  * 坚守 100% 本地安全沙盒原则，绝不上报云端，将未捕获异常与环形日志格式化落盘并轮转清理。
  */
@@ -59,7 +59,7 @@ class XiaoxiCrashHandler(
         val stackTrace = stringWriter.toString()
 
         val report = buildString {
-            append("=== 小汐 2.0 崩溃诊断报告 ===\n")
+            append("=== Lirica 崩溃诊断报告 ===\n")
             append("时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date())}\n")
             append("崩溃线程: ${thread.name} (id=${thread.id})\n")
             append("设备信息: ${Build.MANUFACTURER} ${Build.MODEL} (SDK ${Build.VERSION.SDK_INT})\n")

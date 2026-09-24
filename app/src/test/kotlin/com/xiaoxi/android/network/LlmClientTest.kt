@@ -94,7 +94,7 @@ class LlmClientTest {
     @Test
     fun testSseStreamParserEmitsTokensAndDone() = runTest {
         val ssePayload = """
-            data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"小汐"},"finish_reason":null}]}
+            data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":"Lirica"},"finish_reason":null}]}
 
             data: {"id":"chatcmpl-2","choices":[{"index":0,"delta":{"content":"已连接"},"finish_reason":null}]}
 
@@ -106,7 +106,7 @@ class LlmClientTest {
         val events = SseStreamParser.parseEvents(ssePayload)
 
         assertEquals(4, events.size)
-        assertTrue(events[0] is LlmStreamEvent.Token && (events[0] as LlmStreamEvent.Token).text == "小汐")
+        assertTrue(events[0] is LlmStreamEvent.Token && (events[0] as LlmStreamEvent.Token).text == "Lirica")
         assertTrue(events[1] is LlmStreamEvent.Token && (events[1] as LlmStreamEvent.Token).text == "已连接")
         assertTrue(events[2] is LlmStreamEvent.Token && (events[2] as LlmStreamEvent.Token).text == "。")
         assertTrue(events[3] is LlmStreamEvent.Done)
@@ -245,7 +245,7 @@ class LlmClientTest {
             val responseData = """
                 data: {"id":"1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
 
-                data: {"id":"2","choices":[{"index":0,"delta":{"content":"，小汐！"},"finish_reason":"stop"}]}
+                data: {"id":"2","choices":[{"index":0,"delta":{"content":"，Lirica！"},"finish_reason":"stop"}]}
 
                 data: [DONE]
             """.trimIndent()
@@ -274,6 +274,6 @@ class LlmClientTest {
             messages = listOf(ChatMessage(role = "user", content = "Hi"))
         )
 
-        assertEquals("你好，小汐！", fullText)
+        assertEquals("你好，Lirica！", fullText)
     }
 }

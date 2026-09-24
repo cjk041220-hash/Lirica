@@ -3,7 +3,9 @@ package com.xiaoxi.android.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.dao.ChatDialogueDao
+import com.xiaoxi.android.database.dao.ScheduledAlarmDao
 import com.xiaoxi.android.database.entity.ChatDialogueEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.database.memory.MemoryExtractor
@@ -11,6 +13,7 @@ import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
 import com.xiaoxi.android.automation.agent.NativeToolAgent
+import com.xiaoxi.android.life.CareEvent
 import com.xiaoxi.android.life.CareHintDetector
 import com.xiaoxi.android.network.ToolCallAssembler
 import com.xiaoxi.android.network.XiaoxiLlmClient
@@ -29,6 +32,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 
 class ChatViewModel(
@@ -47,19 +51,29 @@ class ChatViewModel(
      * 台账保证；null = 关闭该能力（默认），既有测试与装配无需改动。
      */
     private val careHintDetector: CareHintDetector? = null,
+    val scheduledAlarmDao: ScheduledAlarmDao? = null,
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
-    val sessionId: String = "default_session"
+    val sessionId: String = "default_session",
+    val byokRepository: ByokSettingsRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
         ChatUiState(
             currentMood = emotionEngine.currentMood,
-            currentEmotionVector = emotionEngine.currentVector
+            currentEmotionVector = emotionEngine.currentVector,
+            isApiKeyConfigured = byokRepository?.settings?.value?.hasValidKey ?: (llmConfig.apiKey.isNotBlank())
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     init {
+        if (byokRepository != null) {
+            viewModelScope.launch {
+                byokRepository.settings.collect { settings ->
+                    _uiState.update { it.copy(isApiKeyConfigured = settings.hasValidKey) }
+                }
+            }
+        }
         viewModelScope.launch {
             emotionEngine.stateFlow.collect { vector ->
                 _uiState.update { it.copy(currentEmotionVector = vector) }
@@ -111,6 +125,18 @@ class ChatViewModel(
     fun sendMessage(text: String = _uiState.value.inputText) {
         val trimmed = text.trim()
         if (trimmed.isBlank() || _uiState.value.isStreaming) return
+
+        val effectiveLlmConfig = byokRepository?.getEffectiveLlmConfig() ?: llmConfig
+        if (effectiveLlmConfig.apiKey.isBlank()) {
+            _uiState.update { state ->
+                state.copy(
+                    errorMessage = "尚未配置 API Key，请前往设置或完成入门向导配置模型密钥",
+                    isKeyPromptBannerVisible = true,
+                    isStreaming = false
+                )
+            }
+            return
+        }
 
         val userMessageId = UUID.randomUUID().toString()
         val userTimestamp = System.currentTimeMillis()
@@ -271,7 +297,7 @@ class ChatViewModel(
                     val toolAssembler = ToolCallAssembler()
 
                     llmClient.streamChat(
-                        config = llmConfig,
+                        config = effectiveLlmConfig,
                         messages = conversationMessages,
                         tools = toolAgent?.declaredTools
                     ).collect { event ->
@@ -425,9 +451,33 @@ class ChatViewModel(
                 .map { Instant.ofEpochMilli(it) }
             val lastTime = dao.getLastUserTimestampBefore(currentUserTimestamp)
                 ?.let { Instant.ofEpochMilli(it) }
+
+            // 查询近 48 小时内的未触发日程，提取考试/面试/测试类事件用于深夜关心 (EVENT_COMBO)
+            val activeEvents = scheduledAlarmDao?.let { alarmDao ->
+                val untilMs = nowMs + 48 * 3600 * 1000L
+                alarmDao.getUpcomingAlarms(nowMs - 24 * 3600 * 1000L, untilMs, limit = 20).mapNotNull { alarm ->
+                    val triggerDate = Instant.ofEpochMilli(alarm.triggerAt).atZone(ZoneId.systemDefault()).toLocalDate()
+                    val note = alarm.botNote
+                    val isExam = note.contains("考") || note.contains("试") || note.contains("exam", ignoreCase = true) ||
+                            note.contains("答辩") || note.contains("面试")
+                    if (isExam) {
+                        val title = note.substringBefore('\n').removePrefix("提醒：").trim()
+                        CareEvent(
+                            eventType = "exam",
+                            title = title.ifBlank { note },
+                            startDate = triggerDate,
+                            endDate = triggerDate
+                        )
+                    } else {
+                        null
+                    }
+                }
+            } ?: emptyList()
+
             detector.collectHintTexts(
                 now = Instant.ofEpochMilli(nowMs),
                 recentUserMessageTimes = recentTimes,
+                activeEvents = activeEvents,
                 lastUserMessageTime = lastTime
             )
         }.getOrNull()

@@ -1,8 +1,9 @@
-# 小汐 2.0 (Project Aether) 开发进度看板 (Progress Tracker)
+# Lirica (Project Aether) 开发进度看板 (Progress Tracker)
 
-> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.3 手机操控升维与动作分块 全绿达成**（当前基线 **471 tests 全绿**）  
-> **最后更新**：2026-09-23  
-> **整体技术栈**：Android 侧 100% Native Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（`backend/` 为 Python 参考源，只读冻结）
+> **项目更名说明**：本项目自 2026-09-23 起正式定名 **Lirica**（意大利语中的抒情诗，原名“小汐 / sonetto”）。  
+> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.3 手机操控升维与动作分块 全绿达成**  
+> **最后更新**：2026-09-24  
+> **整体技术栈**：100% Native Android Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（旧 Python `backend/` 参考源已清理删除并封存至 Git 历史）
 
 ---
 
@@ -1056,6 +1057,99 @@
   - `./gradlew testDebugUnitTest`: **471 tests completed, 0 failed, 100% pass** (测试套件从 449 扩充至 471，净增 22 项单测)
   - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 10s** (0 error, 0 warning)
 - **阶段验收结论**：APPROVED。第三轮系统级架构演进第四里程碑（M3.3 手机操控升维与动作分块）全绿达成！
+
+---
+
+## Round 3 · 批次 5 (M3.1 扩充版) 执行记录（2026-09-23）
+
+> 评审依据：《修订方案——主方案3.0批次路线修订与外部方案增量并入_2026-09-23.md》与《主方案 3.0》第 3.5 节。全面落地外部 API 解放与 BYOK 安全网关扩充版，完成 AndroidKeyStore 硬件加密存储、旧明文自动迁移、多协议统一网关（OpenAI 兼容 + Claude 原生）、连通性毫秒探测、Onboarding 分步向导、权限体检面板与脱敏诊断包导出。单测套件从 471 扩充至 **504 项全绿 (100% pass)**。
+
+### 交付内容清单
+1. **构建解耦与工程零门槛 (T1.3)**：
+   - 彻底移除 `app/build.gradle.kts` 中对 `local.properties` 的 `error()` 编译硬阻断；
+   - 缺失 `DEEPSEEK_API_KEY` 时安全回退为空字符串，确保任何开发者与 CI 环境均可无障碍 `assembleDebug` / `assembleRelease`；
+   - 未配置 Key 时转由运行时 Onboarding 向导引导。
+2. **硬件级密钥安全加密与自动明文迁移 (T1.5 & T1.6)**：
+   - 新增 `SecureKeyStore`（`DefaultSecureKeyStore.kt`）：基于 `AndroidKeyStore` + AES/GCM/NoPadding (256-bit，12 字节随机独占 IV + 128 位认证 Tag)；
+   - 在 JVM/Robolectric 纯测试或特殊环境提供确定性软加密兜底，绝不崩溃；
+   - `ByokSettingsRepositoryImpl` 实现旧明文自动检测升级：首启检测到旧明文 Key 立即进行 AES-GCM 密文写回与内存无感重载；
+   - 扩充 `LlmProvider` 支持（DEEPSEEK, OPENAI, ANTHROPIC, CUSTOM）；
+   - `SecureKeyStoreTest` (4 测) 与 `BackupAndByokTest` (8 测) 100% 通过。
+3. **多模型统一网关与多协议适配器 (T1.1)**：
+   - 新建 `network/gateway/` 模块：
+     - `LlmProtocol` 与 `LlmProtocolAdapter` 契约抽象；
+     - `OpenAiProtocolAdapter`：适配 DeepSeek、OpenAI、Moonshot、Qwen、SiliconFlow、OpenRouter 等，封装端点计算、Bearer 鉴权与 SSE 分片解析；
+     - `AnthropicProtocolAdapter`：适配 Claude 原生 `/v1/messages`、`x-api-key`、`anthropic-version`、顶层 `system` 拆分、`input_schema` 转换与 `content_block_delta` 流式事件提取；
+     - `XiaoxiLlmGateway`：统一分发网关，提供 HTTP 401/402/429 中文友好状态映射、传输层指数退避重试与统一 `LlmStreamEvent` 分发；
+   - `XiaoxiLlmClient` 重构为外观门面，底层全量接入 `XiaoxiLlmGateway`；
+   - `OpenAiProtocolAdapterTest` (7 测)、`AnthropicProtocolAdapterTest` (6 测)、`XiaoxiLlmGatewayTest` (3 测) 与 `LlmClientTest` (8 测) 全绿。
+4. **主链路全面接线与无 Key 优雅降级 (T1.2 & T1.4)**：
+   - `XiaoxiApplication` 装配单例 `ByokSettingsRepository`，全局暴露 `backgroundLlmConfig`；
+   - `ChatViewModel` 与 `OverlayExpandViewModel` 注入 `byokRepository`，全面废除写死 `BuildConfig`；
+   - 聊天界面增加未配置 Key 告警条，若 Key 缺失不发起盲目网络请求，给出直观中文指引；
+   - `ChatViewModelByokTest` 3 测全绿通过。
+5. **一键连通性握手探测器 (T1.7)**：
+   - 新建 `LlmConnectivityTester`：发送 `max_tokens=1` 单 Token 极速问候探针，实测往返 RTT 时延 (ms)；
+   - 对 401（未授权）、402（欠费）、429（超频）与网络超时提供精确的中文归因诊断；
+   - `LlmConnectivityTesterTest` 4 测全绿通过。
+6. **六项核心权限体检中枢与 Onboarding 向导 (T1.8 & T1.9)**：
+   - 新建 `PermissionManager`：统一管控并检测无障碍、悬浮窗、通知使用权、应用使用情况、电池白名单与 Shizuku 六项系统授权；
+   - `OnboardingScreen`：首启分步式引导向导（核心权限逐项激活 + 模型 Key 配置 + 连通性测试）；
+   - `SettingsScreen`：设置页常驻入口，提供模型参数动态配置、一键连通性测试卡片、以及权限状态实时体检与一键修复（`Lifecycle.Event.ON_RESUME` 自动回弹刷新）；
+   - `MainActivity` 建立统一导航外壳（`AppNavScreen`: ONBOARDING / CHAT / SETTINGS），首启未配 Key 自动拉起 Onboarding。
+7. **诊断包一键脱敏导出 (T1.10)**：
+   - 新建 `DiagnosticExporter`：聚合设备型号、Android SDK 版本、权限体检状态、网关配置摘要、本地崩溃栈（`XiaoxiCrashHandler` 产物）与最近 100 条环形日志（`XiaoxiLog` 产物）；
+   - 敏感信息物理级脱敏：对用户的 API Key 进行掩码处理（`sk-****`），严防隐私泄露；
+   - 一键生成 Markdown 物理文件并调起系统分享面板；
+   - `DiagnosticExporterTest` 2 测全绿。
+
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: **504 tests completed, 0 failed, 100% pass** (测试套件从 471 扩充至 504，净增 33 项单测)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 32s** (0 error, 0 warning)
+  - `./gradlew assembleRelease`: **BUILD SUCCESSFUL in 2m 32s** (R8 混淆、资源收缩与 Release Proguard 100% 通过验证)
+- **阶段验收结论**：APPROVED。第三轮系统级架构演进第五里程碑（M3.1 BYOK 统一网关扩充版）全绿达成！
+
+---
+
+## Round 3 · 批次 7 (M3.4) 执行记录（2026-09-24）
+
+> 评审依据：《修订方案——主方案3.0批次路线修订与外部方案增量并入_2026-09-23.md》第四节与《主方案 3.0》第 3.2、3.4 节。全面攻坚人格深水区与全域监视闭环，落地硬件环境态总线（耳机/通话/充电/媒体）、可中断性打扰模型场景升级、无障碍零轮询事件秒级前台感知（保留 UsageStats 降级兜底），并将夜间入梦三大下游（信念修正 `BeliefRevisionEngine`、自叙入梦浮现 `DreamEmergenceSynthesizer`、伴生日记 `DiaryEngine`）全面升级为 LLM 认知驱动与规则双层架构。单测套件从 504 扩充至 **515 项全绿 (100% pass)**。
+
+### 交付内容清单
+1. **硬件环境态总线与场景分类打扰度升级 (T7.1)**：
+   - 新增 `HardwareEnvironmentState` 快照数据契约（涵盖通话状态 `isPhoneInCall`、耳机插拔 `isHeadsetPlugged`、充电状态 `isCharging`、音频播放 `isAudioPlaying`）；
+   - 新增 `HardwareEnvironmentWatcher`：免危险权限监听 AOSP 基础广播与 `AudioManager` 状态，统一输出 `StateFlow<HardwareEnvironmentState>`；
+   - 挂载进 `PerceptionSnapshot`，`PerceptionPipeline` 统一汇聚；
+   - `InterruptibilityEstimator` 扩充物理环境场景打扰代价估算：通话中物理顶格熔断 (`MAX_COST = 5.0`)，音频播放与耳机使用动态施加打扰溢价惩罚；
+   - `HardwareEnvironmentWatcherTest` (2 测) 与 `SilenceDecisionEngineTest` 补充硬件场景单测全绿。
+2. **零轮询前台应用秒级感知与双轨兜底架构 (T7.2)**：
+   - `XiaoxiAccessibilityService` 捕获 `TYPE_WINDOW_STATE_CHANGED`，在 AOSP Binder 回调中以 `< 0.05ms` 极速直出 `windowForegroundAppEvents`，达成零轮询秒级响应与零电量浪费；
+   - `XiaoxiApplication` 建立前台应用多路流合并管道（`merge(windowForegroundAppEvents, usageStatsTracker.foregroundApp)`）：无障碍就绪时零轮询极速驱动，无障碍缺失时自动无缝降级至 `UsageStatsTracker` 轮询通道；
+   - `ZeroPollingForegroundTest` 单测全绿验证。
+3. **信念修正引擎 LLM 认知冲突化改造 (T7.3 - `BeliefRevisionEngine`)**：
+   - 突破原型硬编码静态 4 对矛盾词表桎梏，增加 `detectAndReviseWithLlm`；
+   - 引入 L1（快速规则通道）+ L2（LLM 事实消歧与状态演进推理通道）双层架构；
+   - 模型精准识别“喜好逆转/居住地变更/状态演进”，输出结构化消歧对并沉淀审计轨迹；LLM 异常时优雅回退至 L1；
+   - `BeliefRevisionEngineLlmTest` (2 测) 与 `BeliefRevisionEngineTest` (3 测) 100% 全绿。
+4. **清晨梦醒浮现活水合成器 LLM 化改造 (T7.4 - `DreamEmergenceSynthesizer`)**：
+   - 彻底废除写死关键词模板分支，增加 `synthesizeWithLlm`；
+   - 依据夜间入梦提炼的真实世界观（`WorldviewEntity`）与被修正事实，驱动大模型以小汐第一人称生成自然、亲昵、体贴的清晨破冰念头，注入 `UnspokenThoughtDao`；
+   - `DreamEmergenceSynthesizerLlmTest` (2 测) 全绿。
+5. **伴生自叙日记引擎 LLM 化改造 (T7.5 - `DiaryEngine`)**：
+   - 突破三段式写死日记模板，增加 `generateDailyDiary(..., llmClient, llmConfig)`；
+   - 综合当日真实多轮对话提炼情感与共鸣，由大模型以第一人称撰写富有生活感与文学美感的夜间伴生札记；
+   - 保留日期幂等覆盖机制与离线关键词模板降级；
+   - `DiaryEngineLlmTest` (2 测) 与 `DiaryEngineTest` (5 测) 100% 全绿。
+6. **自叙梦总控中枢穿透装配 (T7.6 - `SubconsciousDreamCoordinator`)**：
+   - `SubconsciousDreamCoordinator` 作为干净编排器，透传 `llmClient` 与 `llmConfig` 至下游三引擎；
+   - `SubconsciousDreamWorker` 完成全局注入装配。
+
+- **测试证据**：
+  - `./gradlew testDebugUnitTest`: **515 tests completed, 0 failed, 100% pass** (测试套件从 504 扩充至 515，净增 11 项单测)
+  - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 6s** (0 error, 0 warning)
+- **阶段验收结论**：APPROVED。第三轮系统级架构演进第七里程碑（M3.4 人格深水区与全域监视闭环）全绿达成！
+
+
 
 
 

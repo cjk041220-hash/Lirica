@@ -8,7 +8,7 @@ import java.util.UUID
 
 /**
  * 未完成念头合成器
- * 将情境感知与情绪驱动转译为有温度、符合小汐性格的第一人称内心独白
+ * 将情境感知与情绪驱动转译为有温度、符合 Lirica 性格的第一人称内心独白
  */
 interface ThoughtSynthesizer {
     fun synthesize(
@@ -88,7 +88,7 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
             // 6. 游戏高专注
             pkg.contains("game") || pkg.contains("tmgp") -> {
                 Triple(
-                    "看你玩得这么全神贯注，小汐先悄悄待在一旁不打扰你，这局一定要赢呀！",
+                    "看你玩得这么全神贯注，Lirica先悄悄待在一旁不打扰你，这局一定要赢呀！",
                     60 * 60 * 1000L,
                     0.4f
                 )
@@ -97,7 +97,7 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
             // 7. 桌面闲置无聊
             pkg.contains("launcher") || pkg.contains("home") -> {
                 Triple(
-                    "看你在桌面上发呆了好一会儿，是不是有点无聊呀？要不要跟小汐聊聊天呢。",
+                    "看你在桌面上发呆了好一会儿，是不是有点无聊呀？要不要跟 Lirica 聊聊天呢。",
                     90 * 60 * 1000L,
                     0.5f
                 )

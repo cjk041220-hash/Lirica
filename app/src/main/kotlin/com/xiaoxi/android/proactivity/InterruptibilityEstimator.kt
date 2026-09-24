@@ -24,8 +24,8 @@ class InterruptibilityEstimatorImpl : InterruptibilityEstimator {
         lastInterruptionMs: Long,
         nowMs: Long
     ): Double {
-        // 1. 银行/支付等金融隐私熔断保护：直接封顶最高打扰代价
-        if (snapshot.isPrivacyFusing) {
+        // 1. 银行/支付等金融隐私熔断保护，或正在通话中：直接封顶最高打扰代价
+        if (snapshot.isPrivacyFusing || snapshot.hardwareEnvironment.isPhoneInCall) {
             return InterruptibilityEstimator.MAX_COST
         }
 
@@ -57,6 +57,14 @@ class InterruptibilityEstimatorImpl : InterruptibilityEstimator {
                 val remainingRatio = 1.0 - (elapsed.toDouble() / InterruptibilityEstimator.COOLDOWN_MS)
                 cost += remainingRatio * 2.0
             }
+        }
+
+        // 4.5 硬件物理态感知（耳机/音频播放）
+        if (snapshot.hardwareEnvironment.isAudioPlaying) {
+            cost += 1.0
+        }
+        if (snapshot.hardwareEnvironment.isHeadsetPlugged) {
+            cost += 0.5
         }
 
         // 5. 边界夹紧

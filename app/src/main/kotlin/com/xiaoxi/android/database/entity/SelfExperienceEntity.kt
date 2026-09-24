@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
  * 自叙轨经历实体（Track B - Self-Experiences & Thoughts）
  *
  * 记录 Agent 自主上网阅读、见闻感知、日记感悟的第一人称心得与经历。
- * 区别于传统的“只记用户”模式，小汐拥有自己的独立经历库，作为对话时主动分享与共鸣的活水。
+ * 区别于传统的“只记用户”模式，Lirica 拥有自己的独立经历库，作为对话时主动分享与共鸣的活水。
  */
 @Entity(
     tableName = "self_experiences",

@@ -14,6 +14,7 @@ import com.xiaoxi.android.automation.grounding.ElementBounds
 import com.xiaoxi.android.automation.grounding.EmptyReason
 import com.xiaoxi.android.automation.grounding.ExecutionNode
 import com.xiaoxi.android.automation.grounding.ExecutionTreeExtractor
+import com.xiaoxi.android.automation.grounding.GroundingQuery
 import com.xiaoxi.android.automation.grounding.GroundingResult
 import com.xiaoxi.android.automation.grounding.HybridGroundingEngine
 import com.xiaoxi.android.automation.grounding.TreeDumpResult
@@ -159,12 +160,11 @@ class HelixGuiCoordinatorImpl(
                     val ok = if (executionBackend != null && executionBackend.isAvailable()) {
                         executionBackend.sendKeycode(action.keyCode)
                     } else {
-                        when (action.keyCode) {
-                            android.view.KeyEvent.KEYCODE_BACK -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) == true
-                            android.view.KeyEvent.KEYCODE_HOME -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) == true
-                            android.view.KeyEvent.KEYCODE_APP_SWITCH -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS) == true
-                            android.view.KeyEvent.KEYCODE_POWER -> serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) == true
-                            else -> false
+                        val globalAction = com.xiaoxi.android.automation.backend.KeycodeMapper.toAccessibilityGlobalAction(action.keyCode)
+                        if (globalAction != null) {
+                            serviceHolder.get()?.performGlobalAction(globalAction) == true
+                        } else {
+                            false
                         }
                     }
                     if (!ok) {
@@ -254,27 +254,7 @@ class HelixGuiCoordinatorImpl(
         }
 
         // 2. 元素接地 (HybridGrounding)
-        var locateResult = groundingEngine.locate(
-            query = query,
-            tree = dump.nodes.toUiElementNodes(),
-            screenshot = null,
-            screenWidth = screenWidthProvider(),
-            screenHeight = screenHeightProvider()
-        )
-
-        // 若无障碍树未找到且具备截屏能力，触发 L1 视觉/OCR 接地
-        if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
-            val screenshot = screenCaptureManager.captureScreen()?.bytes
-            if (screenshot != null) {
-                locateResult = groundingEngine.locate(
-                    query = query,
-                    tree = dump.nodes.toUiElementNodes(),
-                    screenshot = screenshot,
-                    screenWidth = screenWidthProvider(),
-                    screenHeight = screenHeightProvider()
-                )
-            }
-        }
+        var locateResult = locateWithVisualFallback(query, dump.nodes)
 
         // 若仍未找到，检查是否有阻断弹窗并尝试自愈
         if (locateResult is GroundingResult.NotFound) {
@@ -293,26 +273,7 @@ class HelixGuiCoordinatorImpl(
                 // 自愈后重新抓取与接地
                 val retryDump = treeExtractor.dumpTree(rootNodeProvider(), screenWidthProvider(), screenHeightProvider(), currentPackageProvider())
                 if (retryDump is TreeDumpResult.Ok) {
-                    locateResult = groundingEngine.locate(
-                        query = query,
-                        tree = retryDump.nodes.toUiElementNodes(),
-                        screenshot = null,
-                        screenWidth = screenWidthProvider(),
-                        screenHeight = screenHeightProvider()
-                    )
-                    // 自愈重试下同样支持 OCR 视觉接地
-                    if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
-                        val retryScreenshot = screenCaptureManager.captureScreen()?.bytes
-                        if (retryScreenshot != null) {
-                            locateResult = groundingEngine.locate(
-                                query = query,
-                                tree = retryDump.nodes.toUiElementNodes(),
-                                screenshot = retryScreenshot,
-                                screenWidth = screenWidthProvider(),
-                                screenHeight = screenHeightProvider()
-                            )
-                        }
-                    }
+                    locateResult = locateWithVisualFallback(query, retryDump.nodes)
                 }
             }
         }
@@ -509,6 +470,35 @@ class HelixGuiCoordinatorImpl(
                 // 无法自愈，将在上层终止
             }
         }
+    }
+
+    private suspend fun locateWithVisualFallback(
+        query: GroundingQuery,
+        nodes: List<ExecutionNode>
+    ): GroundingResult {
+        val uiNodes = nodes.toUiElementNodes()
+        var locateResult = groundingEngine.locate(
+            query = query,
+            tree = uiNodes,
+            screenshot = null,
+            screenWidth = screenWidthProvider(),
+            screenHeight = screenHeightProvider()
+        )
+
+        // 若无障碍树未找到且具备截屏能力，触发 L1 视觉/OCR 接地
+        if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
+            val screenshot = screenCaptureManager.captureScreen()?.bytes
+            if (screenshot != null) {
+                locateResult = groundingEngine.locate(
+                    query = query,
+                    tree = uiNodes,
+                    screenshot = screenshot,
+                    screenWidth = screenWidthProvider(),
+                    screenHeight = screenHeightProvider()
+                )
+            }
+        }
+        return locateResult
     }
 
     private fun actionDescription(action: CoordinatorAction): String = when (action) {

@@ -99,7 +99,9 @@ class ScreenCaptureManager(
         }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            XiaoxiLog.w("ScreenCaptureManager", "系统版本低于 Android 11 (API 30)，无障碍原生截屏不可用")
+            // 架构决策：放弃高侵扰性 MediaProjection 弹窗，采用纯静默 AccessibilityService.takeScreenshot (API 30+)；
+            // Android 11 以下设备安全降级为 null，上层接地引擎自动纯走无障碍语义树。
+            XiaoxiLog.w("ScreenCaptureManager", "系统版本低于 Android 11 (API 30)，静默截屏不可用，降级无障碍树模式")
             return null
         }
 

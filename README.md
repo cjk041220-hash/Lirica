@@ -1,13 +1,14 @@
-# 🌌 小汐 2.0（Project Aether）
+# 🌌 Lirica（Project Aether）
 
 > **Android 原生自主人格伴生智能体（Autonomous On-Device Companion & OS Agent）**  
-> 拥有独立灵魂、环境感知（获权视奸）与手机操控力的下一代移动端伴生 AI。
+> 拥有独立灵魂、环境感知（获权视奸）与手机操控力的下一代移动端伴生 AI。  
+> *项目正式命名为 **Lirica**（意大利语中的抒情诗，原名“小汐 / sonetto”）。*
 
 ---
 
 ## 📖 项目概述
 
-小汐 2.0 经历了从单一情感纪念物向**通用移动端伴生智能体**的战略重构。底层全面拥抱 Android 原生现代化技术栈（Kotlin + Jetpack Compose），告别传统的 Web 抽屉和被动聊天框。
+Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的战略重构。底层全面拥抱 Android 原生现代化技术栈（Kotlin + Jetpack Compose），告别传统的 Web 抽屉和被动聊天框。
 
 ### 四大核心能力
 1. **自由自主人格（Customizable Persona）**：原生全兼容 **SillyTavern（酒馆）角色卡（V1/V2/V3）** 导入导出，内置 PHI 语气重锚与 8 轮抗漂移引擎，角色长聊不崩。
@@ -37,7 +38,7 @@
 | 天气查询（Open-Meteo，免 Key） | ✅ 已实现 | `life/WeatherTool.kt` |
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
-| 网页搜索 / 地图 / 塔罗 / 生理周期 | 🗺️ 规划中 | backend 参考源有实现（`backend/tools/*`），Android 侧未迁移 |
+| 网页搜索 / 地图 / 塔罗 / 生理周期 | 🗺️ 规划中 | 见 M3.6 规划，原参考源已封存入 Git 历史，Android 侧待原生落地 |
 | BYOK 多模型网关（OpenAI 兼容 / Anthropic） | 🗺️ 规划中 | 当前主链路直连 DeepSeek（`network/XiaoxiLlmClient.kt`）；`ByokSettingsRepository` 为实验中未接线 |
 | 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
 
@@ -51,17 +52,12 @@
 
 ---
 
-## 📂 项目结构（2.0 规划中）
+## 📂 项目结构
 
 ```
-xiaoxi-android/
-├── 小汐2.0开发计划书_原生自主人格伴生智能体_2026-09-19.md  # 2.0 终极开发大纲与架构规格
-├── backend/                                            # 原核心算法与心智逻辑参考源（待原生迁移）
-│   ├── agent/soul.py                                   # 语气锚定、反 AI 腔意象过滤
-│   ├── heartbeat_moods.py                              # Russell 效价-唤醒度情绪动力学
-│   ├── memory/                                         # 记忆衰减评分、矛盾覆盖、自叙生成
-│   └── tests/                                          # 核心心智与记忆回归测试套件
-└── app/                                                # [Phase 0 启动] Android 原生工程（Kotlin + Compose）
+lirica-android/
+├── docs/                                               # 架构设计、演进方案与评审档案
+└── app/                                                # Android 原生工程（100% Native Kotlin + Compose）
 ```
 
 ---

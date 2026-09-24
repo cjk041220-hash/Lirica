@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.xiaoxi.android.XiaoxiApplication
 import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.proactivity.DiaryEngineImpl
 import java.util.concurrent.TimeUnit
@@ -30,6 +31,7 @@ class SubconsciousDreamWorker(
     override suspend fun doWork(): Result {
         return try {
             val database = XiaoxiDatabase.getInstance(applicationContext)
+            val app = applicationContext as? XiaoxiApplication
             val coordinator = SubconsciousDreamCoordinator(
                 userMemoryDao = database.userMemoryDao(),
                 worldviewDao = database.worldviewDao(),
@@ -38,7 +40,9 @@ class SubconsciousDreamWorker(
                 diaryEngine = DiaryEngineImpl(
                     selfExperienceDao = database.selfExperienceDao(),
                     chatDialogueDao = database.chatDialogueDao()
-                )
+                ),
+                llmClient = app?.llmClient,
+                llmConfig = app?.backgroundLlmConfig
             )
             coordinator.runDreamCycle()
             Result.success()

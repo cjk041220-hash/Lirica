@@ -45,7 +45,7 @@ import com.xiaoxi.android.emotion.model.MoodState
 /**
  * 悬浮伴生体半展开与快速交互面板 (Overlay Expand Panel)
  *
- * 紧凑轻量，无需离开当前 App 即可与小汐快速沟通、查看即时回复并支持快捷切换到主程序。
+ * 紧凑轻量，无需离开当前 App 即可与 Lirica 快速沟通、查看即时回复并支持快捷切换到主程序。
  */
 @Composable
 fun OverlayExpandPanel(
@@ -117,7 +117,7 @@ fun OverlayExpandPanel(
 
                         Column {
                             Text(
-                                text = "小汐",
+                                text = "Lirica",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -185,7 +185,7 @@ fun OverlayExpandPanel(
                     ) {
                         Column {
                             Text(
-                                text = streamingReply.ifBlank { "小汐正在思考..." },
+                                text = streamingReply.ifBlank { "Lirica 正在思考..." },
                                 fontSize = 12.sp,
                                 color = Color.White.copy(alpha = 0.9f),
                                 lineHeight = 17.sp
@@ -240,7 +240,7 @@ fun OverlayExpandPanel(
                         decorationBox = { innerTextField ->
                             if (inputText.isEmpty()) {
                                 Text(
-                                    text = "和悬浮小汐聊一句...",
+                                    text = "和悬浮 Lirica 聊一句...",
                                     fontSize = 12.sp,
                                     color = Color.White.copy(alpha = 0.35f)
                                 )

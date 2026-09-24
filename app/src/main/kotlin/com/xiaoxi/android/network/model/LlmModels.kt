@@ -11,6 +11,9 @@ enum class LlmProvider {
     @SerialName("openai")
     OPENAI,
 
+    @SerialName("anthropic")
+    ANTHROPIC,
+
     @SerialName("custom")
     CUSTOM
 }

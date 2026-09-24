@@ -263,7 +263,7 @@ class XiaoxiDatabaseTest {
         val msg1 = ChatDialogueEntity(
             sessionId = "session_001",
             role = "user",
-            content = "小汐，我今天遇到一个有意思的Bug",
+            content = "Lirica，我今天遇到一个有意思的Bug",
             msgType = "chat",
             timestamp = now,
             tokenCount = 15,
@@ -283,7 +283,7 @@ class XiaoxiDatabaseTest {
         val msg3 = ChatDialogueEntity(
             sessionId = "session_002",
             role = "user",
-            content = "晚安小汐",
+            content = "晚安 Lirica",
             msgType = "chat",
             timestamp = now + 5000L,
             tokenCount = 6,

@@ -102,7 +102,7 @@ class KeepAliveService : LifecycleService() {
 
         const val NOTIFICATION_ID = 1001
         const val CHANNEL_ID = "xiaoxi_keepalive_channel"
-        const val CHANNEL_NAME = "小汐伴生保活服务"
+        const val CHANNEL_NAME = "Lirica 伴生保活服务"
 
         const val ACTION_STOP_SERVICE = "com.xiaoxi.android.action.STOP_KEEPALIVE"
         const val ACTION_START_OVERLAY = "com.xiaoxi.android.action.START_OVERLAY"
@@ -119,7 +119,7 @@ class KeepAliveService : LifecycleService() {
                         CHANNEL_NAME,
                         NotificationManager.IMPORTANCE_LOW
                     ).apply {
-                        description = "小汐 2.0 桌面伴生与轻量低耗常驻心智通道"
+                        description = "Lirica 桌面伴生与轻量低耗常驻心智通道"
                         setShowBadge(false)
                     }
                     notificationManager.createNotificationChannel(channel)
@@ -155,7 +155,7 @@ class KeepAliveService : LifecycleService() {
 
             return NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("小汐 2.0 伴生中")
+                .setContentTitle("Lirica 伴生中")
                 .setContentText("正在守护与感知主人动态...")
                 .setContentIntent(pendingOpenApp)
                 .setOngoing(true)

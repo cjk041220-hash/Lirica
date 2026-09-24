@@ -39,7 +39,7 @@ import com.xiaoxi.android.emotion.model.MoodState
 /**
  * 未完成念头破冰小气泡 (Icebreaker Bubble)
  *
- * 浮现在伴生体头顶/侧翼，展示小汐内心的碎片念头，点击直接代入对话交流，右上角支持轻触忽略。
+ * 浮现在伴生体头顶/侧翼，展示 Lirica 内心的碎片念头，点击直接代入对话交流，右上角支持轻触忽略。
  */
 @Composable
 fun IcebreakerBubble(

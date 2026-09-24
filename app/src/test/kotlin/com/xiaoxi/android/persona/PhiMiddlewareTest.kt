@@ -28,7 +28,7 @@ class PhiMiddlewareTest {
 
     @Test
     fun testContextAssemblySequenceOrder() {
-        val systemPrompt = "基础人设：你是小汐，来自映海的鲸族少女。"
+        val systemPrompt = "基础人设：你是 Lirica，来自映海的鲸族少女。"
         val dynamicContext = "【情境与记忆】当前时间：14:00，用户记忆：喜欢喝冰乌龙茶。"
         val history = listOf(
             ChatMessage(role = "user", content = "今天好热，喝点什么好？")
@@ -70,7 +70,7 @@ class PhiMiddlewareTest {
         )
 
         val assembled = phiMiddleware.assemble(
-            systemPrompt = "你是小汐",
+            systemPrompt = "你是 Lirica",
             historyMessages = history
         )
 
@@ -233,7 +233,7 @@ class PhiMiddlewareTest {
     @Test
     fun testCharacterCardIntegrationWithMacroExpansion() {
         val card = CharacterCard(
-            name = "小汐",
+            name = "Lirica",
             systemPrompt = "你是{{char}}，陪伴在{{user}}身边的伴生智能体。",
             postHistoryInstructions = "{{char}}务必记住：对{{user}}保持真诚，绝不敷衍。"
         )
@@ -243,19 +243,19 @@ class PhiMiddlewareTest {
             characterCard = card,
             historyMessages = history,
             userName = "小月",
-            charName = "小汐"
+            charName = "Lirica"
         )
 
         // 系统主提示词宏展开验证
         val systemMessage = assembled.first()
         assertEquals("system", systemMessage.role)
-        assertTrue(systemMessage.content.orEmpty().contains("你是小汐，陪伴在小月身边的伴生智能体。"))
+        assertTrue(systemMessage.content.orEmpty().contains("你是Lirica，陪伴在小月身边的伴生智能体。"))
 
         // 尾部 PHI 宏展开与卡片指令注入验证
         val phiMessage = assembled.last()
         assertEquals("system", phiMessage.role)
         val phiContent = phiMessage.content.orEmpty()
-        assertTrue(phiContent.contains("小汐务必记住：对小月保持真诚，绝不敷衍。"))
+        assertTrue(phiContent.contains("Lirica务必记住：对小月保持真诚，绝不敷衍。"))
         assertTrue(phiContent.contains("语气铁律"))
     }
 
@@ -264,7 +264,7 @@ class PhiMiddlewareTest {
         val request = ChatCompletionRequest(
             model = "deepseek-chat",
             messages = listOf(
-                ChatMessage(role = "system", content = "你是小汐"),
+                ChatMessage(role = "system", content = "你是 Lirica"),
                 ChatMessage(role = "user", content = "写一首短诗")
             ),
             temperature = 0.95
@@ -294,7 +294,7 @@ class PhiMiddlewareTest {
 
         // dynamicContext 为 null
         val assembled1 = phiMiddleware.assemble(
-            systemPrompt = "你是小汐",
+            systemPrompt = "你是 Lirica",
             dynamicContext = null,
             historyMessages = history
         )
@@ -306,7 +306,7 @@ class PhiMiddlewareTest {
 
         // dynamicContext 为空白字符串
         val assembled2 = phiMiddleware.assemble(
-            systemPrompt = "你是小汐",
+            systemPrompt = "你是 Lirica",
             dynamicContext = "   \n  ",
             historyMessages = history
         )
@@ -330,8 +330,8 @@ class PhiMiddlewareTest {
         )
 
         val tailContent = assembled.last().content.orEmpty()
-        // 关键断言：自定义角色卡在第 8 轮触发抗漂移时，绝不能被注入硬编码的“映海来的鲸族少女小汐”！
-        assertFalse("自定义角色卡严禁被小汐人设污染", tailContent.contains("映海来的鲸族少女"))
+        // 关键断言：自定义角色卡在第 8 轮触发抗漂移时，绝不能被注入硬编码的“映海来的鲸族少女Lirica”！
+        assertFalse("自定义角色卡严禁被 Lirica 人设污染", tailContent.contains("映海来的鲸族少女"))
         assertTrue("必须包含该角色的姓名重锚", tailContent.contains("夏洛克·福尔摩斯"))
         assertTrue("必须包含该角色的核心性格重锚", tailContent.contains("敏锐毒舌、极度理性的咨询侦探"))
     }

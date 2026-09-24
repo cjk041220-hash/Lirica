@@ -190,7 +190,7 @@ class DualTrackMemoryManagerTest {
         // 装配动态上下文
         val dynamicContext = memoryManager.assembleDynamicContext(
             query = "今天代码写得怎么样？",
-            charName = "小汐",
+            charName = "Lirica",
             nowTs = now
         )
 
@@ -198,11 +198,11 @@ class DualTrackMemoryManagerTest {
         assertTrue(dynamicContext!!.contains("## 关于用户的长期记忆与事实"))
         assertTrue(dynamicContext.contains("正在开发原生 Android 伴生智能体项目"))
 
-        assertTrue(dynamicContext.contains("## 小汐 最近的个人经历与见闻"))
+        assertTrue(dynamicContext.contains("## Lirica 最近的个人经历与见闻"))
         assertTrue(dynamicContext.contains("今天在网上看了量子意识假说的科普视频"))
         assertTrue(dynamicContext.contains("宇宙真的好神奇"))
 
-        assertTrue(dynamicContext.contains("## 小汐 心里惦记的未完成念头"))
+        assertTrue(dynamicContext.contains("## Lirica 心里惦记的未完成念头"))
         assertTrue(dynamicContext.contains("看搭档写代码忙了一下午"))
     }
 
@@ -245,7 +245,7 @@ class DualTrackMemoryManagerTest {
 
         val result = memoryManager.assembleDynamicContext(
             query = "完全无关的查询关键词",
-            charName = "小汐",
+            charName = "Lirica",
             preRecalledUserMemories = preRecalledUser,
             preRecalledSelfExperiences = preRecalledSelf,
             preRecalledUnspokenThoughts = preRecalledThought

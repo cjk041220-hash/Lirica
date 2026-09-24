@@ -3,7 +3,9 @@ package com.xiaoxi.android.ui.chat
 import app.cash.turbine.test
 import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.dao.ChatDialogueDao
+import com.xiaoxi.android.database.dao.ScheduledAlarmDao
 import com.xiaoxi.android.database.entity.ChatDialogueEntity
+import com.xiaoxi.android.database.entity.ScheduledAlarmEntity
 import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.entity.UserMemoryEntity
@@ -11,12 +13,15 @@ import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
+import com.xiaoxi.android.life.CareEvent
+import com.xiaoxi.android.life.CareHintDetector
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.network.model.LlmStreamEvent
 import com.xiaoxi.android.persona.HumannessFilter
 import com.xiaoxi.android.persona.PhiMiddleware
 import com.xiaoxi.android.persona.model.CharacterCard
+import io.mockk.slot
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -201,14 +206,14 @@ class ChatViewModelTest {
         assertNull(viewModel.uiState.value.activeCharacterCard)
 
         val card = CharacterCard(
-            name = "测试小汐",
+            name = "测试 Lirica",
             description = "测试伴生助手",
             personality = "温柔活泼"
         )
         viewModel.importCharacterCard(card)
         testScheduler.advanceUntilIdle()
 
-        assertEquals("测试小汐", viewModel.uiState.value.activeCharacterCard?.name)
+        assertEquals("测试 Lirica", viewModel.uiState.value.activeCharacterCard?.name)
     }
 
     @Test
@@ -226,5 +231,56 @@ class ChatViewModelTest {
         assertFalse(state.isStreaming)
         assertNotNull(state.errorMessage)
         assertTrue(state.errorMessage!!.contains("Connection timeout"))
+    }
+
+    @Test
+    fun testCareHintWithScheduledExamCombo() = runTest(testDispatcher) {
+        val mockAlarmDao = mockk<ScheduledAlarmDao>(relaxed = true)
+        val mockCareDetector = mockk<CareHintDetector>()
+
+        val now = System.currentTimeMillis()
+        val alarm = ScheduledAlarmEntity(
+            id = "alarm_1",
+            triggerAt = now + 3600_000L,
+            botNote = "明天考高数",
+            status = "pending"
+        )
+        coEvery { mockAlarmDao.getUpcomingAlarms(any(), any(), any()) } returns listOf(alarm)
+        coEvery { mockChatDialogueDao.getUserTimestampsSince(any(), any()) } returns emptyList()
+        coEvery { mockChatDialogueDao.getLastUserTimestampBefore(any()) } returns null
+
+        val eventSlot = slot<List<CareEvent>>()
+        every {
+            mockCareDetector.collectHintTexts(
+                now = any(),
+                recentUserMessageTimes = any(),
+                activeEvents = capture(eventSlot),
+                lastUserMessageTime = any()
+            )
+        } returns listOf("明天有「明天考高数」，还没睡")
+
+        val vm = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao,
+            careHintDetector = mockCareDetector,
+            scheduledAlarmDao = mockAlarmDao
+        )
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flowOf(
+            LlmStreamEvent.Token("早点睡哦")
+        )
+
+        vm.sendMessage("还在看书呢")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(eventSlot.isCaptured)
+        val events = eventSlot.captured
+        assertEquals(1, events.size)
+        assertEquals("exam", events[0].eventType)
+        assertEquals("明天考高数", events[0].title)
     }
 }

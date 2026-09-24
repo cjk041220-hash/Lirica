@@ -63,7 +63,7 @@ class MapBasedPromptAssemblerTest {
             SelfExperienceEntity(
                 id = "exp_1",
                 title = "阅读感悟",
-                content = "今天读到关于心流状态的描述，感觉和小汐陪伴你的感觉很像",
+                content = "今天读到关于心流状态的描述，感觉和 Lirica 陪伴你的感觉很像",
                 domainTag = "见闻",
                 createdAt = 4000L
             )
@@ -95,7 +95,7 @@ class MapBasedPromptAssemblerTest {
             dreamEmergence = dreamEmergence,
             selfExperiences = selfExperiences,
             perceptionSnapshot = perception,
-            charName = "小汐"
+            charName = "Lirica"
         )
 
         val assembled = assembler.assemble(input)

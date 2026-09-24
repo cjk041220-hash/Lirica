@@ -94,7 +94,7 @@ fun MemoryBadge(
 
                     if (badgeInfo.selfExperiences.isNotEmpty()) {
                         MemorySection(
-                            title = "🌿 小汐自叙见闻经历 (Track B)",
+                            title = "🌿 Lirica 自叙见闻经历 (Track B)",
                             items = badgeInfo.selfExperiences,
                             accentColor = Color(0xFF10B981)
                         )

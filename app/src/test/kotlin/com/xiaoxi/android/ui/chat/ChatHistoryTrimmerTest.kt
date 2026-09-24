@@ -25,7 +25,7 @@ class ChatHistoryTrimmerTest {
     @Test
     fun testTrim_withinBudget_preservesAllMessages() {
         val history = listOf(
-            ChatMessage(role = "user", content = "你好，小汐"),
+            ChatMessage(role = "user", content = "你好，Lirica"),
             ChatMessage(role = "assistant", content = "你好！今天过得怎么样？"),
             ChatMessage(role = "user", content = "我今天刚下班，有点累。")
         )

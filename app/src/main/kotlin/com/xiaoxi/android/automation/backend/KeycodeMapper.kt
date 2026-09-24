@@ -1,5 +1,6 @@
 package com.xiaoxi.android.automation.backend
 
+import android.accessibilityservice.AccessibilityService
 import android.view.KeyEvent
 
 /**
@@ -59,5 +60,18 @@ object KeycodeMapper {
         // 符号名称匹配
         return KEY_NAME_TO_CODE[trimmed.uppercase()]
             ?: KEY_NAME_TO_CODE[trimmed]
+    }
+
+    /**
+     * 将按键码映射为 AccessibilityService 的全局动作码（用于无障碍降级兜底）。
+     */
+    fun toAccessibilityGlobalAction(keyCode: Int): Int? {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_BACK -> AccessibilityService.GLOBAL_ACTION_BACK
+            KeyEvent.KEYCODE_HOME -> AccessibilityService.GLOBAL_ACTION_HOME
+            KeyEvent.KEYCODE_APP_SWITCH -> AccessibilityService.GLOBAL_ACTION_RECENTS
+            KeyEvent.KEYCODE_POWER -> AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
+            else -> null
+        }
     }
 }

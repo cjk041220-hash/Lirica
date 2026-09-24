@@ -108,7 +108,7 @@ class OverlayExpandViewModelTest {
     fun testDismissIcebreaker() = runTest {
         val thought = UnspokenThoughtEntity(
             id = "thought_1",
-            thought = "想和小汐说说话吗？",
+            thought = "想和Lirica说说话吗？",
             urgency = 0.7f,
             createdAt = 1000L,
             status = UnspokenThoughtEntity.STATUS_PENDING
@@ -174,14 +174,14 @@ class OverlayExpandViewModelTest {
         coEvery { memoryManager.assembleDynamicContext(any(), any(), any(), any()) } returns "测试上下文"
         every { phiMiddleware.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns emptyList()
         coEvery { llmClient.streamChat(any(), any(), any()) } returns flowOf(
-            LlmStreamEvent.Token("小汐"),
+            LlmStreamEvent.Token("Lirica"),
             LlmStreamEvent.Token("收到啦"),
             LlmStreamEvent.Token("！")
         )
-        every { humannessFilter.filter("小汐收到啦！", any()) } returns HumannessFilter.FilterResult(
+        every { humannessFilter.filter("Lirica收到啦！", any()) } returns HumannessFilter.FilterResult(
             passed = true,
-            originalText = "小汐收到啦！",
-            filteredText = "小汐收到啦！",
+            originalText = "Lirica收到啦！",
+            filteredText = "Lirica收到啦！",
             violations = emptyList(),
             isRewritten = false
         )
@@ -201,20 +201,20 @@ class OverlayExpandViewModelTest {
 
             // Delta 1
             val delta1 = awaitItem()
-            assertEquals("小汐", delta1.streamingReply)
+            assertEquals("Lirica", delta1.streamingReply)
 
             // Delta 2
             val delta2 = awaitItem()
-            assertEquals("小汐收到啦", delta2.streamingReply)
+            assertEquals("Lirica收到啦", delta2.streamingReply)
 
             // Delta 3
             val delta3 = awaitItem()
-            assertEquals("小汐收到啦！", delta3.streamingReply)
+            assertEquals("Lirica收到啦！", delta3.streamingReply)
 
             // Finish
             val finished = awaitItem()
             assertFalse(finished.isStreaming)
-            assertEquals("小汐收到啦！", finished.streamingReply)
+            assertEquals("Lirica收到啦！", finished.streamingReply)
         }
     }
 }

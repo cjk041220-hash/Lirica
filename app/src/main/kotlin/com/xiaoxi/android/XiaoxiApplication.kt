@@ -24,6 +24,8 @@ import com.xiaoxi.android.automation.healing.SelfHealingWatchdogImpl
 import com.xiaoxi.android.automation.intent.IntentActionDispatcherImpl
 import com.xiaoxi.android.common.logging.XiaoxiCrashHandler
 import com.xiaoxi.android.common.logging.XiaoxiLog
+import com.xiaoxi.android.common.settings.ByokSettingsRepository
+import com.xiaoxi.android.common.settings.ByokSettingsRepositoryImpl
 import com.xiaoxi.android.database.XiaoxiDatabase
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
 import com.xiaoxi.android.emotion.EmotionEngine
@@ -34,12 +36,14 @@ import com.xiaoxi.android.life.WeatherLifeTool
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.perception.AccessibilityServiceHolder
+import com.xiaoxi.android.perception.HardwareEnvironmentWatcher
 import com.xiaoxi.android.perception.PerceptionPipeline
 import com.xiaoxi.android.perception.PrivacyBreaker
 import com.xiaoxi.android.perception.ScreenStateWatcher
 import com.xiaoxi.android.perception.UsageStatsTracker
 import com.xiaoxi.android.perception.XiaoxiAccessibilityService
 import com.xiaoxi.android.perception.XiaoxiNotificationListenerService
+import com.xiaoxi.android.perception.model.ForegroundAppInfo
 import com.xiaoxi.android.perception.model.ScreenState
 import com.xiaoxi.android.persona.HandoffManager
 import com.xiaoxi.android.persona.HumannessFilter
@@ -56,7 +60,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 
 class XiaoxiApplication : Application() {
@@ -127,19 +133,24 @@ class XiaoxiApplication : Application() {
     lateinit var careHintDetector: CareHintDetector
         private set
 
+    lateinit var byokSettingsRepository: ByokSettingsRepository
+        private set
+
     /**
-     * 后台任务（记忆抽取等）共用的 LLM 配置
+     * 后台任务（记忆抽取等）共用的 LLM 配置（动态消费用户有效设置）
      */
-    val backgroundLlmConfig: LlmConfig by lazy {
-        LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY)
-    }
+    val backgroundLlmConfig: LlmConfig
+        get() = byokSettingsRepository.getEffectiveLlmConfig()
 
     override fun onCreate() {
         super.onCreate()
         instance = this
 
         XiaoxiCrashHandler.install(this)
-        XiaoxiLog.i("XiaoxiApplication", "小汐 2.0 系统已启动，本地崩溃守护与环形日志已就绪")
+        XiaoxiLog.i("XiaoxiApplication", "Lirica 系统已启动，本地崩溃守护与环形日志已就绪")
+
+        val byokPrefs = getSharedPreferences(ByokSettingsRepository.PREFS_NAME, Context.MODE_PRIVATE)
+        byokSettingsRepository = ByokSettingsRepositoryImpl(byokPrefs)
 
         database = XiaoxiDatabase.getInstance(this)
         memoryManager = DualTrackMemoryManager(database)
@@ -275,14 +286,23 @@ class XiaoxiApplication : Application() {
             )
         }
 
+        val hardwareWatcher = HardwareEnvironmentWatcher().also { it.start(this) }
+
+        // M3.4 零轮询前台感知（无障碍秒级事件驱动）+ UsageStats 降级兜底通道
+        val zeroPollingForegroundFlow: StateFlow<ForegroundAppInfo?> = merge(
+            XiaoxiAccessibilityService.windowForegroundAppEvents,
+            usageStatsTracker.foregroundApp.filterNotNull()
+        ).stateIn(appScope, SharingStarted.Eagerly, null)
+
         perceptionPipeline = PerceptionPipeline(
-            foregroundAppFlow = usageStatsTracker.foregroundApp,
+            foregroundAppFlow = zeroPollingForegroundFlow,
             screenStateFlow = screenStateWatcher.screenState,
             notificationFlow = XiaoxiNotificationListenerService.notificationEvents,
             pageContentFlow = XiaoxiAccessibilityService.pageContentEvents,
             privacyBreaker = PrivacyBreaker(),
             emotionEngine = emotionEngine,
-            unspokenThoughtDao = database.unspokenThoughtDao()
+            unspokenThoughtDao = database.unspokenThoughtDao(),
+            hardwareStateFlow = hardwareWatcher.hardwareState
         ).also { it.start(appScope) }
     }
 

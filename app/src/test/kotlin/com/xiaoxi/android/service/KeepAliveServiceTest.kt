@@ -48,7 +48,7 @@ class KeepAliveServiceTest {
 
         val title = notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         assertNotNull(title)
-        assertTrue(title!!.contains("小汐"))
+        assertTrue(title!!.contains("Lirica"))
     }
 
     @Test

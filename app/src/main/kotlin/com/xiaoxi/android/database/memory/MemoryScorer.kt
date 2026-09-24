@@ -10,7 +10,7 @@ import kotlin.math.min
 /**
  * 记忆相关性与多维认知加权评分器 (Memory Scorer)
  *
- * 严格继承小汐沉淀与《AI Agent 记忆架构调研》4.2 节核心公式：
+ * 严格继承 Lirica 沉淀与《AI Agent 记忆架构调研》4.2 节核心公式：
  * S(m, q) = S_recency + S_access + S_usage + S_importance + S_topic + S_mood
  *
  * 1. 时间衰减 (S_recency)：基于统一提及时钟 (last_mention_ts or created_at)，半衰期 ≈ 7 天

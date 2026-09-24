@@ -17,7 +17,7 @@ interface SilenceDecisionEngine {
     ): DecisionResult
 
     companion object {
-        /** 内隐动机阈值 (低于此值小汐完全静默，不生成内心独白) */
+        /** 内隐动机阈值 (低于此值 Lirica 完全静默，不生成内心独白) */
         const val IM_THRESHOLD = 3.6
         /** 打断阈值 (有效动机超过此值且情境代价适宜时，允许主动破冰) */
         const val INTERRUPT_THRESHOLD = 4.5

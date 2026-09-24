@@ -1,4 +1,4 @@
-# Proguard rules for Xiaoxi Android (小汐 2.0)
+# Proguard rules for Lirica Android
 -keepattributes *Annotation*,InnerClasses,Signature
 
 # Room SQLite

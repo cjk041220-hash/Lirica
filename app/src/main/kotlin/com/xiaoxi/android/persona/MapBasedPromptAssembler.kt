@@ -18,7 +18,7 @@ data class MapContextInput(
     val dreamEmergence: UnspokenThoughtEntity? = null,
     val selfExperiences: List<SelfExperienceEntity> = emptyList(),
     val perceptionSnapshot: PerceptionSnapshot? = null,
-    val charName: String = "小汐"
+    val charName: String = "Lirica"
 )
 
 /**

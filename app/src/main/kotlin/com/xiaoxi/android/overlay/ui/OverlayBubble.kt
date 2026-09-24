@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.xiaoxi.android.emotion.model.MoodState
 
 /**
- * 悬浮小汐伴生体 (Overlay Bubble)
+ * 悬浮 Lirica 伴生体 (Overlay Bubble)
  *
  * 跨应用常驻悬浮伴生体核心视图，承载 16 种 Russell 情绪微表情、光晕呼吸律动与拖拽贴边手势响应。
  */

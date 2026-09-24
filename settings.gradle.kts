@@ -25,5 +25,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "xiaoxi-android"
+rootProject.name = "lirica-android"
 include(":app")

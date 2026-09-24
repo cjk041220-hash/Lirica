@@ -18,5 +18,6 @@ data class PerceptionSnapshot(
     val latestNotification: NotificationEvent? = null,
     val pageContent: PageContentSnapshot? = null,
     val isPrivacyFusing: Boolean = false,
+    val hardwareEnvironment: HardwareEnvironmentState = HardwareEnvironmentState(),
     val perceivedSummary: String = ""
 )

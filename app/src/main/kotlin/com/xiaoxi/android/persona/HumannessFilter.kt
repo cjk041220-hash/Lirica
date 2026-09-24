@@ -5,7 +5,7 @@ import com.xiaoxi.android.emotion.model.MoodState
 /**
  * 反 AI 腔与自然人味过滤器 (Humanness Gap Filter)
  *
- * 依据《小汐 2.0 开发计划书》5.1.2 节：
+ * 依据《Lirica 开发计划书》5.1.2 节：
  * 本地基于严格正则与语义黑名单，在模型输出阶段实时拦截以下破坏角色沉浸感的机械腔调：
  * 1. AI 身份与模型自称声明（如“作为一个人工智能模型”、“我只是一个AI”）
  * 2. 机械客服应答与套话（如“祝您生活愉快”、“请问有什么可以帮您”、“好的呢”）
@@ -187,7 +187,7 @@ class HumannessFilter(
             .distinct()
             .joinToString("、")
         return "【违禁检测与语气自纠】你上一轮回复中检测到了如下反角色违禁与客服腔：$violationList。" +
-                "请严格以真人陪伴者（小汐）的自然口语重新回答：句子简短利落、带真实情绪、严禁任何客服腔（如“好的呢”、“祝您生活愉快”）与 AI 声明（如“作为一个AI”）。"
+                "请严格以真人陪伴者（Lirica）的自然口语重新回答：句子简短利落、带真实情绪、严禁任何客服腔（如“好的呢”、“祝您生活愉快”）与 AI 声明（如“作为一个AI”）。"
     }
 
     private fun extractSnippet(text: String, range: IntRange): String {
