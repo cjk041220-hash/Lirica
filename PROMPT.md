@@ -35,3 +35,4 @@
 - [x] 7. 路线图 :461 M4.0 改【待启动】；里程碑补 M2.4/M2.5 | 验证：路线图里程碑与实际完成的 M2.4/M2.5 验收记录及待启动 M4.0 状态一致
 - [x] 8. 路线图 :349 Claude 模型名更新为现役版本；修正三处模块归属（DiaryEngine、ProactiveBubbleCoordinator、MoodDebugPanel）；“3D PAD”改为“2D Valence-Arousal” | 验证：grep 校验 PAD 归零且模型与模块路径全部与源码对齐
 - [x] 9. README:42 BYOK 行按 M3.1 已落地改写（消除与 :67 矛盾）；README:18 “尚未开放配置入口”同步修正 | 验证：对照 M3.1 网关代码出处与 README :67 确认消除矛盾并标为已实现
+- [x] 10. README:41/:51 移除 M3.6 规划字样（D16）；.gitignore 补充图片文件规则 | 验证：grep 校验 README 中 M3.6 归零，.gitignore 补充图片过滤规则且排除 res 目录

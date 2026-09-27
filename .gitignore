@@ -61,3 +61,13 @@ Thumbs.db
 # 前端 E2E 截图（测试产物）
 scripts/e2e/shots/
 .superpowers
+
+# 图片与媒体文件规则（避免截图、临时媒体与微信图片误入版本库，保留资源目录）
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+!app/src/main/res/**/*.png
+!app/src/main/res/**/*.webp
+!app/src/main/res/**/*.jpg

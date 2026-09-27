@@ -38,7 +38,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 | 天气查询（Open-Meteo，免 Key） | ✅ 已实现 | `life/WeatherTool.kt` |
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
-| 网页搜索 / 地图 / 塔罗 / 生理周期 | 🗺️ 规划中 | 见 M3.6 规划，原参考源已封存入 Git 历史，Android 侧待原生落地 |
+| 网页搜索 / 地图 / 塔罗 / 生理周期 | 🚫 不排期 | 按 D16 决策整批砍掉不排期；保留 LifeTool 扩展接口架构 |
 | BYOK 多模型网关（OpenAI 兼容 / Anthropic） | ✅ 已实现 | `network/gateway/*`（`XiaoxiLlmGateway`、`OpenAiProtocolAdapter`、`AnthropicProtocolAdapter`）、`ui/settings/SettingsScreen.kt`、`ByokSettingsRepository.kt` |
 | 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
 
@@ -48,7 +48,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 
 2.0 基础重构已完成（R8 混淆启用、工具闭环装配、365 项单测基线全绿），当前处于 **3.0 系统级演进阶段**（BYOK 网关 / 视觉感知 / 操控升维 / 人格深水区）：
 * **核心开发蓝图**：详见 [`主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md`](./docs/主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md)
-* **执行规划**：按《评审意见——主方案 3.0 补充改进清单》第八节修订路线执行：M3.1 BYOK 网关 → M3.0 活人感三件套 → M3.2 视觉感知与观测闭环 → M3.3 操控升维 → M3.4 人格深水区 → M3.6 生活工具生态（可选）
+* **执行规划**：按《评审意见——主方案 3.0 补充改进清单》第八节修订路线执行：M3.1 BYOK 网关 → M3.0 活人感三件套 → M3.2 视觉感知与观测闭环 → M3.3 操控升维 → M3.4 人格深水区
 
 ---
 
