@@ -34,3 +34,4 @@
 
 - 批次2-1 / 执行前置校验 / GestureExecutor 与 TextInputExecutor 动作执行前接入 FinancialGatekeeper 前置安全门控；命中禁止区直接拒绝并携带诚实原因（"该操作属于受限范围，已停止"）；GestureSpec 扩展只读元数据字段；TextInputExecutor 扩展结构化 TextInputResult；单元测试验证全量通过，./gradlew testDebugUnitTest (520 tests, 0 failures, 0 ignored) 全绿。
 - 批次2-2 / 通信代发拦截 / FinancialGatekeeper 扩充通信类应用包名集合（com.tencent.mm, com.tencent.mobileqq），对通信应用的文本输入/代发动作（INPUT / TEXT_INPUT / ACTION_SET_TEXT / ACTION_PASTE 及文本注入 GestureSpec）全面物理拦截（RULE_COMMUNICATION_TEXT_INPUT_BLOCKED），点击类动作放行；单测覆盖微信/QQ文本拦截与点击放行，./gradlew testDebugUnitTest (527 tests, 0 failures, 0 ignored) 全绿。
+- 批次2-3 / 禁止区常量化 / 新建 ProhibitedZones 集中收敛只读常量（金融包名黑名单 + 通信包名集合 + 密码框规则 + 支付/提权关键词），无暴露任何设置项（PRD D6）；FinancialGatekeeper 接入该只读资产并对银行类应用实施全量物理熔断（PRD D8.2）；新建 ProhibitedZonesTest 覆盖四大核心断言（金融包名点击、通信包名文本输入、密码框输入、非禁止区放行），./gradlew testDebugUnitTest (533 tests, 0 failures, 0 ignored) 全绿。
