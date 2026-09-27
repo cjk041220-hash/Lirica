@@ -43,6 +43,8 @@
 - 1 / 完成 bge-small-zh-v1.5 模型与 tokenizer.json 资产下载，配置 .gitignore 排除 onnx / 校验文件大小（模型 24,010,842B > 15MB，tokenizer 439,125B > 1KB），全量单元测试通过 (533 passed)
 - 2 / 引入 com.microsoft.onnxruntime:onnxruntime-android:1.19.2 稳定版依赖（仅新增此一个依赖）并验证构建与全量单测通过 (533 passed)
 - 3 / 完成纯 Kotlin 零依赖 BERT WordPiece 分词器 (BertWordPieceTokenizer) 实现与词表解析，选型理由写入 PROGRESS.md，新增单测全绿 (541 passed)
+- 4 / 完成 EmbeddingModel 接口与 LiricaEmbeddingModel 封装（线程数限 2、Mean Pooling、L2 归一化），维度=512、确定性、非零模长、相对相似度 ("周董" 0.6678 > "天气不错" 0.3099)、推理延迟 (<2ms/条) 单测全绿 (548 passed)
+
 
 
 

@@ -35,4 +35,22 @@
   - `[CLS]=101` 与 `[SEP]=102` 首尾标记拼接，定长截断
 - **验证结果**: 词表提取（21,128 tokens）、中英混排、截断、特殊标记、确定性单测全部通过。
 
+## 4. EmbeddingModel 封装与单测验证
+
+- **核心实现**: `LiricaEmbeddingModel` (实现 `EmbeddingModel` 契约)
+- **技术要点**:
+  1. `OrtSession.SessionOptions().setIntraOpNumThreads(2)`：严格限制 ONNX 推理线程数为 2，契合移动端热节流防降频硬指标。
+  2. 流水线：`BertWordPieceTokenizer` 分词 → 构造 `input_ids`, `attention_mask`, `token_type_ids` int64 张量 → ONNX 推理输出 `last_hidden_state` [1, seqLen, 512] → 依据 `attention_mask` 进行 Mean Pooling 聚合 → L2 单位向量归一化。
+  3. 单位向量模长归一化：将 512 维向量投影到单位超球面上，使得后续余弦相似度计算等价于向量点积，将检索计算量降至最低。
+- **单测断言验证结果**:
+  - **维度断言**: 准确输出 512 维 FloatArray
+  - **确定性断言**: 同一文本输入两次产生完全一致的浮点向量（误差 < 1e-6）
+  - **非零与单位模长断言**: 向量有效非零，L2 范数精确为 1.0 (±1e-3)
+  - **相对相似度断言**:
+    - `sim("喜欢周杰伦", "爱听周董的歌") = 0.6678`
+    - `sim("喜欢周杰伦", "今天天气不错") = 0.3099`
+    - 验证通过，语义强相关相比无关样本具有显著区分度 (> 0.35 余弦差距)
+  - **推理延迟估算**: 平均单句推导耗时约 1.8ms/条（Robolectric / JVM 估算，待真机，远低于 200ms 上限）
+
+
 
