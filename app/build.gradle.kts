@@ -123,6 +123,7 @@ dependencies {
 
     // ONNX Runtime Android (Edge Neural Embeddings)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.19.2")
 
     // Shizuku (Privileged ADB execution & penetration)
     val shizukuVersion = "13.1.5"
