@@ -32,4 +32,4 @@
 
 ## 执行记录
 
-（Ralph 迭代时在此追加）
+- 批次2-1 / 执行前置校验 / GestureExecutor 与 TextInputExecutor 动作执行前接入 FinancialGatekeeper 前置安全门控；命中禁止区直接拒绝并携带诚实原因（"该操作属于受限范围，已停止"）；GestureSpec 扩展只读元数据字段；TextInputExecutor 扩展结构化 TextInputResult；单元测试验证全量通过，./gradlew testDebugUnitTest (520 tests, 0 failures, 0 ignored) 全绿。

@@ -8,6 +8,7 @@ import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
 import com.xiaoxi.android.automation.gatekeeper.GatekeeperDecision
 import com.xiaoxi.android.automation.gatekeeper.ProposedAction
 import com.xiaoxi.android.automation.gesture.GestureExecutor
+import com.xiaoxi.android.automation.gesture.GestureResult
 import com.xiaoxi.android.automation.gesture.GestureSpec
 import com.xiaoxi.android.automation.gesture.TextInputExecutor
 import com.xiaoxi.android.automation.grounding.ElementBounds
@@ -373,9 +374,19 @@ class HelixGuiCoordinatorImpl(
                         if (executionBackend != null && executionBackend.isAvailable()) {
                             executionBackend.click(targetPoint.x, targetPoint.y)
                         } else {
-                            gestureExecutor.execute(
-                                GestureSpec.Click(targetPoint.x, targetPoint.y)
+                            val clickGesture = GestureSpec.Click(
+                                x = targetPoint.x,
+                                y = targetPoint.y,
+                                targetPackage = currentPackageProvider() ?: "",
+                                targetText = text,
+                                targetResourceId = resourceId,
+                                isPasswordTarget = isPassword
                             )
+                            val gestureResult = gestureExecutor.execute(clickGesture)
+                            if (gestureResult is GestureResult.Cancelled && (gestureResult.reason.contains("受限") || gestureResult.reason.contains("blocked"))) {
+                                _state.value = TaskExecutionState.Failed("零信任高危护栏物理熔断: ${gestureResult.reason}", stepIndex)
+                                return false
+                            }
                         }
                         true
                     }
@@ -384,11 +395,22 @@ class HelixGuiCoordinatorImpl(
                         // 接地结果 refNode 是纯数据快照 (UiElementNode)，无法直接执行 ACTION_SET_TEXT / ACTION_PASTE；
                         // 必须按 bounds 从当前活动窗口恢复活节点后再注入——node=null 时两条注入路径都会静默失效。
                         val liveNode = findLiveNodeByBounds(bounds)
-                        textInputExecutor.injectText(
+                        val inputSuccess = textInputExecutor.injectText(
                             node = liveNode,
                             targetBounds = bounds,
                             text = textToInject
                         )
+                        if (!inputSuccess) {
+                            val honest = textInputExecutor.lastHonestReason
+                            val failMsg = if (honest != null) {
+                                "零信任高危护栏物理熔断: $honest"
+                            } else {
+                                "文字注入失败"
+                            }
+                            _state.value = TaskExecutionState.Failed(failMsg, stepIndex)
+                            return false
+                        }
+                        true
                     }
                     else -> true
                 }

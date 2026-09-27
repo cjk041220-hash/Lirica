@@ -109,4 +109,40 @@ class GestureExecutorTest {
         assertTrue(result is GestureResult.TimedOut)
         assertEquals(100L, (result as GestureResult.TimedOut).timeoutMs)
     }
+
+    @Test
+    fun testExecute_passwordTarget_physicallyBlocked_returnsCancelledWithHonestReason() = runTest {
+        val gesture = GestureSpec.Click(
+            x = 200f,
+            y = 300f,
+            targetResourceId = "com.example.app:id/edit_password",
+            isPasswordTarget = true,
+            targetPackage = "com.example.app"
+        )
+
+        val result = gestureExecutor.execute(gesture)
+        assertTrue(result is GestureResult.Cancelled)
+        val cancelled = result as GestureResult.Cancelled
+        assertEquals("该操作属于受限范围，已停止", cancelled.reason)
+        assertEquals("该操作属于受限范围，已停止", gestureExecutor.lastHonestReason)
+        // 物理手势严格未下发
+        io.mockk.verify(exactly = 0) { accessibilityService.dispatchGesture(any(), any(), any()) }
+    }
+
+    @Test
+    fun testExecute_criticalPaymentKeyword_physicallyBlocked_returnsCancelledWithHonestReason() = runTest {
+        val gesture = GestureSpec.Click(
+            x = 500f,
+            y = 800f,
+            targetText = "立即支付 88.00元",
+            targetPackage = "com.sankuai.meituan"
+        )
+
+        val result = gestureExecutor.execute(gesture)
+        assertTrue(result is GestureResult.Cancelled)
+        val cancelled = result as GestureResult.Cancelled
+        assertEquals("该操作属于受限范围，已停止", cancelled.reason)
+        assertEquals("该操作属于受限范围，已停止", gestureExecutor.lastHonestReason)
+        io.mockk.verify(exactly = 0) { accessibilityService.dispatchGesture(any(), any(), any()) }
+    }
 }

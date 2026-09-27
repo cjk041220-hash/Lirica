@@ -98,6 +98,7 @@ class HelixGuiCoordinatorTest {
     fun setUp() {
         coEvery { gestureExecutor.execute(any(), any()) } returns GestureResult.Completed(50L)
         coEvery { textInputExecutor.injectText(any(), any(), any()) } returns true
+        every { textInputExecutor.lastHonestReason } returns null
         every { watchdog.inspectStep(any(), any(), any(), any(), any()) } returns WatchdogVerdict.NormalProgress(1, 0L)
 
         coordinator = HelixGuiCoordinatorImpl(

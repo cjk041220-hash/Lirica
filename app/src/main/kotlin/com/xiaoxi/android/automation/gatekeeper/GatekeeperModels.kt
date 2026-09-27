@@ -14,7 +14,13 @@ data class ProposedAction(
     val isPasswordTarget: Boolean = false,
     val currentPackage: String = "",
     val extraInfo: Map<String, String> = emptyMap()
-)
+) {
+    val isTextInputAction: Boolean
+        get() = actionType.equals("INPUT", ignoreCase = true) ||
+                actionType.equals("TEXT_INPUT", ignoreCase = true) ||
+                actionType.equals("ACTION_SET_TEXT", ignoreCase = true) ||
+                actionType.equals("ACTION_PASTE", ignoreCase = true)
+}
 
 data class RiskDetails(
     val level: RiskLevel,
@@ -25,8 +31,13 @@ data class RiskDetails(
 sealed interface GatekeeperDecision {
     data class PhysicalBlocked(
         val reason: String,
-        val rule: String
-    ) : GatekeeperDecision
+        val rule: String,
+        val honestReason: String = DEFAULT_HONEST_REASON
+    ) : GatekeeperDecision {
+        companion object {
+            const val DEFAULT_HONEST_REASON = "该操作属于受限范围，已停止"
+        }
+    }
 
     data class RequireUserConfirmation(
         val token: String,

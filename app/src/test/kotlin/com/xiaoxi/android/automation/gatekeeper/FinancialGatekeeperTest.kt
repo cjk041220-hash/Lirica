@@ -32,6 +32,7 @@ class FinancialGatekeeperTest {
         assertTrue(decision is GatekeeperDecision.PhysicalBlocked)
         val blocked = decision as GatekeeperDecision.PhysicalBlocked
         assertEquals("RULE_ZERO_TOLERANCE_PASSWORD", blocked.rule)
+        assertEquals("该操作属于受限范围，已停止", blocked.honestReason)
     }
 
     @Test

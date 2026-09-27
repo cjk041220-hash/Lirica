@@ -3,6 +3,10 @@ package com.xiaoxi.android.automation.gesture
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeper
+import com.xiaoxi.android.automation.gatekeeper.FinancialGatekeeperImpl
+import com.xiaoxi.android.automation.gatekeeper.GatekeeperDecision
+import com.xiaoxi.android.automation.gatekeeper.ProposedAction
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -14,8 +18,13 @@ interface GestureExecutor {
 
 class GestureExecutorImpl(
     private val serviceProvider: () -> AccessibilityService?,
-    private val trajectoryCalculator: BezierTrajectoryCalculator = BezierTrajectoryCalculator()
+    private val trajectoryCalculator: BezierTrajectoryCalculator = BezierTrajectoryCalculator(),
+    private val gatekeeper: FinancialGatekeeper = FinancialGatekeeperImpl(),
+    private val currentPackageProvider: () -> String? = { serviceProvider()?.rootInActiveWindow?.packageName?.toString() }
 ) : GestureExecutor {
+
+    var lastHonestReason: String? = null
+        private set
 
     override fun buildPath(gesture: GestureSpec): Path {
         val path = Path()
@@ -55,6 +64,35 @@ class GestureExecutorImpl(
     }
 
     override suspend fun execute(gesture: GestureSpec, timeoutMs: Long): GestureResult {
+        // 0. 执行前置安全门控校验 (FinancialGatekeeper)
+        val targetPkg = gesture.targetPackage?.takeIf { it.isNotBlank() }
+            ?: currentPackageProvider()
+            ?: ""
+
+        val actionType = if (gesture.isTextInput) {
+            "INPUT"
+        } else {
+            when (gesture) {
+                is GestureSpec.Click -> "CLICK"
+                is GestureSpec.LongPress -> "LONG_CLICK"
+                else -> "GESTURE"
+            }
+        }
+
+        val proposed = ProposedAction(
+            actionType = actionType,
+            targetText = gesture.targetText,
+            targetResourceId = gesture.targetResourceId,
+            isPasswordTarget = gesture.isPasswordTarget,
+            currentPackage = targetPkg
+        )
+
+        val decision = gatekeeper.evaluate(proposed)
+        if (decision is GatekeeperDecision.PhysicalBlocked) {
+            lastHonestReason = decision.honestReason
+            return GestureResult.Cancelled(decision.honestReason)
+        }
+
         val service = serviceProvider() ?: return GestureResult.ServiceUnavailable
 
         val path = buildPath(gesture)

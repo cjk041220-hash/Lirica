@@ -101,4 +101,43 @@ class TextInputExecutorTest {
         // 剪贴板快照还原铁律：即使失败也不能冲掉用户内容
         assertEquals("用户剪贴板里的原文", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
     }
+
+    @Test
+    fun testInjectText_passwordField_physicallyBlocked() = runTest {
+        clipboardManager.setPrimaryClip(ClipData.newPlainText("user", "剪贴板敏感数据"))
+
+        val node = mockk<AccessibilityNodeInfo>(relaxed = true)
+        every { node.isPassword } returns true
+        every { node.packageName } returns "com.example.app"
+
+        val bounds = ElementBounds(100, 100, 300, 200)
+        val result = textInputExecutor.executeInject(node, bounds, "mypassword123")
+
+        assertTrue(result is TextInputResult.Rejected)
+        val rejected = result as TextInputResult.Rejected
+        assertEquals("该操作属于受限范围，已停止", rejected.honestReason)
+        assertEquals("RULE_ZERO_TOLERANCE_PASSWORD", rejected.rule)
+        assertEquals("该操作属于受限范围，已停止", textInputExecutor.lastHonestReason)
+
+        // 剪贴板完全未被污染
+        assertEquals("剪贴板敏感数据", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
+        coVerify(exactly = 0) { gestureExecutor.execute(any()) }
+    }
+
+    @Test
+    fun testInjectText_bankAppPayment_physicallyBlocked() = runTest {
+        clipboardManager.setPrimaryClip(ClipData.newPlainText("user", "安全内容"))
+
+        val node = mockk<AccessibilityNodeInfo>(relaxed = true)
+        every { node.packageName } returns "com.icbc"
+        every { node.text } returns "转账金额"
+
+        val bounds = ElementBounds(100, 100, 300, 200)
+        val success = textInputExecutor.injectText(node, bounds, "5000", "com.icbc")
+
+        assertEquals(false, success)
+        assertEquals("该操作属于受限范围，已停止", textInputExecutor.lastHonestReason)
+        assertEquals("安全内容", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
+        coVerify(exactly = 0) { gestureExecutor.execute(any()) }
+    }
 }
