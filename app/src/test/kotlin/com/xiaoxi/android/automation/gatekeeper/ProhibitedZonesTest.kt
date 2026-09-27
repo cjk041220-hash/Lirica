@@ -38,7 +38,7 @@ class ProhibitedZonesTest {
         // 验证只读类型（kotlin Set 而非 MutableSet）
         val financialPackages: Set<String> = ProhibitedZones.FINANCIAL_PACKAGES
         val commPackages: Set<String> = ProhibitedZones.COMMUNICATION_PACKAGES
-        assertEquals(27, financialPackages.size)
+        assertEquals(26, financialPackages.size)
         assertEquals(2, commPackages.size)
     }
 

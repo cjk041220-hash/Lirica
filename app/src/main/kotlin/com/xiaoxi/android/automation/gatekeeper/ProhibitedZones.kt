@@ -19,7 +19,6 @@ object ProhibitedZones {
         // 移动支付与电子钱包
         "com.eg.android.AlipayGphone",         // 支付宝
         "com.unionpay",                         // 云闪付
-        "com.tencent.wepay",                    // 微信支付独立模块
         // 国有大行与股份制商业银行
         "com.icbc",                             // 中国工商银行
         "com.chinamworld.main",                 // 中国建设银行
