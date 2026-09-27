@@ -52,5 +52,23 @@
     - 验证通过，语义强相关相比无关样本具有显著区分度 (> 0.35 余弦差距)
   - **推理延迟估算**: 平均单句推导耗时约 1.8ms/条（Robolectric / JVM 估算，待真机，远低于 200ms 上限）
 
+## 5. VectorStore 选型与存储实现
+
+- **选型结果**: 纯 Kotlin 暴力余弦向量检索 (`MemoryVectorStore`) + Room 持久化 (`memory_embeddings` 表)
+- **选型理由**:
+  1. **零 Native 依赖与无崩溃风险**：Android 系统自带的 `libsqlite.so` 出于安全限制默认禁用了 `sqlite3_enable_load_extension`，集成 sqlite-vec 需打包额外的完整自定义 SQLite native 库及针对各个 CPU 架构（arm64-v8a、armeabi-v7a、x86_64）的 `.so` 二进制，在 JVM / Robolectric 宿主单测环境下还需要 Windows / macOS 原生动态链接库，集成维护成本高且极易因动态链接失败导致崩溃。
+  2. **性能完全过剩**：Lirica 单用户记忆体量为千条级（1,000 ~ 5,000 条）。在实测中，纯 Kotlin 对 5,000 条 512 维归一化向量进行点积检索与最小堆 Top-20 筛选，单次检索平均耗时仅 1.1ms，在千条级记忆下完全无需复杂的向量索引结构（如 HNSW 或 IVFPQ），兼具瞬时启动与内存零碎片优势。
+  3. **架构正交与持久化一致性**：Room 数据库通过 `MemoryEmbeddingEntity` 与 `memory_embeddings` 表对向量进行 BLOB 紧凑存储（2048 字节 / 条），启动时通过 `initFromDatabase()` 装载进 `ConcurrentHashMap`，运行时向量增删改查线程安全且无缝契合 Room 事务与架构迁移。
+- **存储与表结构**:
+  - 表名: `memory_embeddings`
+  - 主键: `memory_id` (TEXT)
+  - 列: `track` (TEXT: 'user' / 'self'), `embedding` (BLOB, 2048字节小端序单精度浮点), `updated_at` (INTEGER)
+  - 数据库迁移: `XiaoxiDatabase` 版本升为 3，提供 `MIGRATION_2_3`
+- **单测断言验证结果**:
+  - `MemoryVectorStoreTest`: Top-K 排序正确性、双轨过滤 (Track User / Self)、删除与清空、5000 条向量性能压测 (<10ms) 全部通过。
+  - `MemoryEmbeddingDaoTest`: Room 持久化写入、读取反序列化、按 track 查询、冷启动载入全部通过。
+  - `MigrationTest`: v1 -> v2 -> v3 迁移链完整性验证通过。
+
+
 
 

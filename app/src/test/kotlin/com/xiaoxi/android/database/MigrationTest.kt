@@ -134,11 +134,11 @@ class MigrationTest {
         createV1Database()
         insertV1SeedData()
 
-        // 2. 用生产构建入口打开：Room 检测到 version 1 自动执行 MIGRATION_1_2，
-        //    随后全量校验 v2 schema 与 identity hash，不匹配即抛异常
+        // 2. 用生产构建入口打开：Room 检测到 version 1 自动执行 MIGRATION_1_2 与 MIGRATION_2_3，
+        //    随后全量校验 v3 schema 与 identity hash，不匹配即抛异常
         val db = Room.databaseBuilder(context, XiaoxiDatabase::class.java, dbFile.name)
             .allowMainThreadQueries()
-            .addMigrations(XiaoxiDatabase.MIGRATION_1_2)
+            .addMigrations(XiaoxiDatabase.MIGRATION_1_2, XiaoxiDatabase.MIGRATION_2_3)
             .build()
         try {
             runBlocking {
@@ -182,6 +182,18 @@ class MigrationTest {
                         confidence = 0.85f
                     )
                 )
+
+                // v3 新增 memory_embeddings 表可正常读写
+                db.memoryEmbeddingDao().insertOrUpdate(
+                    com.xiaoxi.android.database.memory.MemoryEmbeddingEntity.fromFloatArray(
+                        memoryId = "emb_v3",
+                        track = com.xiaoxi.android.database.memory.MemoryEmbeddingEntity.TRACK_USER,
+                        vector = FloatArray(512) { 0.1f }
+                    )
+                )
+                val emb = db.memoryEmbeddingDao().getByMemoryId("emb_v3")
+                assertNotNull(emb)
+                assertEquals(512, emb?.toFloatArray()?.size)
             }
         } finally {
             db.close()

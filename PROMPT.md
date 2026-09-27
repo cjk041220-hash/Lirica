@@ -44,6 +44,8 @@
 - 2 / 引入 com.microsoft.onnxruntime:onnxruntime-android:1.19.2 稳定版依赖（仅新增此一个依赖）并验证构建与全量单测通过 (533 passed)
 - 3 / 完成纯 Kotlin 零依赖 BERT WordPiece 分词器 (BertWordPieceTokenizer) 实现与词表解析，选型理由写入 PROGRESS.md，新增单测全绿 (541 passed)
 - 4 / 完成 EmbeddingModel 接口与 LiricaEmbeddingModel 封装（线程数限 2、Mean Pooling、L2 归一化），维度=512、确定性、非零模长、相对相似度 ("周董" 0.6678 > "天气不错" 0.3099)、推理延迟 (<2ms/条) 单测全绿 (548 passed)
+- 5 / 完成 MemoryVectorStore（纯 Kotlin 暴力余弦向量检索，5000条向量检索耗时 ~1ms）与 Room memory_embeddings 表注册 (v3 及 MIGRATION_2_3)，选型理由写入 PROGRESS.md，单测全绿 (556 passed)
+
 
 
 

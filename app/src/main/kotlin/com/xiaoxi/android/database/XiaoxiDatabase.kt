@@ -18,17 +18,20 @@ import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.entity.UserMemoryEntity
 import com.xiaoxi.android.database.entity.WorldviewEntity
+import com.xiaoxi.android.database.memory.MemoryEmbeddingDao
+import com.xiaoxi.android.database.memory.MemoryEmbeddingEntity
 
 /**
  * Lirica 核心 Room 数据库（XiaoxiDatabase）
  *
- * 管理六大心智与交互核心表：
+ * 管理心智与交互核心表：
  * 1. user_memories (用户轨画像与事实记忆)
  * 2. self_experiences (自叙轨经历与见闻心得，支持 is_placeholder 标记)
  * 3. unspoken_thoughts (未完成念头与主动破冰事实池)
  * 4. chat_dialogues (会话多轮历史持久化)
  * 5. worldview_entities (高层世界观与认知升维表)
  * 6. scheduled_alarms (自主闹钟与日程约定表)
+ * 7. memory_embeddings (双轨记忆端侧向量索引表)
  */
 @Database(
     entities = [
@@ -37,9 +40,10 @@ import com.xiaoxi.android.database.entity.WorldviewEntity
         UnspokenThoughtEntity::class,
         ChatDialogueEntity::class,
         WorldviewEntity::class,
-        ScheduledAlarmEntity::class
+        ScheduledAlarmEntity::class,
+        MemoryEmbeddingEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class XiaoxiDatabase : RoomDatabase() {
@@ -50,6 +54,7 @@ abstract class XiaoxiDatabase : RoomDatabase() {
     abstract fun chatDialogueDao(): ChatDialogueDao
     abstract fun worldviewDao(): WorldviewDao
     abstract fun scheduledAlarmDao(): ScheduledAlarmDao
+    abstract fun memoryEmbeddingDao(): MemoryEmbeddingDao
 
     companion object {
         const val DATABASE_NAME = "lirica_aether.db"
@@ -84,6 +89,24 @@ abstract class XiaoxiDatabase : RoomDatabase() {
             }
         }
 
+        @JvmField
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `memory_embeddings` (
+                        `memory_id` TEXT NOT NULL,
+                        `track` TEXT NOT NULL,
+                        `embedding` BLOB NOT NULL,
+                        `updated_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`memory_id`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_memory_embeddings_track` ON `memory_embeddings` (`track`)
+                """.trimIndent())
+            }
+        }
+
         @Volatile
         private var INSTANCE: XiaoxiDatabase? = null
 
@@ -99,7 +122,7 @@ abstract class XiaoxiDatabase : RoomDatabase() {
                 XiaoxiDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
         }
