@@ -24,7 +24,10 @@ import com.xiaoxi.android.automation.grounding.NormalizedRect
 import com.xiaoxi.android.automation.grounding.TreeDumpResult
 import com.xiaoxi.android.automation.grounding.UiElementNode
 import com.xiaoxi.android.automation.healing.AnomalyType
+import com.xiaoxi.android.automation.healing.FailureContext
+import com.xiaoxi.android.automation.healing.FailureScenario
 import com.xiaoxi.android.automation.healing.HealingAction
+import com.xiaoxi.android.automation.healing.HonestNarrator
 import com.xiaoxi.android.automation.healing.SelfHealingWatchdog
 import com.xiaoxi.android.automation.healing.WatchdogVerdict
 import com.xiaoxi.android.automation.intent.DispatchResult
@@ -232,9 +235,15 @@ class HelixGuiCoordinatorTest {
         val result = coordinator.executeTask("购买商品", actions)
 
         assertTrue(result is TaskExecutionResult.Failure)
+        val failureResult = result as TaskExecutionResult.Failure
         val state = coordinator.state.value
         assertTrue(state is TaskExecutionState.Failed)
-        assertTrue((state as TaskExecutionState.Failed).errorReason.contains("零信任"))
+        val failedState = state as TaskExecutionState.Failed
+        assertTrue(failedState.errorReason.contains("零信任"))
+        // 批次 3: 验证 Gatekeeper 拒绝路径下 honestNarrative 成功透传且内容为人设坦白文案
+        assertNotNull(failedState.honestNarrative)
+        assertEquals(failedState.honestNarrative, failureResult.honestNarrative)
+        assertTrue(failedState.honestNarrative!!.contains("正式话术库待俊凯过目定稿"))
 
         // 严格断言物理手势未被下发
         coVerify(exactly = 0) { gestureExecutor.execute(any(), any()) }
@@ -645,5 +654,111 @@ class HelixGuiCoordinatorTest {
 
         assertTrue(result is TaskExecutionResult.Success)
         coVerify(exactly = 1) { mockBackend.sendKeycode(66) }
+    }
+
+    @Test
+    fun testExecuteTask_customHonestNarrator_receivesCorrectContextOnPhysicalBlocked() = runTest {
+        var capturedContext: FailureContext? = null
+        val customNarrator = object : HonestNarrator {
+            override fun narrate(context: FailureContext): String {
+                capturedContext = context
+                return "自定坦白：由于安全规则，伴生体无法继续"
+            }
+            override fun getTemplates(scenario: FailureScenario): List<String> = emptyList()
+        }
+
+        val testCoordinator = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            currentPackageProvider = { "com.tencent.mm" },
+            honestNarrator = customNarrator
+        )
+
+        val mockNodes = listOf(
+            createMockNode("1", "输入消息", "android.widget.EditText", ElementBounds(100, 800, 900, 950), isEditable = true, priority = 5)
+        )
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.tencent.mm",
+            activityName = "ChatActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 10L
+        )
+        coEvery {
+            groundingEngine.locate(any(), any(), any(), any(), any())
+        } returns GroundingResult.Found(
+            targetPoint = Point2D(500f, 875f),
+            bounds = NormalizedRect(100f, 400f, 900f, 450f),
+            source = GroundingSource.ACCESSIBILITY_EXACT,
+            confidence = 1.0f,
+            refNode = UiElementNode(
+                className = "android.widget.EditText",
+                text = "输入消息",
+                bounds = ElementBounds(100, 800, 900, 950)
+            )
+        )
+
+        val actions = listOf(
+            CoordinatorAction.Type(GroundingQuery(text = "输入消息"), text = "代发消息测试", description = "通信代发")
+        )
+
+        val result = testCoordinator.executeTask("测试通信代发拦截", actions)
+
+        assertTrue(result is TaskExecutionResult.Failure)
+        val failure = result as TaskExecutionResult.Failure
+        assertEquals("自定坦白：由于安全规则，伴生体无法继续", failure.honestNarrative)
+        assertNotNull(capturedContext)
+        assertEquals("RULE_COMMUNICATION_TEXT_INPUT_BLOCKED", capturedContext?.rule)
+        assertEquals("com.tencent.mm", capturedContext?.targetPackage)
+        assertEquals("INPUT", capturedContext?.actionType)
+    }
+
+    @Test
+    fun testExecuteTask_watchdogUnrecoverable_propagatesHonestNarrativeThroughCoordinator() = runTest {
+        val mockNodes = listOf(
+            createMockNode("1", "不可用按钮", "android.widget.Button", ElementBounds(100, 100, 200, 200), isClickable = true)
+        )
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.example.app",
+            activityName = "MainActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 5L
+        )
+
+        // 模拟接地未找到
+        coEvery { groundingEngine.locate(any(), any(), any(), any(), any()) } returns GroundingResult.NotFound("未找到")
+
+        // 模拟 watchdog 判定 Unrecoverable 且包含坦白文案
+        every {
+            watchdog.inspectStep(any(), any(), any(), any(), any())
+        } returns WatchdogVerdict.Unrecoverable(
+            reason = "Exceeded max recovery attempts (3) for STUCK_LOOP",
+            honestNarrative = "卡在这里过不去啦，交由你来处理吧。（正式话术库待俊凯过目定稿）"
+        )
+
+        val actions = listOf(
+            CoordinatorAction.Click(GroundingQuery(text = "不存在的按钮"), description = "点击不存在")
+        )
+
+        val result = coordinator.executeTask("测试看门狗自愈耗尽", actions)
+
+        assertTrue(result is TaskExecutionResult.Failure)
+        val failure = result as TaskExecutionResult.Failure
+        assertTrue(failure.reason.contains("Exceeded max recovery attempts"))
+        assertEquals("卡在这里过不去啦，交由你来处理吧。（正式话术库待俊凯过目定稿）", failure.honestNarrative)
+
+        val state = coordinator.state.value
+        assertTrue(state is TaskExecutionState.Failed)
+        assertEquals("卡在这里过不去啦，交由你来处理吧。（正式话术库待俊凯过目定稿）", (state as TaskExecutionState.Failed).honestNarrative)
     }
 }

@@ -20,7 +20,11 @@ import com.xiaoxi.android.automation.grounding.GroundingResult
 import com.xiaoxi.android.automation.grounding.HybridGroundingEngine
 import com.xiaoxi.android.automation.grounding.TreeDumpResult
 import com.xiaoxi.android.automation.grounding.toUiElementNodes
+import com.xiaoxi.android.automation.healing.FailureContext
+import com.xiaoxi.android.automation.healing.FailureScenario
 import com.xiaoxi.android.automation.healing.HealingAction
+import com.xiaoxi.android.automation.healing.HonestNarrator
+import com.xiaoxi.android.automation.healing.HonestNarratorImpl
 import com.xiaoxi.android.automation.healing.SelfHealingWatchdog
 import com.xiaoxi.android.automation.healing.SelfHealingWatchdogImpl
 import com.xiaoxi.android.automation.healing.WatchdogVerdict
@@ -73,7 +77,8 @@ class HelixGuiCoordinatorImpl(
     private val screenHeightProvider: () -> Int = { 0 },
     private val screenCaptureManager: ScreenCaptureManager? = null,
     private val executionBackend: ExecutionBackend? = null,
-    private val confirmationTimeoutMs: Long = 300_000L
+    private val confirmationTimeoutMs: Long = 300_000L,
+    private val honestNarrator: HonestNarrator = HonestNarratorImpl()
 ) : HelixGuiCoordinator {
 
     private val _state = MutableStateFlow<TaskExecutionState>(TaskExecutionState.Idle)
@@ -123,8 +128,15 @@ class HelixGuiCoordinatorImpl(
 
             if (stepIndex > maxSteps) {
                 val reason = "达到最大执行步数上限 ($maxSteps)"
-                _state.value = TaskExecutionState.Failed(reason, stepIndex)
-                return TaskExecutionResult.Failure(reason, stepIndex)
+                val narrative = honestNarrator.narrate(
+                    FailureContext(
+                        scenario = FailureScenario.SELF_HEALING_EXHAUSTED,
+                        technicalReason = reason,
+                        targetPackage = currentPackageProvider()
+                    )
+                )
+                _state.value = TaskExecutionState.Failed(reason, stepIndex, honestNarrative = narrative)
+                return TaskExecutionResult.Failure(reason, stepIndex, honestNarrative = narrative)
             }
 
             if (isCancelled.get()) {
@@ -203,7 +215,12 @@ class HelixGuiCoordinatorImpl(
                     if (!executionSuccess) {
                         val failedState = _state.value as? TaskExecutionState.Failed
                         val reason = failedState?.errorReason ?: "执行 UI 动作失败"
-                        return TaskExecutionResult.Failure(reason, stepIndex)
+                        val narrative = failedState?.honestNarrative
+                        return TaskExecutionResult.Failure(
+                            reason = reason,
+                            stepIndex = stepIndex,
+                            honestNarrative = narrative
+                        )
                     }
                 }
             }
@@ -230,7 +247,21 @@ class HelixGuiCoordinatorImpl(
 
         if (dump is TreeDumpResult.Empty) {
             if (dump.reason == EmptyReason.PRIVACY_BLACKOUT) {
-                _state.value = TaskExecutionState.Failed("目标应用命中银行/支付安全熔断黑名单: ${dump.message}", stepIndex)
+                val rule = "RULE_PRIVACY_BLACKOUT"
+                val narrative = honestNarrator.narrate(
+                    FailureContext(
+                        scenario = FailureScenario.FINANCIAL_PROHIBITED,
+                        rule = rule,
+                        technicalReason = dump.message,
+                        targetPackage = currentPackageProvider(),
+                        actionType = if (action is CoordinatorAction.Click) "CLICK" else "INPUT"
+                    )
+                )
+                _state.value = TaskExecutionState.Failed(
+                    errorReason = "目标应用命中银行/支付安全熔断黑名单: ${dump.message}",
+                    lastStepIndex = stepIndex,
+                    honestNarrative = narrative
+                )
                 return false
             }
 
@@ -241,6 +272,14 @@ class HelixGuiCoordinatorImpl(
                 targetPackage = null,
                 actionSummary = actionDescription(action)
             )
+            if (verdict is WatchdogVerdict.Unrecoverable) {
+                _state.value = TaskExecutionState.Failed(
+                    errorReason = verdict.reason,
+                    lastStepIndex = stepIndex,
+                    honestNarrative = verdict.honestNarrative
+                )
+                return false
+            }
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
                 watchdog.recordRecoveryAttempt(verdict.anomaly)
@@ -266,6 +305,14 @@ class HelixGuiCoordinatorImpl(
                 actionSummary = actionDescription(action),
                 pageTexts = dump.nodes.mapNotNull { it.text }
             )
+            if (verdict is WatchdogVerdict.Unrecoverable) {
+                _state.value = TaskExecutionState.Failed(
+                    errorReason = verdict.reason,
+                    lastStepIndex = stepIndex,
+                    honestNarrative = verdict.honestNarrative
+                )
+                return false
+            }
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
                 watchdog.recordRecoveryAttempt(verdict.anomaly)
@@ -281,11 +328,37 @@ class HelixGuiCoordinatorImpl(
 
         return when (locateResult) {
             is GroundingResult.NotFound -> {
-                _state.value = TaskExecutionState.Failed("未找到目标元素: $query", stepIndex)
+                val elementText = query.text ?: query.semanticDescription ?: query.resourceId
+                val narrative = honestNarrator.narrate(
+                    FailureContext(
+                        scenario = FailureScenario.GROUNDING_FAILED,
+                        technicalReason = "未找到目标元素: $query",
+                        targetPackage = currentPackageProvider(),
+                        targetElement = elementText,
+                        actionType = if (action is CoordinatorAction.Click) "CLICK" else "INPUT"
+                    )
+                )
+                _state.value = TaskExecutionState.Failed(
+                    errorReason = "未找到目标元素: $query",
+                    lastStepIndex = stepIndex,
+                    honestNarrative = narrative
+                )
                 false
             }
             is GroundingResult.Ambiguous -> {
-                _state.value = TaskExecutionState.Failed("目标元素存在歧义 (${locateResult.candidates.size} 个候选)", stepIndex)
+                val narrative = honestNarrator.narrate(
+                    FailureContext(
+                        scenario = FailureScenario.GROUNDING_FAILED,
+                        technicalReason = "目标元素存在歧义 (${locateResult.candidates.size} 个候选)",
+                        targetPackage = currentPackageProvider(),
+                        targetElement = query.text ?: query.resourceId
+                    )
+                )
+                _state.value = TaskExecutionState.Failed(
+                    errorReason = "目标元素存在歧义 (${locateResult.candidates.size} 个候选)",
+                    lastStepIndex = stepIndex,
+                    honestNarrative = narrative
+                )
                 false
             }
             is GroundingResult.Found -> {
@@ -318,7 +391,20 @@ class HelixGuiCoordinatorImpl(
 
                 when (decision) {
                     is GatekeeperDecision.PhysicalBlocked -> {
-                        _state.value = TaskExecutionState.Failed("零信任高危护栏物理熔断: ${decision.reason} (${decision.rule})", stepIndex)
+                        val narrative = honestNarrator.narrate(
+                            FailureContext(
+                                rule = decision.rule,
+                                technicalReason = decision.reason,
+                                targetPackage = currentPackageProvider(),
+                                actionType = proposed.actionType,
+                                targetElement = proposed.targetText ?: proposed.targetResourceId
+                            )
+                        )
+                        _state.value = TaskExecutionState.Failed(
+                            errorReason = "零信任高危护栏物理熔断: ${decision.reason} (${decision.rule})",
+                            lastStepIndex = stepIndex,
+                            honestNarrative = narrative
+                        )
                         return false
                     }
                     is GatekeeperDecision.RequireUserConfirmation -> {
@@ -384,7 +470,21 @@ class HelixGuiCoordinatorImpl(
                             )
                             val gestureResult = gestureExecutor.execute(clickGesture)
                             if (gestureResult is GestureResult.Cancelled && (gestureResult.reason.contains("受限") || gestureResult.reason.contains("blocked"))) {
-                                _state.value = TaskExecutionState.Failed("零信任高危护栏物理熔断: ${gestureResult.reason}", stepIndex)
+                                val rule = "RULE_GESTURE_PHYSICAL_BLOCKED"
+                                val narrative = honestNarrator.narrate(
+                                    FailureContext(
+                                        rule = rule,
+                                        technicalReason = gestureResult.reason,
+                                        targetPackage = currentPackageProvider(),
+                                        actionType = "CLICK",
+                                        targetElement = text ?: resourceId
+                                    )
+                                )
+                                _state.value = TaskExecutionState.Failed(
+                                    errorReason = "零信任高危护栏物理熔断: ${gestureResult.reason}",
+                                    lastStepIndex = stepIndex,
+                                    honestNarrative = narrative
+                                )
                                 return false
                             }
                         }
@@ -402,12 +502,28 @@ class HelixGuiCoordinatorImpl(
                         )
                         if (!inputSuccess) {
                             val honest = textInputExecutor.lastHonestReason
+                            val rule = "RULE_TEXT_INPUT_BLOCKED"
+                            val narrative = if (honest != null) {
+                                honestNarrator.narrate(
+                                    FailureContext(
+                                        rule = rule,
+                                        technicalReason = honest,
+                                        targetPackage = currentPackageProvider(),
+                                        actionType = "INPUT",
+                                        targetElement = text ?: resourceId
+                                    )
+                                )
+                            } else null
                             val failMsg = if (honest != null) {
                                 "零信任高危护栏物理熔断: $honest"
                             } else {
                                 "文字注入失败"
                             }
-                            _state.value = TaskExecutionState.Failed(failMsg, stepIndex)
+                            _state.value = TaskExecutionState.Failed(
+                                errorReason = failMsg,
+                                lastStepIndex = stepIndex,
+                                honestNarrative = narrative
+                            )
                             return false
                         }
                         true
