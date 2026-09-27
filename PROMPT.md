@@ -1,37 +1,43 @@
-# PROMPT.md —— Ralph 长任务发射文件（批次 2 · 门控与断言）
+# PROMPT.md —— Ralph 长任务发射文件（批次 2.5 · 记忆向量检索基建）
 
 > 本文件是 Ralph Loop 每轮迭代读取的任务指令。唯一规格来源：`docs/Lirica_PRD_产品规格与执行计划_v2.0_2026-09-27.md`（下称 PRD）。
-> 批次 1（文档修复）已于 2026-09-27 验收通过，执行记录见 git 历史 `abceb13..5a98050`。
+> 批次 1（文档修复）、批次 2（门控与断言）已验收通过（批次 2 基线测试 533 全绿）。
 
 ## 任务
 
-执行 **PRD §7 批次 2 · 门控与断言**，把 PRD §2 D8 禁止区从"感知侧熔断"扩展到"执行侧前置拦截"：
+执行 **PRD §7 批次 2.5 · sqlite-vec 基建（D21 记忆端侧向量化）**，含模型资产下载：
 
-1. **执行前置校验**：`GestureExecutor` 与 `TextInputExecutor` 在执行动作前，将目标包名与控件上下文提交 `FinancialGatekeeper` 判定；命中禁止区的动作直接拒绝，且拒绝结果携带**用户可读的诚实原因**（为批次 3 失败叙述预留字段，本批次先用中性文案如"该操作属于受限范围，已停止"）。
-2. **通信代发拦截**：禁止区新增通信类包名集合（至少含 `com.tencent.mm`、`com.tencent.mobileqq`，常量可扩展），对这些包的**文本输入类动作**（ACTION_SET_TEXT / ACTION_PASTE / 文本注入类 GestureSpec）一律拦截；点击类动作不拦（打开 App 看内容属于 D7 第一层合法行为）。
-3. **禁止区常量化**：禁止区清单（金融包名黑名单 + 通信包名集合 + 密码框规则）收敛为只读常量/只读资产，不暴露任何设置项（PRD D6）。
+1. **模型资产下载**（人工不介入，你自行完成）：
+   - 从 `https://hf-mirror.com` 或 `https://huggingface.co` 下载 `Xenova/bge-small-zh-v1.5` 的 `onnx/model_quantized.onnx`（INT8 量化，约 20-30MB）与 `tokenizer.json`
+   - 存放至 `app/src/main/assets/models/bge-small-zh/`（目录自建）
+   - 下载后校验：文件大小 >15MB（模型）/ >1KB（tokenizer），把实际字节数与来源 URL 记录到 PROGRESS.md
+   - 下载连续失败 3 次 → 记录原因与手动下载指引，跳过模型加载部分，先完成 3/4/5（代码与测试用 @Ignore 标注模型相关用例），不阻塞其他工作
+2. **ONNX Runtime 依赖**：`com.microsoft.onnxruntime:onnxruntime-android`（1.x 稳定版），仅此一个新依赖
+3. **Tokenizer**：调研后二选一——纯 Kotlin 实现 BERT WordPiece（加载 tokenizer.json 的 vocab，几百行，零依赖）或 DJL tokenizers（若确认 Android 兼容）。选型理由写入 PROGRESS.md
+4. **EmbeddingModel 封装**：加载模型 → tokenize → 推理 → mean pooling → 输出 `FloatArray`（bge-small-zh-v1.5 维度 512）；推理线程数限 2（移动端热节流）
+5. **VectorStore（存储选型授权）**：单用户记忆量级数千条，**优先纯 Kotlin 暴力余弦检索**（零 native 依赖、可测性 100%）；sqlite-vec 仅当你评估 native 集成成本可控时采用，选型理由写入 PROGRESS.md
+6. **检索融合接口**：提供 `retrieve(query, topK)` = 向量召回 top-20 → 调用现有 `MemoryScorer` 六维重排 → 返回最终 top-N。只新增融合层，不改动 MemoryScorer 既有实现
 
 ## 硬约束（违反任何一条立即停止并报告）
 
-1. 只允许修改：`app/src/main/kotlin/com/xiaoxi/android/automation/gatekeeper/**`、`automation/gesture/GestureExecutor.kt`、`automation/gesture/TextInputExecutor.kt`、`automation/coordinator/HelixGuiCoordinator.kt`（仅允许新增校验调用与结果字段透传，不得改动既有执行逻辑）、`automation/gesture/GestureSpec.kt`（仅允许新增只读元数据字段）及对应 `app/src/test/**` 测试文件
-2. 禁止修改：`perception/**`、`proactivity/**`、`emotion/**`、`persona/**`、`memory/**`、`network/**`、PRD 本身、`docs/**`
-3. 禁止 `git push`、禁止 `git reset`、禁止 `git checkout`、禁止删除任何文件
-4. **禁止引入新第三方依赖**；禁止修改 `AndroidManifest.xml`
-5. 每完成一个子任务单独 `git add <文件> && git commit -m "feat: 批次2-x <说明>"`（不 push）
+1. 模型只允许从 `hf-mirror.com` 或 `huggingface.co` 下载；禁止下载任何 >200MB 的文件；禁止执行下载到的任何文件
+2. 只允许修改/新建：`app/src/main/assets/models/**`（模型资产）、`app/build.gradle.kts`（仅加 onnxruntime 依赖）、新建 `memory/retrieval/**`、`database/memory/**`（仅新增向量存储与融合调用）、`database/XiaoxiDatabase.kt`（仅新增表注册）及对应测试
+3. 禁止修改：`MemoryScorer.kt` 既有实现（只读调用）、`proactivity/**`、`emotion/**`、`persona/**`、`automation/**`、`perception/**`、`network/**`、PRD、`docs/**`
+4. 禁止 `git push`、`git reset`、`git checkout`、删除文件；禁止引入 onnxruntime 与（若选）sqlite-vec 之外的任何新依赖
+5. 模型文件不入 git：确认 `.gitignore` 覆盖 `app/src/main/assets/models/*.onnx`（tokenizer.json 与小文本资产可入库）
+6. 每完成一个子任务单独 `git add <文件> && git commit -m "feat: 批次2.5-x <说明>"`（不 push）
 
 ## 迭代循环
 
-1. 按上述 1→2→3 顺序执行；每完成一步在本文档末尾「执行记录」追加一行（编号/改了什么/验证方式）
-2. 每完成一步跑 `./gradlew testDebugUnitTest`，必须全绿（当前基线 516，新增测试后总数应增长，0 失败 0 错误 0 跳过）
-3. 测试失败 → 修复重跑，同一问题最多尝试 3 次，仍失败则记录并跳到下一步
-4. 新增行为必须有对应单元测试：禁止区命中拒绝用例（至少覆盖：金融包名点击、通信包名文本输入、密码框输入、非禁止区放行）各至少 1 条
+1. 按 1→6 顺序执行；每完成一步在本文档末尾「执行记录」追加一行（编号/做了什么/验证方式）
+2. 每完成一步跑 `./gradlew testDebugUnitTest`，必须全绿（当前基线 533，新增后应增长）
+3. 新增行为必须有单测：embedding 确定性（同文本两次输出一致）、维度断言（=512）、非零断言、**相对相似度断言**（sim("喜欢周杰伦","爱听周董的歌") > sim("喜欢周杰伦","今天天气不错")）、VectorStore 检索正确性
+4. 测试失败 → 修复重跑，同一问题最多尝试 3 次，仍失败记录并跳过
 
 ## 完成承诺
 
-三个子任务全部完成、全量测试全绿、自检通过后，在最终输出中单独一行输出：`RALPH_COMPLETE`
+资产下载校验通过（或按规则降级为 @Ignore）、六个子任务全部完成（或按规则跳过）、全量测试全绿、自检通过后，在最终输出中单独一行输出：`RALPH_COMPLETE`
 
 ## 执行记录
 
-- 批次2-1 / 执行前置校验 / GestureExecutor 与 TextInputExecutor 动作执行前接入 FinancialGatekeeper 前置安全门控；命中禁止区直接拒绝并携带诚实原因（"该操作属于受限范围，已停止"）；GestureSpec 扩展只读元数据字段；TextInputExecutor 扩展结构化 TextInputResult；单元测试验证全量通过，./gradlew testDebugUnitTest (520 tests, 0 failures, 0 ignored) 全绿。
-- 批次2-2 / 通信代发拦截 / FinancialGatekeeper 扩充通信类应用包名集合（com.tencent.mm, com.tencent.mobileqq），对通信应用的文本输入/代发动作（INPUT / TEXT_INPUT / ACTION_SET_TEXT / ACTION_PASTE 及文本注入 GestureSpec）全面物理拦截（RULE_COMMUNICATION_TEXT_INPUT_BLOCKED），点击类动作放行；单测覆盖微信/QQ文本拦截与点击放行，./gradlew testDebugUnitTest (527 tests, 0 failures, 0 ignored) 全绿。
-- 批次2-3 / 禁止区常量化 / 新建 ProhibitedZones 集中收敛只读常量（金融包名黑名单 + 通信包名集合 + 密码框规则 + 支付/提权关键词），无暴露任何设置项（PRD D6）；FinancialGatekeeper 接入该只读资产并对银行类应用实施全量物理熔断（PRD D8.2）；新建 ProhibitedZonesTest 覆盖四大核心断言（金融包名点击、通信包名文本输入、密码框输入、非禁止区放行），./gradlew testDebugUnitTest (533 tests, 0 failures, 0 ignored) 全绿。
+（Ralph 迭代时在此追加）
