@@ -13,3 +13,10 @@
   - **实际字节数**: 439,125 字节（约 428.8 KB）
   - **校验结果**: 通过（> 1KB 阈值，包含 21,128 词表与 tokenizer 配置）
   - **Git 状态**: 纳入版本库
+
+## 2. ONNX Runtime 依赖引入
+
+- **依赖项**: `com.microsoft.onnxruntime:onnxruntime-android:1.19.2`
+- **选型说明**: 选用 1.x 官方最新稳定版，包含 Android 平台（arm64-v8a, armeabi-v7a, x86_64）原生推导支持与 Java/Kotlin 绑定层。
+- **验证结果**: Gradle 依赖解析正常，全量 533 单测通过。
+

@@ -121,6 +121,9 @@ dependencies {
     // Google ML Kit Text Recognition (Chinese - Bundled Model, No GMS required)
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
+    // ONNX Runtime Android (Edge Neural Embeddings)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
+
     // Shizuku (Privileged ADB execution & penetration)
     val shizukuVersion = "13.1.5"
     implementation("dev.rikka.shizuku:api:$shizukuVersion")
