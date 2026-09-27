@@ -29,3 +29,4 @@
 - [x] 1. 路线图 NodeExtractor 段改为真实机制（深度≤4/节点≤64/文本≤128），删除“四级塌缩/同质前3/压缩85%” | 验证：grep 校验关键词归零且行文与 NodeExtractor.kt 一致
 - [x] 2. 路线图 :330 标注正态分布微抖与减速阻尼为【规划中，未实现】 | 验证：全文核对 BezierTrajectoryCalculator 说明符合代码现实
 - [x] 3. 路线图 :332-333 改“重试上限为参数（默认 3）；250ms 为截屏节流间隔（ScreenCaptureManager）” | 验证：对照 SelfHealingWatchdogImpl 与 ScreenCaptureManager 源码确认一致
+- [x] 4. 路线图 :303-317 三级沙箱表格标注【设计目标，未实现——白名单配置待 M4.1】 | 验证：说明与表格标题均明确标注未实现待 M4.1
