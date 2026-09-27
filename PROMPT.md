@@ -31,3 +31,4 @@
 - [x] 3. 路线图 :332-333 改“重试上限为参数（默认 3）；250ms 为截屏节流间隔（ScreenCaptureManager）” | 验证：对照 SelfHealingWatchdogImpl 与 ScreenCaptureManager 源码确认一致
 - [x] 4. 路线图 :303-317 三级沙箱表格标注【设计目标，未实现——白名单配置待 M4.1】 | 验证：说明与表格标题均明确标注未实现待 M4.1
 - [x] 5. 路线图 :195 删“剪贴板敏感口令” | 验证：grep 校验路线图中“剪贴板”归零，符合 PrivacyBreaker 实际实现
+- [x] 6. 路线图 :253 改“24h 周期 + 充电 + 设备空闲约束触发（WorkManager）” | 验证：grep 校验路线图中“凌晨 3:00”归零，与 SubconsciousDreamWorker 周期约束一致
