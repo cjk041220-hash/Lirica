@@ -33,3 +33,4 @@
 - [x] 5. 路线图 :195 删“剪贴板敏感口令” | 验证：grep 校验路线图中“剪贴板”归零，符合 PrivacyBreaker 实际实现
 - [x] 6. 路线图 :253 改“24h 周期 + 充电 + 设备空闲约束触发（WorkManager）” | 验证：grep 校验路线图中“凌晨 3:00”归零，与 SubconsciousDreamWorker 周期约束一致
 - [x] 7. 路线图 :461 M4.0 改【待启动】；里程碑补 M2.4/M2.5 | 验证：路线图里程碑与实际完成的 M2.4/M2.5 验收记录及待启动 M4.0 状态一致
+- [x] 8. 路线图 :349 Claude 模型名更新为现役版本；修正三处模块归属（DiaryEngine、ProactiveBubbleCoordinator、MoodDebugPanel）；“3D PAD”改为“2D Valence-Arousal” | 验证：grep 校验 PAD 归零且模型与模块路径全部与源码对齐
