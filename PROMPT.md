@@ -40,4 +40,5 @@
 
 ## 执行记录
 
-（Ralph 迭代时在此追加）
+- 1 / 完成 bge-small-zh-v1.5 模型与 tokenizer.json 资产下载，配置 .gitignore 排除 onnx / 校验文件大小（模型 24,010,842B > 15MB，tokenizer 439,125B > 1KB），全量单元测试通过 (533 passed)
+
