@@ -30,6 +30,7 @@ interface MotivationDynamics {
     companion object {
         const val COOLDOWN_MS = 60 * 60 * 1000L // 60 分钟不应期
         const val MAX_SCORE = 5.0
+        const val DWELL_BUCKET_MS = 30 * 60 * 1000L // warmth 长驻留计费桶宽：30 分钟
     }
 }
 
@@ -43,6 +44,14 @@ class MotivationDynamicsImpl(
     private var currentVector = MotivationVector()
     private var lastExpressedMs: Long = 0L
     private var lastPackageName: String? = null
+
+    // 2026-09-27 审计 P0 修复：事件必须与状态区分。
+    // 快照中的 latestNotification 是"持久状态"（永不清除），若不按 id 记账，
+    // 每次 update() 都会对同一事件重复加成，动机被钉死在高位、冷却与退避形同虚设。
+    private var lastChargedNotificationId: String? = null
+
+    // warmth 的长驻留加成同样按 30 分钟桶一次性计费，杜绝每 tick 重复累积
+    private var lastChargedDwellBucket: Int = -1
 
     override fun getCurrentVector(): MotivationVector = currentVector
 
@@ -69,8 +78,11 @@ class MotivationDynamicsImpl(
         }
         lastPackageName = currPkg
 
-        if (snapshot.latestNotification != null) {
-            newCuriosity += when (snapshot.latestNotification.category) {
+        // 同一通知只对 curiosity / urgency 各加成一次（按通知 id 记账）
+        val latestNotif = snapshot.latestNotification
+        val isNewNotification = latestNotif != null && latestNotif.id != lastChargedNotificationId
+        if (latestNotif != null && isNewNotification) {
+            newCuriosity += when (latestNotif.category) {
                 NotificationCategory.COMMUNICATION -> 1.5
                 NotificationCategory.OTHER -> 0.8
                 else -> 1.0
@@ -96,8 +108,14 @@ class MotivationDynamicsImpl(
         // 3. 关怀度 (Warmth): 连续超长使用、疲劳/负面情绪、深夜累积
         var newWarmth = currentVector.warmth
         val dwellMs = snapshot.foregroundApp?.dwellDurationMs ?: 0L
-        if (dwellMs >= 30 * 60 * 1000L) { // 连续使用超过 30 分钟
+        // 长驻留按 30 分钟桶一次性计费：跨过新桶才加成，换应用后桶回退自动重置
+        val dwellBucket = (dwellMs / MotivationDynamics.DWELL_BUCKET_MS).toInt()
+        if (dwellMs >= 30 * 60 * 1000L && dwellBucket > lastChargedDwellBucket) {
             newWarmth += 0.8 + (dwellMs - 30 * 60 * 1000L).toDouble() / (30 * 60 * 1000L) * 0.5
+            lastChargedDwellBucket = dwellBucket
+        } else if (dwellBucket < lastChargedDwellBucket) {
+            // 已切换到驻留时间更短的应用：重置桶记账，新上下文停满 30 分钟仍会关怀
+            lastChargedDwellBucket = dwellBucket
         }
         if (emotion.valence < -0.1f) {
             newWarmth += (-emotion.valence * 1.2).toDouble()
@@ -107,8 +125,8 @@ class MotivationDynamicsImpl(
 
         // 4. 紧急度 (Urgency): 由外界即时事件驱动 (外卖到达、重要日程、告警通知)
         var newUrgency = currentVector.urgency * exp(-dtMinutes / 5.0) // 衰减迅速
-        if (snapshot.latestNotification != null) {
-            newUrgency += when (snapshot.latestNotification.category) {
+        if (latestNotif != null && isNewNotification) {
+            newUrgency += when (latestNotif.category) {
                 NotificationCategory.SCHEDULE -> 2.5
                 NotificationCategory.TRAVEL_LOGISTICS -> 2.0
                 NotificationCategory.SECURITY -> 3.0
@@ -130,11 +148,12 @@ class MotivationDynamicsImpl(
     }
 
     override fun computeTotalMotivation(vector: MotivationVector, nowMs: Long): Double {
-        // 加权求和并归一到 0.0 ~ 5.0
+        // 加权求和并归一到 0.0 ~ 5.0（分母下限防全零权重除零产生 NaN）
+        val weightSum = (wCuriosity + wBoredom + wWarmth + wUrgency).coerceAtLeast(1e-9)
         val totalRaw = (wCuriosity * vector.curiosity +
             wBoredom * vector.boredom +
             wWarmth * vector.warmth +
-            wUrgency * vector.urgency) / (wCuriosity + wBoredom + wWarmth + wUrgency) * 2.0
+            wUrgency * vector.urgency) / weightSum * 2.0
 
         // 检查冷却不应期抑制
         if (lastExpressedMs > 0L) {

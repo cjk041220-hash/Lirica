@@ -66,16 +66,18 @@ class PerceptionPipelineTest {
         val testDispatcher = StandardTestDispatcher(testScheduler)
         pipeline.start(scope = this, dispatcher = testDispatcher)
 
+        // 2026-09-27 语义更新：微信主包已纳入感知整包熔断，「普通 App 聚合」
+        // 反例改用中性包名；熔断路径由 testPipelineAppliesPrivacyBreaker_forSensitiveApp 覆盖
         // 1. Update foreground app
         foregroundAppFlow.value = ForegroundAppInfo(
-            packageName = "com.tencent.mm",
-            className = "LauncherUI",
+            packageName = "com.example.notes",
+            className = "NoteEditor",
             dwellDurationMs = 2000L
         )
         testScheduler.runCurrent()
 
         var snapshot = pipeline.snapshotFlow.value
-        assertEquals("com.tencent.mm", snapshot.foregroundApp?.packageName)
+        assertEquals("com.example.notes", snapshot.foregroundApp?.packageName)
         assertEquals(2000L, snapshot.foregroundApp?.dwellDurationMs)
         assertFalse(snapshot.isPrivacyFusing)
 
@@ -93,7 +95,7 @@ class PerceptionPipelineTest {
         // 3. Emit notification
         val notif = NotificationEvent(
             id = "notif_1",
-            packageName = "com.tencent.mm",
+            packageName = "com.example.notes",
             title = "张三",
             content = "今晚聚餐",
             postTime = 6000L,
@@ -107,8 +109,8 @@ class PerceptionPipelineTest {
 
         // 4. Emit page content
         val page = PageContentSnapshot(
-            packageName = "com.tencent.mm",
-            className = "ChatUI",
+            packageName = "com.example.notes",
+            className = "NoteEditor",
             nodes = listOf(
                 AccessibilityNodeSnapshot(text = "好的，没问题")
             )

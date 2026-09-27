@@ -2,8 +2,9 @@
 
 > **项目更名说明**：本项目自 2026-09-23 起正式定名 **Lirica**（意大利语中的抒情诗，原名“小汐 / sonetto”）。  
 > **当前阶段**：第三轮系统级架构演进（3.0）· **M3.3 手机操控升维与动作分块 全绿达成**  
-> **最后更新**：2026-09-24  
-> **整体技术栈**：100% Native Android Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（旧 Python `backend/` 参考源已清理删除并封存至 Git 历史）
+> **最后更新**：2026-09-27（2026-09-27 全面审计修复轮：动机去重 / BYOK 收口 / 通知权限 / PII 防线 / MIGRATION_2_3 守护测试等，测试基线更新为 105 类 / 576 例全绿）  
+> **整体技术栈**：100% Native Android Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（旧 Python `backend/` 参考源已清理删除并封存至 Git 历史）  
+> ⚠️ **口径声明**：本看板中全部测试与性能结论均为 JVM（Robolectric 模拟）环境实测；真机验证（无障碍 / 悬浮窗 / Room / SSE / 硬件 Keystore / 16KB 设备）尚未执行，相关条目以「真机待验」标注为准。
 
 ---
 
@@ -21,7 +22,7 @@
 | **Round 2 · M2.1** | 执行态基建与坐标断层缝合 (高保真树 / 坐标桥接 / 剪贴板还原 / 弱引用代理 / 截帧 / 前台保活) | **已全绿验收**（原列的 R8 实际未启用，2026-09-21 后补完成，见优化方案 #6/P1-6） | 5/6 |
 | **Round 2 · M2.2** | Helix-GUI 任务代行总控与执行态接线 (Coordinator 状态机 / Tool 路由 / 流式性能 / 备份隔离) | **已全绿验收** | 4/4 |
 | **Round 2 · M2.3** | 自叙梦系统与 5 层记忆地图化重构 (夜间入梦 / 语义去重 / 矛盾消歧 / WORLDVIEW / Handoff) | **已全绿验收** | 6/6 |
-| **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **已全绿验收** | 5/5 |
+| **Round 2 · M2.4** | 全局神经贯通与真机闭环验收 (ProactiveBus 接管 / schedule_wake / 草稿确认卡 / 真机压测) | **模拟环境验收通过**（真机压测待执行，见 890 行） | 5/5 |
 | **Round 2 · M2.5** | 生产级缺陷加固与收敛闭环 (DreamWorker 挂载 / Receiver goAsync / AppName 解析 / 确认超时 / 闹钟配额豁免) | **已全绿验收**（goAsync 仅修了 finish() 时序，协程异常兜底 2026-09-21 后补，见优化方案 #15/P1-8） | 5/5 |
 | **Round 3 · 批次 2** | M3.0 活人感三件套（T2.1 动作伴随语契约 / T2.2 生活工具·天气+日程 / T2.3 care 关心提示+冷却台账）+ 技术债还账 8 项 | **已全绿验收** | 3/3 |
 | **Round 3 · 批次 3** | M3.2 端侧视觉感知与离线 OCR 破盲（T3.1 截屏提权 / T3.2 截帧流水线 / T3.3 ML Kit 离线中文 OCR / T3.4 隐私断流 / T3.5 read_screen） | **已全绿验收** | 5/5 |
@@ -1123,7 +1124,7 @@
    - `InterruptibilityEstimator` 扩充物理环境场景打扰代价估算：通话中物理顶格熔断 (`MAX_COST = 5.0`)，音频播放与耳机使用动态施加打扰溢价惩罚；
    - `HardwareEnvironmentWatcherTest` (2 测) 与 `SilenceDecisionEngineTest` 补充硬件场景单测全绿。
 2. **零轮询前台应用秒级感知与双轨兜底架构 (T7.2)**：
-   - `XiaoxiAccessibilityService` 捕获 `TYPE_WINDOW_STATE_CHANGED`，在 AOSP Binder 回调中以 `< 0.05ms` 极速直出 `windowForegroundAppEvents`，达成零轮询秒级响应与零电量浪费；
+   - `XiaoxiAccessibilityService` 捕获 `TYPE_WINDOW_STATE_CHANGED`，在 AOSP Binder 回调中以 `< 0.05ms` 极速直出 `windowForegroundAppEvents`（JVM 口径实测值），达成零轮询秒级响应与零电量浪费（真机数值待验）；
    - `XiaoxiApplication` 建立前台应用多路流合并管道（`merge(windowForegroundAppEvents, usageStatsTracker.foregroundApp)`）：无障碍就绪时零轮询极速驱动，无障碍缺失时自动无缝降级至 `UsageStatsTracker` 轮询通道；
    - `ZeroPollingForegroundTest` 单测全绿验证。
 3. **信念修正引擎 LLM 认知冲突化改造 (T7.3 - `BeliefRevisionEngine`)**：

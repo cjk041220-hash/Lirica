@@ -22,6 +22,24 @@ object DiagnosticExporter {
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     private val fileTimestampFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
+    // 2026-09-27 审计 P3 修复：诊断包经 ACTION_SEND 分享给任意应用，属回归敏感面。
+    // 环形日志行在导出前做 PII 正则二次脱敏（与 PrivacyBreaker.maskPiiText 同规则，
+    // 不直接引用以避免 common → perception 依赖反向；两处正则需保持同步）。
+    private val EXPORT_PHONE_REGEX = Regex("1[3-9]\\d{9}")
+    private val EXPORT_ID_CARD_REGEX = Regex("\\d{6}(19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx]")
+    private val EXPORT_BANK_CARD_REGEX = Regex("\\d{16,19}")
+
+    private fun sanitizeLogLine(line: String): String {
+        var result = line
+        result = EXPORT_ID_CARD_REGEX.replace(result) { m -> m.value.take(6) + "********" + m.value.takeLast(4) }
+        result = EXPORT_BANK_CARD_REGEX.replace(result) { m ->
+            val len = m.value.length
+            m.value.take(4) + "*".repeat((len - 8).coerceAtLeast(4)) + m.value.takeLast(4)
+        }
+        result = EXPORT_PHONE_REGEX.replace(result) { m -> m.value.take(3) + "****" + m.value.takeLast(4) }
+        return result
+    }
+
     fun exportDiagnosticMarkdown(
         context: Context,
         byokRepo: ByokSettingsRepository
@@ -83,13 +101,13 @@ object DiagnosticExporter {
                 appendLine()
             }
 
-            appendLine("## 5. 环形日志现场记录 (最近 ${recentLogs.size} 条)")
+            appendLine("## 5. 环形日志现场记录 (最近 ${recentLogs.size} 条，已过 PII 脱敏)")
             if (recentLogs.isEmpty()) {
                 appendLine("- 暂无近期内存日志记录\n")
             } else {
                 appendLine("```text")
                 for (log in recentLogs) {
-                    appendLine(log)
+                    appendLine(sanitizeLogLine(log))
                 }
                 appendLine("```\n")
             }

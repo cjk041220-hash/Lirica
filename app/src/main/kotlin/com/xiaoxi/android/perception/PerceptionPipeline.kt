@@ -69,7 +69,8 @@ class PerceptionPipeline(
             foregroundAppFlow.collect { app ->
                 synchronized(this@PerceptionPipeline) {
                     val current = _snapshotFlow.value
-                    val isSensitive = app != null && privacyBreaker.isSensitiveApp(app.packageName)
+                    // 感知层用整包熔断口径（含微信）——自动化门控另有 isSensitiveApp 精细口径
+                    val isSensitive = app != null && privacyBreaker.isPerceptionFusedApp(app.packageName)
                     val newPage = if (isSensitive && current.pageContent != null) {
                         current.pageContent.copy(nodes = emptyList(), focusedText = null)
                     } else {
@@ -110,20 +111,28 @@ class PerceptionPipeline(
         // 3. 监听全局有效通知
         pipelineScope.launch {
             notificationFlow.collect { notif ->
+                // 2026-09-27 审计 P1 修复：通知文本进入快照/念头池前统一过 PII 脱敏。
+                // 此为通知链路的唯一收口点：下游（快照 latestNotification、念头池、
+                // LLM 上下文）全部消费脱敏后的事件，手机号/银行卡/身份证不再绕过防线。
+                val sanitized = notif.copy(
+                    title = privacyBreaker.maskPiiText(notif.title),
+                    content = privacyBreaker.maskPiiText(notif.content),
+                    subText = notif.subText?.let { privacyBreaker.maskPiiText(it) }
+                )
                 synchronized(this@PerceptionPipeline) {
                     val current = _snapshotFlow.value
                     _snapshotFlow.value = current.copy(
                         timestamp = System.currentTimeMillis(),
-                        latestNotification = notif
+                        latestNotification = sanitized
                     )
                 }
 
                 // 高价值通讯或日程通知，自动投递未完成念头池
-                if (notif.category == NotificationCategory.COMMUNICATION ||
-                    notif.category == NotificationCategory.SCHEDULE ||
-                    notif.category == NotificationCategory.TRAVEL_LOGISTICS
+                if (sanitized.category == NotificationCategory.COMMUNICATION ||
+                    sanitized.category == NotificationCategory.SCHEDULE ||
+                    sanitized.category == NotificationCategory.TRAVEL_LOGISTICS
                 ) {
-                    emitPerceivedThought(notif)
+                    emitPerceivedThought(sanitized)
                 }
             }
         }
@@ -133,7 +142,8 @@ class PerceptionPipeline(
             pageContentFlow.collect { page ->
                 synchronized(this@PerceptionPipeline) {
                     val sanitized = privacyBreaker.sanitizePageSnapshot(page)
-                    val isSensitive = privacyBreaker.isSensitiveApp(page.packageName)
+                    // 感知层用整包熔断口径（含微信）——自动化门控另有 isSensitiveApp 精细口径
+                    val isSensitive = privacyBreaker.isPerceptionFusedApp(page.packageName)
                     val current = _snapshotFlow.value
 
                     _snapshotFlow.value = current.copy(

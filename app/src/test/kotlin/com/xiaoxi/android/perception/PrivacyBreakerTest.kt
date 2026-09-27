@@ -101,10 +101,13 @@ class PrivacyBreakerTest {
 
     @Test
     fun testNormalSafeContentPassesUnmodified() {
-        val normalPkg = "com.tencent.mm"
+        // 2026-09-27 语义更新：微信主包已纳入感知层整包熔断（聊天流内含支付场景），
+        // 「普通内容放行」反例改用真正中性的笔记类包名；原 mm 用例改为熔断断言
+        val neutralPkg = "com.example.notes"
+        assertFalse(privacyBreaker.isPerceptionFusedApp(neutralPkg))
         val snapshot = PageContentSnapshot(
-            packageName = normalPkg,
-            className = "LauncherUI",
+            packageName = neutralPkg,
+            className = "NoteEditor",
             nodes = listOf(
                 AccessibilityNodeSnapshot(text = "今天天气真好", className = "android.widget.TextView")
             )
@@ -113,5 +116,25 @@ class PrivacyBreakerTest {
         val sanitized = privacyBreaker.sanitizePageSnapshot(snapshot)
         assertEquals(1, sanitized.nodes.size)
         assertEquals("今天天气真好", sanitized.nodes.first().text)
+    }
+
+    @Test
+    fun testWeChatPackageFusedInPerceptionButNotInAutomation() {
+        // 2026-09-27 审计修复回归：幻影包名 wepay 已移除；微信主包在感知层整包熔断，
+        // 但自动化门控口径（isSensitiveApp）不放整包——点击/导航由通信类精细规则管理
+        assertTrue(privacyBreaker.isPerceptionFusedApp("com.tencent.mm"))
+        assertFalse("自动化门控口径不应整包熔断微信", privacyBreaker.isSensitiveApp("com.tencent.mm"))
+        assertFalse("wepay 幻影包名必须从名单中移除", privacyBreaker.isSensitiveApp("com.tencent.wepay"))
+        assertFalse(privacyBreaker.isPerceptionFusedApp("com.tencent.wepay"))
+
+        val snapshot = PageContentSnapshot(
+            packageName = "com.tencent.mm",
+            className = "LauncherUI",
+            nodes = listOf(
+                AccessibilityNodeSnapshot(text = "转账给张三", viewId = "chat_input")
+            )
+        )
+        val sanitized = privacyBreaker.sanitizePageSnapshot(snapshot)
+        assertTrue("微信页快照必须整包熔断清空", sanitized.nodes.isEmpty())
     }
 }

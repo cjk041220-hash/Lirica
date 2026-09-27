@@ -130,6 +130,13 @@ class ByokSettingsRepositoryImpl(
     override fun saveCustomApiKey(apiKey: String) {
         val trimmed = apiKey.trim()
         val cipherText = secureKeyStore.encrypt(trimmed)
+        if (cipherText.isBlank()) {
+            // 2026-09-27 审计 P3 修复：加密失败时旧代码会把空密文写进 prefs，
+            // 重载后 customApiKey 变 null，用户已配置的 Key 被静默清空。
+            // 现改为保留旧密文并记录错误日志。
+            XiaoxiLog.e("ByokSettings", "API Key 加密失败，保留原有密文不覆盖")
+            return
+        }
         prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, cipherText).apply()
         _settings.value = _settings.value.copy(customApiKey = trimmed)
     }

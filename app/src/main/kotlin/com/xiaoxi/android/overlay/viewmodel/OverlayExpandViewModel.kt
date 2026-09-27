@@ -213,7 +213,16 @@ class OverlayExpandViewModel(
 
                 val accumulated = StringBuilder()
                 val effectiveConfig = byokRepository?.getEffectiveLlmConfig() ?: llmConfig
-                if (effectiveConfig.apiKey.isBlank()) return@launch
+                if (effectiveConfig.apiKey.isBlank()) {
+                    // 2026-09-27 审计 P0 修复：无 Key 时不再静默吞掉，给出用户可见错误态
+                    _uiState.update {
+                        it.copy(
+                            isStreaming = false,
+                            errorMessage = "尚未配置 API Key，请打开主应用完成入门向导或前往设置配置"
+                        )
+                    }
+                    return@launch
+                }
 
                 llmClient.streamChat(effectiveConfig, assembledMessages).collect { event ->
                     when (event) {

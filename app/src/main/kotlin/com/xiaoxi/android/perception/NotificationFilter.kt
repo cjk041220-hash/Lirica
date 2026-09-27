@@ -109,11 +109,18 @@ class NotificationFilter {
         val fullText = "$title $content"
 
         // 优先检查安全与验证码
+        // 2026-09-27 审计 P1 修复：补「校验码」与宽松 "code"/"口令" 启发式，宁枉勿纵——
+        // 含这些关键词的通知一律物理丢弃，绝不接触任何凭证类信息
         if (fullText.contains("验证码") ||
+            fullText.contains("校验码") ||
             fullText.contains("动态口令") ||
             fullText.contains("动态码") ||
-            fullText.contains("verification code") ||
-            fullText.contains("OTP")
+            fullText.contains("口令") ||
+            fullText.contains("验证代码") ||
+            fullText.contains("verification code", ignoreCase = true) ||
+            (fullText.contains("verification", ignoreCase = true) && fullText.contains("code", ignoreCase = true)) ||
+            fullText.contains("OTP", ignoreCase = true) ||
+            fullText.contains("2FA", ignoreCase = true)
         ) {
             return NotificationCategory.SECURITY
         }

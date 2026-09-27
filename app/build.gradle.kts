@@ -8,14 +8,16 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-// 从 local.properties 读取 DEEPSEEK_API_KEY（该文件不入库），缺失时退回占位符保持构建通过。
-// 使用说明：在项目根目录 local.properties 中添加一行 `DEEPSEEK_API_KEY=sk-xxxx`
+// DEEPSEEK_API_KEY 安全策略（2026-09-27 审计 P0#5 修复）：
+// 密钥不再进入 release 构建——release 的 BuildConfig.DEEPSEEK_API_KEY 恒为空串，
+// 正式包一律走 BYOK 运行时配置（Onboarding 向导 / 设置页，AES-GCM 加密落盘）。
+// debug 构建保留从 local.properties / -P 参数 / 环境变量读取的本机开发便利。
+// 使用说明：在项目根目录 local.properties（不入库）添加 `DEEPSEEK_API_KEY=sk-xxxx`
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-// 允许缺失（回退为空字符串）。缺失时由运行时 Onboarding 向导引导配置，支持无 local.properties 也能成功构建。
-val deepseekApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY")
+val devApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY")
     ?: (project.findProperty("DEEPSEEK_API_KEY") as String?)
     ?: System.getenv("DEEPSEEK_API_KEY")
     ?: ""
@@ -35,8 +37,6 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-
-        buildConfigField("String", "DEEPSEEK_API_KEY", "\"$deepseekApiKey\"")
     }
 
     buildTypes {
@@ -48,10 +48,14 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // release 恒空：防止密钥烘进可分发的 APK（逆向提取风险）
+            buildConfigField("String", "DEEPSEEK_API_KEY", "\"\"")
         }
         debug {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+            // debug 保留本机开发便利；缺失时回退空串，运行时由 Onboarding 向导引导配置
+            buildConfigField("String", "DEEPSEEK_API_KEY", "\"$devApiKey\"")
         }
     }
 
@@ -122,8 +126,10 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
     // ONNX Runtime Android (Edge Neural Embeddings)
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
-    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.19.2")
+    // 2026-09-27 审计 P1 修复：1.19.2 的 .so 未做 16KB page size 对齐（修复线 1.22+），
+    // Android 15 16KB 内核设备上会 UnsatisfiedLinkError；升至 1.25（官方明确标注 16KB alignment）
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.25.0")
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.25.0")
 
     // Shizuku (Privileged ADB execution & penetration)
     val shizukuVersion = "13.1.5"

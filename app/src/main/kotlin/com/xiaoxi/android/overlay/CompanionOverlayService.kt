@@ -166,8 +166,16 @@ class CompanionOverlayService : LifecycleService() {
             memoryManager = app.memoryManager,
             phiMiddleware = app.phiMiddleware,
             humannessFilter = app.humannessFilter,
-            proactiveCoordinator = app.proactiveCoordinator
+            proactiveCoordinator = app.proactiveCoordinator,
+            // 2026-09-27 审计 P0 修复：悬浮窗链路必须注入 BYOK 仓库。
+            // 旧代码缺省 null → sendQuickMessage 回退 BuildConfig 内嵌 Key，
+            // 用户自备 Key 被完全旁路（release 无内嵌 Key 时静默失效）。
+            byokRepository = app.byokSettingsRepository
         )
+        // 生产装配契约：OverlayExpandViewModel 的可空参数仅测试豁免，
+        // 本装配点关键依赖缺失即失败启动，杜绝"装配遗漏静默关功能"。
+        requireNotNull(app.byokSettingsRepository) { "生产装配必须提供 byokSettingsRepository" }
+        requireNotNull(expandViewModel?.proactiveCoordinator) { "生产装配必须提供 proactiveCoordinator" }
     }
 
     private fun setupOverlayView() {

@@ -3,6 +3,7 @@ package com.xiaoxi.android.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.dao.ChatDialogueDao
 import com.xiaoxi.android.database.dao.ScheduledAlarmDao
@@ -377,7 +378,14 @@ class ChatViewModel(
                         ChatMessage(role = "assistant", content = rawResponse),
                         ChatMessage(role = "user", content = instruction)
                     )
-                    runCatching { llmClient.chat(llmConfig, correctionMessages) }.getOrDefault("")
+                    // 2026-09-27 审计 P1 修复：自纠环必须复用本轮生效的 effectiveLlmConfig
+                    // （旧代码误用构造默认 llmConfig——BYOK 用户会被旁路到默认端点，
+                    // 选非 DeepSeek 服务商时甚至把完整对话上下文错发至默认 DeepSeek）。
+                    // 改写失败降级为原文（getOrDefault("")），但必须留日志，不再静默。
+                    val rewritten = runCatching { llmClient.chat(effectiveLlmConfig, correctionMessages) }
+                        .onFailure { XiaoxiLog.w("ChatViewModel", "自纠环改写请求失败，降级使用原文: ${it.message}") }
+                        .getOrDefault("")
+                    rewritten
                 }
                 val finalText = filterResult.filteredText
 

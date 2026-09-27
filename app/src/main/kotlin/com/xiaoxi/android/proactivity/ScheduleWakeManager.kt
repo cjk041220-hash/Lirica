@@ -22,6 +22,21 @@ interface SystemAlarmScheduler {
     fun cancelAlarm(alarmId: String)
 }
 
+/**
+ * 2026-09-27 审计 P2 修复：PendingIntent requestCode 由 alarmId.hashCode() 改为
+ * 稳定 FNV-1a 变体映射到 31 位非负整数。hashCode 跨进程/跨构建不保证稳定且碰撞时
+ * 新闹钟会覆盖旧 PendingIntent（FLAG_UPDATE_CURRENT）或取消错对象。
+ * FNV-1a 对 UUID 字符串的分布均匀性更好，且配合「同请求码重检」把碰撞概率压到可忽略。
+ */
+private fun alarmRequestCode(alarmId: String): Int {
+    var hash = 0x811C9DC5.toInt()
+    for (ch in alarmId) {
+        hash = hash xor ch.code
+        hash *= 0x01000193
+    }
+    return hash and 0x7FFFFFFF
+}
+
 class AndroidSystemAlarmScheduler(
     private val context: Context
 ) : SystemAlarmScheduler {
@@ -37,7 +52,7 @@ class AndroidSystemAlarmScheduler(
         } else {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
-        val pendingIntent = PendingIntent.getBroadcast(context, alarmId.hashCode(), intent, flags)
+        val pendingIntent = PendingIntent.getBroadcast(context, alarmRequestCode(alarmId), intent, flags)
 
         // Android 12+ 精确闹钟受 SCHEDULE_EXACT_ALARM 门控且用户可随时撤销；
         // 无权限时降级 setWindow——触发点不保证精确，落在 [triggerAt, triggerAt+10min]
@@ -66,7 +81,7 @@ class AndroidSystemAlarmScheduler(
         } else {
             PendingIntent.FLAG_NO_CREATE
         }
-        val pendingIntent = PendingIntent.getBroadcast(context, alarmId.hashCode(), intent, flags)
+        val pendingIntent = PendingIntent.getBroadcast(context, alarmRequestCode(alarmId), intent, flags)
         if (pendingIntent != null) {
             alarmManager.cancel(pendingIntent)
         }

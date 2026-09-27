@@ -4,6 +4,8 @@ import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.perception.model.PerceptionSnapshot
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,8 +77,18 @@ interface ProactiveBubbleCoordinator {
 class ProactiveBubbleCoordinatorImpl(
     private val thoughtManager: UnspokenThoughtManager,
     private val decisionEngine: SilenceDecisionEngine,
-    private val emotionEngine: EmotionEngine
+    private val emotionEngine: EmotionEngine,
+    /**
+     * 2026-09-27 审计 P2 修复：配额/退避/冷却台账持久化（可选，测试缺省 null 走纯内存）。
+     * 生产装配由 XiaoxiApplication 注入 SharedPreferences——杀进程重启后每日配额
+     * 与退避不再清零，堵住"重启规避退避"的漏洞。
+     */
+    private val statePrefs: android.content.SharedPreferences? = null
 ) : ProactiveBubbleCoordinator {
+
+    // 并发互斥：overlay 的 processPerception / refreshIcebreaker / onUserFeedback
+    // 各自起协程并发进入，裸 var 台账存在竞态；所有状态变更收口到同一把锁
+    private val stateMutex = kotlinx.coroutines.sync.Mutex()
 
     private var bubblesShownToday = 0
     private var lastBubbleDay: String = ""
@@ -84,10 +96,37 @@ class ProactiveBubbleCoordinatorImpl(
     private var backoffPenalty = 0.0
     private var prevSnapshot: PerceptionSnapshot? = null
 
+    init {
+        // 从持久化台账恢复（跨天重置由 coordinate/coordinateFirstFrame 的日期检查接管）
+        statePrefs?.let { prefs ->
+            bubblesShownToday = prefs.getInt(KEY_BUBBLES_TODAY, 0)
+            lastBubbleDay = prefs.getString(KEY_LAST_DAY, "") ?: ""
+            backoffPenalty = Double.fromBits(prefs.getLong(KEY_BACKOFF_BITS, 0.0.toRawBits()))
+            lastInterruptionTime = prefs.getLong(KEY_LAST_INTERRUPTION, 0L)
+        }
+    }
+
+    private fun persistState(today: String) {
+        statePrefs?.edit()?.apply {
+            putInt(KEY_BUBBLES_TODAY, bubblesShownToday)
+            putString(KEY_LAST_DAY, today)
+            putLong(KEY_BACKOFF_BITS, backoffPenalty.toRawBits())
+            putLong(KEY_LAST_INTERRUPTION, lastInterruptionTime)
+            apply()
+        }
+    }
+
     override fun getBackoffPenalty(): Double = backoffPenalty
     override fun getBubblesShownToday(): Int = bubblesShownToday
 
     override suspend fun coordinate(
+        snapshot: PerceptionSnapshot,
+        nowMs: Long
+    ): ProactiveCoordinationResult = stateMutex.withLock {
+        coordinateLocked(snapshot, nowMs)
+    }
+
+    private suspend fun coordinateLocked(
         snapshot: PerceptionSnapshot,
         nowMs: Long
     ): ProactiveCoordinationResult {
@@ -98,6 +137,7 @@ class ProactiveBubbleCoordinatorImpl(
             bubblesShownToday = 0
             // 跨天退避惩罚衰减一半
             backoffPenalty = max(0.0, backoffPenalty * 0.5)
+            persistState(currentDay)
         }
 
         // 2. 动机动力学计算与念头更新 (融合即时感知动力学与待决念头池最高紧急度)
@@ -163,6 +203,7 @@ class ProactiveBubbleCoordinatorImpl(
                             bubblesShownToday++
                         }
                         lastInterruptionTime = nowMs
+                        persistState(currentDay)
                         ProactiveCoordinationResult(
                             level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
                             decision = decision,
@@ -184,13 +225,14 @@ class ProactiveBubbleCoordinatorImpl(
         }
     }
 
-    override suspend fun coordinateFirstFrame(nowMs: Long): ProactiveCoordinationResult {
+    override suspend fun coordinateFirstFrame(nowMs: Long): ProactiveCoordinationResult = stateMutex.withLock {
         // 跨天配额重置与退避衰减，语义与 coordinate 保持一致
         val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
         if (currentDay != lastBubbleDay) {
             lastBubbleDay = currentDay
             bubblesShownToday = 0
             backoffPenalty = max(0.0, backoffPenalty * 0.5)
+            persistState(currentDay)
         }
 
         // 首帧场景无感知快照，无法推进动机计算与沉默裁决；仅守每日配额
@@ -201,11 +243,12 @@ class ProactiveBubbleCoordinatorImpl(
         )
         val quotaAllowed = bubblesShownToday < ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA
 
-        return if (topThought != null && (quotaAllowed || isPriorityWakeThought)) {
+        if (topThought != null && (quotaAllowed || isPriorityWakeThought)) {
             if (!isPriorityWakeThought) {
                 bubblesShownToday++
             }
             lastInterruptionTime = nowMs
+            persistState(currentDay)
             ProactiveCoordinationResult(
                 level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
                 decision = DecisionResult(
@@ -243,7 +286,8 @@ class ProactiveBubbleCoordinatorImpl(
         feedback: UserFeedback,
         thoughtId: String?,
         nowMs: Long
-    ) {
+    ) = stateMutex.withLock {
+        val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
         when (feedback) {
             UserFeedback.CLICKED -> {
                 // 正向反馈：消耗念头，标记已表达，减轻退避惩罚
@@ -268,5 +312,13 @@ class ProactiveBubbleCoordinatorImpl(
                 backoffPenalty = min(3.0, backoffPenalty + 0.3)
             }
         }
+        persistState(currentDay)
+    }
+
+    private companion object {
+        const val KEY_BUBBLES_TODAY = "proactive_bubbles_today"
+        const val KEY_LAST_DAY = "proactive_last_day"
+        const val KEY_BACKOFF_BITS = "proactive_backoff_bits"
+        const val KEY_LAST_INTERRUPTION = "proactive_last_interruption_ms"
     }
 }

@@ -48,7 +48,9 @@ object SseStreamParser {
                     )
                 }
 
-                if (choice.finishReason != null && choice.finishReason != "null") {
+                // 2026-09-27 审计 P3 修复：旧判断 `!= "null"`（字符串比较）对非空值恒真，
+                // 导致每个 chunk 都多发一次 Done 事件；实际语义应为「finish_reason 非空即流结束」
+                if (!choice.finishReason.isNullOrBlank()) {
                     events.add(LlmStreamEvent.Done(choice.finishReason))
                 }
             }

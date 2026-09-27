@@ -1,12 +1,20 @@
 package com.xiaoxi.android
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
@@ -14,8 +22,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.ui.chat.ChatScreen
@@ -31,11 +41,43 @@ enum class AppNavScreen {
 
 class MainActivity : ComponentActivity() {
 
+    /**
+     * 2026-09-27 审计 P0 修复：POST_NOTIFICATIONS 运行时申请。
+     * Android 13+ 通知默认拒绝，仅 Manifest 声明不足以让主动性气泡/日程提醒可见。
+     * 用户拒绝后不再反复骚扰（交给系统 rationale 机制），可在系统设置中恢复。
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                XiaoxiLog.w(
+                    "MainActivity",
+                    "通知权限被拒绝：主动性气泡与日程提醒将静默（可在系统设置中开启）"
+                )
+            }
+        }
+
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            // 未授权且从未被拒绝过（rationale 未触发）时申请；拒绝过则尊重用户选择
+            if (!granted && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
     private val chatViewModel: ChatViewModel by viewModels {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val app = application as XiaoxiApplication
+                // 生产装配契约：ChatViewModel 的可空参数仅测试豁免，
+                // 本装配点必须全量显式注入；关键依赖缺失立即失败而非静默关闭能力。
+                requireNotNull(app.byokSettingsRepository) { "生产装配必须提供 byokSettingsRepository" }
+                requireNotNull(app.nativeToolAgent) { "生产装配必须提供 nativeToolAgent" }
+                requireNotNull(app.careHintDetector) { "生产装配必须提供 careHintDetector" }
                 return ChatViewModel(
                     llmClient = app.llmClient,
                     memoryManager = app.memoryManager,
@@ -61,7 +103,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 2026-09-27 审计 P1 修复：targetSdk 35 强制 edge-to-edge，内容会被压入
+        // 状态栏/导航栏下方；显式启用并给根布局加 safeDrawing 内边距，
+        // 顶栏与输入框不再被系统栏遮挡（真机表现待 API 35 设备截图验收）
+        enableEdgeToEdge()
+
         val app = application as XiaoxiApplication
+        ensureNotificationPermission()
+
         val prefs = getSharedPreferences(ByokSettingsRepository.PREFS_NAME, Context.MODE_PRIVATE)
         val isOnboardingCompleted = prefs.getBoolean("byok_onboarding_completed", false)
         val hasKey = app.byokSettingsRepository.settings.value.hasValidKey
@@ -74,7 +123,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // edge-to-edge 下避开系统栏、刘海与输入法遮挡
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                ) {
                     var currentScreen by remember { mutableStateOf(startScreen) }
 
                     when (currentScreen) {
@@ -83,6 +137,8 @@ class MainActivity : ComponentActivity() {
                                 byokRepository = app.byokSettingsRepository,
                                 onFinish = {
                                     prefs.edit().putBoolean("byok_onboarding_completed", true).apply()
+                                    // 首启引导完成即申请通知权限：此刻用户信任度最高
+                                    ensureNotificationPermission()
                                     currentScreen = AppNavScreen.CHAT
                                 }
                             )

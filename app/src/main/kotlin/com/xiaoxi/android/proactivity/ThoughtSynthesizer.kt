@@ -18,9 +18,38 @@ interface ThoughtSynthesizer {
     ): UnspokenThoughtEntity?
 }
 
+private const val MAX_COOLDOWN_ENTRIES = 64
+
 class ThoughtSynthesizerImpl : ThoughtSynthesizer {
 
     private var lastSynthesizedNotificationId: String? = null
+
+    /**
+     * 2026-09-27 审计 P0 修复：状态类念头（长驻留/桌面闲置/游戏）冷却窗记账。
+     * 快照的驻留/前台信息是持久状态而非一次性事件，若不记账，overlay 每次快照
+     * 发射都会重复合成同一文案并反复落库（念头池刷屏 + 气泡池污染）。
+     * key = (念头类型, 前台包名)，value = 上次合成时间；冷却窗取该类念头的自然过期时长。
+     */
+    private val stateCooldown = LinkedHashMap<String, Long>()
+
+    private fun isStateOnCooldown(type: String, pkg: String, now: Long, cooldownMs: Long): Boolean {
+        val key = "${type}:${pkg}"
+        val last = stateCooldown[key] ?: return false
+        return now - last < cooldownMs
+    }
+
+    private fun markStateSynthesized(type: String, pkg: String, now: Long) {
+        val key = "${type}:${pkg}"
+        stateCooldown[key] = now
+        // 记账簿容量守卫：清理已过期条目，超限时丢弃最旧记录
+        if (stateCooldown.size > MAX_COOLDOWN_ENTRIES) {
+            val iterator = stateCooldown.entries.iterator()
+            while (stateCooldown.size > MAX_COOLDOWN_ENTRIES / 2 && iterator.hasNext()) {
+                iterator.next()
+                iterator.remove()
+            }
+        }
+    }
 
     override fun synthesize(
         snapshot: PerceptionSnapshot,
@@ -76,8 +105,10 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
                 )
             }
 
-            // 5. 连续长时间使用与疲劳关怀
+            // 5. 连续长时间使用与疲劳关怀（同一应用冷却窗内只合成一次）
             dwellMs >= 30 * 60 * 1000L -> {
+                if (isStateOnCooldown("dwell_care", pkg, now, 120 * 60 * 1000L)) return null
+                markStateSynthesized("dwell_care", pkg, now)
                 Triple(
                     "你已经对着屏幕忙碌好一阵子了，稍微活动一下脖子、喝口水休息下吧？",
                     120 * 60 * 1000L,
@@ -85,8 +116,10 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
                 )
             }
 
-            // 6. 游戏高专注
+            // 6. 游戏高专注（同一游戏冷却窗内只合成一次）
             pkg.contains("game") || pkg.contains("tmgp") -> {
+                if (isStateOnCooldown("game_focus", pkg, now, 60 * 60 * 1000L)) return null
+                markStateSynthesized("game_focus", pkg, now)
                 Triple(
                     "看你玩得这么全神贯注，Lirica先悄悄待在一旁不打扰你，这局一定要赢呀！",
                     60 * 60 * 1000L,
@@ -94,8 +127,10 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
                 )
             }
 
-            // 7. 桌面闲置无聊
+            // 7. 桌面闲置无聊（冷却窗内只合成一次）
             pkg.contains("launcher") || pkg.contains("home") -> {
+                if (isStateOnCooldown("launcher_idle", pkg, now, 90 * 60 * 1000L)) return null
+                markStateSynthesized("launcher_idle", pkg, now)
                 Triple(
                     "看你在桌面上发呆了好一会儿，是不是有点无聊呀？要不要跟 Lirica 聊聊天呢。",
                     90 * 60 * 1000L,

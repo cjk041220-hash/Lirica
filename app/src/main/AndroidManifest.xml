@@ -9,10 +9,9 @@
     <!-- 桌面常驻伴生悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- 前台常驻保活服务及类型 -->
+    <!-- 前台常驻保活服务及类型（两个 FGS 均为 specialUse，DATA_SYNC 死权限已移除——审计 P2） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Android 13+ 通知权限 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

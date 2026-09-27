@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import com.xiaoxi.android.perception.model.ScreenState
 import com.xiaoxi.android.perception.model.ScreenStateSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +44,14 @@ class ScreenStateWatcher {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
         }
-        context.registerReceiver(receiver, filter)
+        // 2026-09-27 审计 P3 修复：显式声明 NOT_EXPORTED（屏幕三广播为受保护系统广播，
+        // 系统发送不受影响），不依赖 targetSdk 演进下的隐式豁免规则
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         isRegistered = true
     }
 

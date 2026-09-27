@@ -166,7 +166,9 @@ class XiaoxiApplication : Application() {
         proactiveCoordinator = ProactiveBubbleCoordinatorImpl(
             thoughtManager = unspokenThoughtManager,
             decisionEngine = silenceDecisionEngine,
-            emotionEngine = emotionEngine
+            emotionEngine = emotionEngine,
+            // 2026-09-27 审计 P2 修复：配额/退避/冷却台账持久化，防杀进程重启规避
+            statePrefs = getSharedPreferences("lirica_proactivity_prefs", Context.MODE_PRIVATE)
         )
 
         scheduleWakeManager = com.xiaoxi.android.proactivity.ScheduleWakeManager(
