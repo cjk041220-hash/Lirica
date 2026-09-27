@@ -16,7 +16,8 @@ interface SelfHealingWatchdog {
 class SelfHealingWatchdogImpl(
     private val maxStuckCount: Int = 3,
     private val maxRecoveryAttempts: Int = 3,
-    private val launcherPackages: Set<String> = DEFAULT_LAUNCHER_PACKAGES
+    private val launcherPackages: Set<String> = DEFAULT_LAUNCHER_PACKAGES,
+    private val honestNarrator: HonestNarrator = HonestNarratorImpl()
 ) : SelfHealingWatchdog {
 
     companion object {
@@ -60,7 +61,10 @@ class SelfHealingWatchdogImpl(
         if (targetPackage != null && currentPackage != targetPackage && launcherPackages.contains(currentPackage)) {
             val attempts = recoveryAttempts.getOrDefault(AnomalyType.UNEXPECTED_EXIT, 0)
             if (attempts >= maxRecoveryAttempts) {
-                return WatchdogVerdict.Unrecoverable("Exceeded max recovery attempts ($maxRecoveryAttempts) for UNEXPECTED_EXIT to launcher")
+                return buildUnrecoverableVerdict(
+                    reason = "Exceeded max recovery attempts ($maxRecoveryAttempts) for UNEXPECTED_EXIT to launcher",
+                    targetPackage = targetPackage
+                )
             }
             return WatchdogVerdict.Recoverable(
                 anomaly = AnomalyType.UNEXPECTED_EXIT,
@@ -81,7 +85,10 @@ class SelfHealingWatchdogImpl(
             if (matchedPopupKeyword != null && currentStep > 1) {
                 val attempts = recoveryAttempts.getOrDefault(AnomalyType.POPUP_BLOCKING, 0)
                 if (attempts >= maxRecoveryAttempts) {
-                    return WatchdogVerdict.Unrecoverable("Exceeded max recovery attempts ($maxRecoveryAttempts) for POPUP_BLOCKING")
+                    return buildUnrecoverableVerdict(
+                        reason = "Exceeded max recovery attempts ($maxRecoveryAttempts) for POPUP_BLOCKING",
+                        targetPackage = targetPackage ?: currentPackage
+                    )
                 }
                 return WatchdogVerdict.Recoverable(
                     anomaly = AnomalyType.POPUP_BLOCKING,
@@ -104,7 +111,10 @@ class SelfHealingWatchdogImpl(
         if (consecutiveSameFingerprint >= maxStuckCount) {
             val attempts = recoveryAttempts.getOrDefault(AnomalyType.STUCK_LOOP, 0)
             if (attempts >= maxRecoveryAttempts) {
-                return WatchdogVerdict.Unrecoverable("Exceeded max recovery attempts ($maxRecoveryAttempts) for STUCK_LOOP (same state $consecutiveSameFingerprint times)")
+                return buildUnrecoverableVerdict(
+                    reason = "Exceeded max recovery attempts ($maxRecoveryAttempts) for STUCK_LOOP (same state $consecutiveSameFingerprint times)",
+                    targetPackage = targetPackage ?: currentPackage
+                )
             }
             val suggested = if (attempts == 0) {
                 HealingAction.ReGround("UI state unchanged after multiple actions, re-grounding elements")
@@ -119,6 +129,17 @@ class SelfHealingWatchdogImpl(
         }
 
         return WatchdogVerdict.NormalProgress(currentStep, fingerprint)
+    }
+
+    private fun buildUnrecoverableVerdict(reason: String, targetPackage: String?): WatchdogVerdict.Unrecoverable {
+        val narrative = honestNarrator.narrate(
+            FailureContext(
+                scenario = FailureScenario.SELF_HEALING_EXHAUSTED,
+                technicalReason = reason,
+                targetPackage = targetPackage
+            )
+        )
+        return WatchdogVerdict.Unrecoverable(reason = reason, honestNarrative = narrative)
     }
 
     override fun recordRecoveryAttempt(anomaly: AnomalyType) {

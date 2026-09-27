@@ -1,6 +1,7 @@
 package com.xiaoxi.android.automation.healing
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -66,6 +67,61 @@ class SelfHealingWatchdogTest {
         assertTrue(verdict is WatchdogVerdict.Unrecoverable)
         val unrec = verdict as WatchdogVerdict.Unrecoverable
         assertTrue(unrec.reason.contains("Exceeded max recovery attempts"))
+        // 批次 3: 验证 Unrecoverable 携带由 HonestNarrator 渲染的坦白文案
+        assertNotNull(unrec.honestNarrative)
+        assertTrue("坦白文案必须非空", unrec.honestNarrative!!.isNotBlank())
+        assertTrue("坦白文案必须包含待定稿标语", unrec.honestNarrative!!.contains("正式话术库待俊凯过目定稿"))
+    }
+
+    @Test
+    fun testInspectStep_unrecoverable_injectsCustomHonestNarrator() {
+        var narratedContext: FailureContext? = null
+        val customNarrator = object : HonestNarrator {
+            override fun narrate(context: FailureContext): String {
+                narratedContext = context
+                return "自定义坦白文案：我真的尽力了"
+            }
+            override fun getTemplates(scenario: FailureScenario): List<String> = emptyList()
+        }
+
+        val customWatchdog = SelfHealingWatchdogImpl(
+            maxStuckCount = 1,
+            maxRecoveryAttempts = 1,
+            honestNarrator = customNarrator
+        )
+
+        customWatchdog.recordRecoveryAttempt(AnomalyType.STUCK_LOOP)
+        val verdict = customWatchdog.inspectStep(9999L, "com.custom.app", "com.custom.app", "Click")
+
+        assertTrue(verdict is WatchdogVerdict.Unrecoverable)
+        val unrec = verdict as WatchdogVerdict.Unrecoverable
+        assertEquals("自定义坦白文案：我真的尽力了", unrec.honestNarrative)
+        assertNotNull(narratedContext)
+        assertEquals(FailureScenario.SELF_HEALING_EXHAUSTED, narratedContext?.scenario)
+        assertEquals("com.custom.app", narratedContext?.targetPackage)
+        assertTrue(narratedContext?.technicalReason?.contains("Exceeded max recovery attempts") == true)
+    }
+
+    @Test
+    fun testInspectStep_unexpectedExit_exceedsMaxAttempts_triggersUnrecoverableWithNarrative() {
+        val customWatchdog = SelfHealingWatchdogImpl(
+            maxRecoveryAttempts = 2
+        )
+        customWatchdog.recordRecoveryAttempt(AnomalyType.UNEXPECTED_EXIT)
+        customWatchdog.recordRecoveryAttempt(AnomalyType.UNEXPECTED_EXIT)
+
+        val verdict = customWatchdog.inspectStep(
+            fingerprint = 5002L,
+            currentPackage = "com.miui.home",
+            targetPackage = "com.tencent.mm",
+            actionSummary = "Click Chat"
+        )
+
+        assertTrue(verdict is WatchdogVerdict.Unrecoverable)
+        val unrec = verdict as WatchdogVerdict.Unrecoverable
+        assertTrue(unrec.reason.contains("UNEXPECTED_EXIT"))
+        assertNotNull(unrec.honestNarrative)
+        assertTrue(unrec.honestNarrative!!.contains("正式话术库待俊凯过目定稿"))
     }
 
     @Test

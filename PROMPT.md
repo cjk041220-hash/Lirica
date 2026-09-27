@@ -36,3 +36,4 @@
 ## 执行记录
 
 - 2026-09-27 [批次3-1]: 完成 HonestNarrator 话术模板层（6大类场景+通用兜底，每类2-3条变体，中性占位标语，占位符替换，随机机制），删除 ProhibitedZones wepay 幻觉包名；单测 10 项全部通过，全量 572 个测试全绿。
+- 2026-09-27 [批次3-2]: 接线 SelfHealingWatchdog 与坦白文案透传；WatchdogVerdict.Unrecoverable、TaskExecutionState.Failed、TaskExecutionResult.Failure 增加可选 honestNarrative 字段；新增 Watchdog 接线单测，全量 574 个测试全绿。

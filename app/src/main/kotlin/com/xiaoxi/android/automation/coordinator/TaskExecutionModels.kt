@@ -22,7 +22,11 @@ sealed interface TaskExecutionState {
         val onConfirmedWithDraft: ((String) -> Unit)? = null
     ) : TaskExecutionState
     data class Completed(val message: String, val stepsTaken: Int) : TaskExecutionState
-    data class Failed(val errorReason: String, val lastStepIndex: Int) : TaskExecutionState
+    data class Failed(
+        val errorReason: String,
+        val lastStepIndex: Int,
+        val honestNarrative: String? = null
+    ) : TaskExecutionState
 }
 
 enum class StepExecutionStatus {
@@ -71,6 +75,10 @@ sealed interface CoordinatorAction {
 
 sealed interface TaskExecutionResult {
     data class Success(val message: String, val stepsTaken: Int) : TaskExecutionResult
-    data class Failure(val reason: String, val stepIndex: Int) : TaskExecutionResult
+    data class Failure(
+        val reason: String,
+        val stepIndex: Int,
+        val honestNarrative: String? = null
+    ) : TaskExecutionResult
     data object Cancelled : TaskExecutionResult
 }

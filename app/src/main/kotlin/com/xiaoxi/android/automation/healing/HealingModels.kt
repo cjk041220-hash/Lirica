@@ -29,5 +29,8 @@ sealed interface WatchdogVerdict {
         val suggestedAction: HealingAction,
         val attemptCount: Int
     ) : WatchdogVerdict
-    data class Unrecoverable(val reason: String) : WatchdogVerdict
+    data class Unrecoverable(
+        val reason: String,
+        val honestNarrative: String? = null
+    ) : WatchdogVerdict
 }
