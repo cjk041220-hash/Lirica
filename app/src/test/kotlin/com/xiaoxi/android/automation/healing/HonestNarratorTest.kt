@@ -1,5 +1,6 @@
 package com.xiaoxi.android.automation.healing
 
+import com.xiaoxi.android.common.logging.XiaoxiLog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -193,5 +194,78 @@ class HonestNarratorTest {
         assertEquals("这个应用", HonestNarratorImpl.resolveDefaultAppName("com.foo.bar"))
         assertEquals("这个应用", HonestNarratorImpl.resolveDefaultAppName(null))
         assertEquals("这个应用", HonestNarratorImpl.resolveDefaultAppName(""))
+    }
+
+    /**
+     * 批次 3 · 4: 日志纪律测试
+     * technicalReason 与 rule 正常记入日志；extraInfo 绝不进日志
+     */
+    @Test
+    fun testLogDiscipline_technicalReasonAndRuleEnterLogs() {
+        XiaoxiLog.clear()
+
+        val context = FailureContext(
+            rule = "RULE_CRITICAL_PAYMENT_FUSE",
+            technicalReason = "Payment transfer blocked by gatekeeper policy",
+            targetPackage = "com.unionpay",
+            actionType = "CLICK"
+        )
+
+        narrator.narrate(context)
+
+        val logs = XiaoxiLog.getRecentLogs()
+        assertTrue("日志缓冲器必须记录至少一条日志", logs.isNotEmpty())
+        assertTrue(
+            "日志中必须包含 rule",
+            logs.any { it.contains("RULE_CRITICAL_PAYMENT_FUSE") }
+        )
+        assertTrue(
+            "日志中必须包含 technicalReason",
+            logs.any { it.contains("Payment transfer blocked by gatekeeper policy") }
+        )
+        assertTrue(
+            "日志中必须包含 targetPackage",
+            logs.any { it.contains("com.unionpay") }
+        )
+    }
+
+    @Test
+    fun testLogDiscipline_extraInfoNeverEntersLogs() {
+        XiaoxiLog.clear()
+
+        val secretInput = "MY_HIGHLY_CONFIDENTIAL_PLAINTEXT_PASSWORD_98765"
+        val secretCreditCard = "CREDIT_CARD_6222_0210_0000_1234"
+
+        val context = FailureContext(
+            rule = "RULE_ZERO_TOLERANCE_PASSWORD",
+            technicalReason = "Password target automation blocked",
+            targetPackage = "com.coloros.safecenter",
+            actionType = "INPUT",
+            extraInfo = mapOf(
+                "plaintextInput" to secretInput,
+                "creditCard" to secretCreditCard
+            )
+        )
+
+        val narrative = narrator.narrate(context)
+
+        // 1. 用户可见文案中绝不包含 extraInfo 敏感明文
+        assertFalse(
+            "用户可见坦白文案绝不泄露 extraInfo 明文",
+            narrative.contains(secretInput) || narrative.contains(secretCreditCard)
+        )
+
+        // 2. 内存系统日志缓冲中绝不包含 extraInfo 任何敏感字段
+        val logs = XiaoxiLog.getRecentLogs()
+        for (logEntry in logs) {
+            assertFalse(
+                "系统日志中绝不包含用户明文密码: $logEntry",
+                logEntry.contains(secretInput)
+            )
+            assertFalse(
+                "系统日志中绝不包含敏感卡号: $logEntry",
+                logEntry.contains(secretCreditCard)
+            )
+        }
     }
 }

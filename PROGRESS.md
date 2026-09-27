@@ -87,7 +87,7 @@
   - **双轨架构协同测试 (`testDualTrackMemoryManagerWiring`)**: `DualTrackMemoryManager.retrieve` 正确装配。
   - **入梦重算向量测试 (`testRecomputeAllVectors`)**: 向量重算全量写入通过。
 
-## 7. 全量测试与验收汇总
+## 7. 全量测试与验收汇总（批次 2.5）
 
 - **初始基线**: 533 个测试
 - **批次 2.5 交付后**: 562 个测试（净增 29 个测试用例）
@@ -98,6 +98,33 @@
   3. 未修改 `MemoryScorer.kt` 既有实现；未修改 `proactivity/**`, `emotion/**`, `persona/**`, `automation/**`, `perception/**`, `network/**`, PRD, `docs/**`；
   4. 未引入任何其他额外第三方依赖，未执行删除文件、reset、checkout 或 push；
   5. `.gitignore` 正确配置忽略 `*.onnx`，仅小文本资产 `tokenizer.json` 入库。
+
+## 8. 批次 3 · 失败叙述接口执行记录与验收汇总
+
+- **核心目标**: 落地 PRD §1 D5 诚实失败原则与 §7 批次 3 规格，把"执行失败的坦白"从字段变成通道。
+- **落地点与技术实现**:
+  1. **HonestNarrator 话术模板层 (`automation/healing/HonestNarrator.kt`)**:
+     - 涵盖 6 大核心场景（金融禁止区、通信代发、密码框、系统提权、接地失败/元素找不到、自愈耗尽）及通用兜底。
+     - 每类内置 2-3 条变体，语气克制、无奈、不卖惨（符合 D5"这种无奈反而更有活人感"）；随机选取避免机械重复。
+     - 话术采用结构化占位符（`{appName}`、`{targetElement}`、`{actionType}`）动态替换，末尾标注中性占位标语「（正式话术库待俊凯过目定稿）」。
+  2. **Watchdog 接线 (`automation/healing/SelfHealingWatchdog.kt`, `HealingModels.kt`)**:
+     - `WatchdogVerdict.Unrecoverable` 增加可选 `honestNarrative: String?` 字段。
+     - `SelfHealingWatchdogImpl` 在三次重试或回退耗尽判定 Unrecoverable 时，自动注入并调用 `HonestNarrator` 产出人设化坦白文案。
+  3. **Gatekeeper 拒绝路径与结果模型透传 (`HelixGuiCoordinator.kt`, `TaskExecutionModels.kt`)**:
+     - `TaskExecutionState.Failed` 与 `TaskExecutionResult.Failure` 增加可选 `honestNarrative: String?` 字段。
+     - `HelixGuiCoordinatorImpl` 注入 `HonestNarrator`，在 Gatekeeper `PhysicalBlocked` 分支将 `honestReason` 升级为经 `HonestNarrator` 渲染的完整坦白文案，同时在 `errorReason` 保留原始 `rule` 与 `reason` 供内部排查。
+     - 全面覆盖隐私黑屏熔断 (`EmptyReason.PRIVACY_BLACKOUT`)、接地失败 (`GroundingResult.NotFound`)、看门狗耗尽、手势拦截、文本注入拦截等各失败路径。
+  4. **日志纪律与隐私保护**:
+     - `rule`、`technicalReason`、`targetPackage`、`scenario` 通过 `XiaoxiLog.w` 记入环形日志缓冲，`honestNarrative` 透传至用户可见输出。
+     - `extraInfo`（含用户输入明文、密码、卡号等私密数据）严格物理隔离，绝不进入任何日志。
+  5. **批次 2 备注修复**:
+     - 成功清理 `ProhibitedZones.kt` 中 `com.tencent.wepay` 幻觉包名行，并同步更新单测集合大小断言。
+- **全量测试与验收汇总**:
+  - **批次 3 初始基线**: 562 个测试
+  - **批次 3 交付后**: 578 个测试（净增 16 个测试用例，覆盖 6 大场景模板、变体机制、占位符替换、Unrecoverable 接线、协调器物理熔断透传、日志纪律与 extraInfo 防泄露断言）
+  - **测试通过率**: 100%（578 passed, 0 failed, 0 skipped/ignored）
+  - **硬约束检查**: 全部严格恪守，无超范围修改，未修改 `perception/**`, `proactivity/**`, `emotion/**`, `persona/**`, `memory/**`, `network/**`, PRD, `docs/**`, `FinancialGatekeeper.kt` 判定逻辑；未引入新依赖；未修改 `AndroidManifest.xml`；未执行 push/reset/checkout/文件删除。
+
 
 
 

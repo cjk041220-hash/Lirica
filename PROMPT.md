@@ -38,3 +38,4 @@
 - 2026-09-27 [批次3-1]: 完成 HonestNarrator 话术模板层（6大类场景+通用兜底，每类2-3条变体，中性占位标语，占位符替换，随机机制），删除 ProhibitedZones wepay 幻觉包名；单测 10 项全部通过，全量 572 个测试全绿。
 - 2026-09-27 [批次3-2]: 接线 SelfHealingWatchdog 与坦白文案透传；WatchdogVerdict.Unrecoverable、TaskExecutionState.Failed、TaskExecutionResult.Failure 增加可选 honestNarrative 字段；新增 Watchdog 接线单测，全量 574 个测试全绿。
 - 2026-09-27 [批次3-3]: HelixGuiCoordinator 接入 Gatekeeper 拒绝路径坦白文案渲染（保留原始 rule 字段供日志）；同时覆盖隐私熔断、接地未找到、看门狗自愈耗尽等各失败分支；新增协调器单测，全量 576 个测试全绿。
+- 2026-09-27 [批次3-4]: 落实日志纪律（rule/technicalReason 进系统日志，honestNarrative 进输出，extraInfo 严格物理隔离绝不进日志）；完成 PROGRESS.md 与专项单测，全量 578 个测试全绿。
