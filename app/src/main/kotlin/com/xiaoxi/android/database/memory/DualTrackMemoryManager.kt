@@ -5,6 +5,7 @@ import com.xiaoxi.android.database.entity.SelfExperienceEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.entity.UserMemoryEntity
 import com.xiaoxi.android.database.entity.WorldviewEntity
+import com.xiaoxi.android.memory.retrieval.HybridMemoryRetriever
 import com.xiaoxi.android.perception.model.PerceptionSnapshot
 import com.xiaoxi.android.persona.MapBasedPromptAssembler
 import com.xiaoxi.android.persona.MapContextInput
@@ -19,17 +20,33 @@ import com.xiaoxi.android.persona.PhiMiddleware
  * 3. 念头池: Unspoken Thoughts - 碎片念头、自然衰减与紧急度优先
  * 4. 会话轨: Chat Dialogues - 多轮历史归档
  * 5. 世界观轨: Worldview Entities - 高层综合认知
+ * 6. 向量融合检索: HybridMemoryRetriever (D21) - 向量召回 top-20 + 六维精排
  *
  * 为 PhiMiddleware 动态上下文装配提供完备的高质量认知活水。
  */
 class DualTrackMemoryManager(
-    private val database: XiaoxiDatabase
+    private val database: XiaoxiDatabase,
+    private val hybridRetriever: HybridMemoryRetriever? = null
 ) {
     private val userMemoryDao = database.userMemoryDao()
     private val selfExperienceDao = database.selfExperienceDao()
     private val unspokenThoughtDao = database.unspokenThoughtDao()
     private val chatDialogueDao = database.chatDialogueDao()
     private val worldviewDao = database.worldviewDao()
+
+    /**
+     * 批次 2.5 新增：检索融合接口（向量召回 top-20 → MemoryScorer 六维重排 → top-N）
+     * 若未装配 hybridRetriever，安全降级回退至基于 2-gram 的 recallUserMemories。
+     */
+    suspend fun retrieve(
+        query: String,
+        topK: Int = 10,
+        nowTs: Long = System.currentTimeMillis(),
+        moodValence: Float? = null
+    ): List<UserMemoryEntity> {
+        return hybridRetriever?.retrieve(query, topK, nowTs, moodValence)
+            ?: recallUserMemories(query, topK, moodValence, nowTs)
+    }
 
     /**
      * 用户轨记忆二段分层召回 (Two-Tier Recall)

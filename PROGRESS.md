@@ -69,6 +69,37 @@
   - `MemoryEmbeddingDaoTest`: Room 持久化写入、读取反序列化、按 track 查询、冷启动载入全部通过。
   - `MigrationTest`: v1 -> v2 -> v3 迁移链完整性验证通过。
 
+## 6. 检索融合接口实现与验证
+
+- **核心实现**: `HybridMemoryRetriever`
+- **检索流程**:
+  1. **向量粗排 (Dense Vector Recall)**: 端侧 `LiricaEmbeddingModel` 计算输入 query 的 512 维归一化向量，在 `MemoryVectorStore` 中暴力点积检索召回 top-20 最优候选（严格遵照 PRD §3 D21 与批次 2.5 规格）。
+  2. **认知精排 (Cognitive Re-ranking)**: 候选集无损接入既有 `MemoryScorer.calculateScore(...)` 进行六维加权评估（时间衰减、访问热度、最近使用、重要度、字符 2-gram 话题重叠、情绪亲和度），不修改 `MemoryScorer.kt` 既有代码，融合向量相似度进行综合评分排序。
+  3. **截断与输出**: 取综合打分最高的前 top-N (topK) 实体输出。
+  4. **入梦重算与双轨协同**: 提供 `recomputeAllVectors()` 与 `indexMemories()` 供入梦流水线对齐重算，并为 `DualTrackMemoryManager` 提供 `retrieve` 融合调用。
+- **单测断言验证结果**:
+  - **"周董"召回"喜欢周杰伦"对比测试 (`testJayChouSemanticRecallContrast`)**:
+    - 纯字符 2-gram 话题重叠度 = 0.0（验证传统基于关键词/字符的分词方法完全失灵）
+    - 端侧向量融合检索 `retrieve(query = "周董", topK = 1)` 成功精准召回 "喜欢周杰伦" 作为第一名
+    - 相似度显著度断言通过（语义相似度 > 0.4，总分大幅领先无关记忆）
+  - **Top-20 候选粗排与精排测试 (`testVectorRecallTop20AndMemoryScorerRerank`)**: 验证从 25+ 候选集中取 top-20 并由 MemoryScorer 正确精排。
+  - **空 query 与空数据库鲁棒性测试**: 全部通过。
+  - **双轨架构协同测试 (`testDualTrackMemoryManagerWiring`)**: `DualTrackMemoryManager.retrieve` 正确装配。
+  - **入梦重算向量测试 (`testRecomputeAllVectors`)**: 向量重算全量写入通过。
+
+## 7. 全量测试与验收汇总
+
+- **初始基线**: 533 个测试
+- **批次 2.5 交付后**: 562 个测试（净增 29 个测试用例）
+- **测试通过率**: 100%（562 passed, 0 failed, 0 skipped/ignored）
+- **硬约束检查**:
+  1. 模型仅从 `hf-mirror.com` 下载 INT8 量化模型（24.0MB），经校验无损坏；
+  2. 依赖仅引入 `com.microsoft.onnxruntime:onnxruntime-android:1.19.2`（宿主单测仅引入对应官方 JVM 运行时包）；
+  3. 未修改 `MemoryScorer.kt` 既有实现；未修改 `proactivity/**`, `emotion/**`, `persona/**`, `automation/**`, `perception/**`, `network/**`, PRD, `docs/**`；
+  4. 未引入任何其他额外第三方依赖，未执行删除文件、reset、checkout 或 push；
+  5. `.gitignore` 正确配置忽略 `*.onnx`，仅小文本资产 `tokenizer.json` 入库。
+
+
 
 
 

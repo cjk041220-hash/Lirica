@@ -45,6 +45,8 @@
 - 3 / 完成纯 Kotlin 零依赖 BERT WordPiece 分词器 (BertWordPieceTokenizer) 实现与词表解析，选型理由写入 PROGRESS.md，新增单测全绿 (541 passed)
 - 4 / 完成 EmbeddingModel 接口与 LiricaEmbeddingModel 封装（线程数限 2、Mean Pooling、L2 归一化），维度=512、确定性、非零模长、相对相似度 ("周董" 0.6678 > "天气不错" 0.3099)、推理延迟 (<2ms/条) 单测全绿 (548 passed)
 - 5 / 完成 MemoryVectorStore（纯 Kotlin 暴力余弦向量检索，5000条向量检索耗时 ~1ms）与 Room memory_embeddings 表注册 (v3 及 MIGRATION_2_3)，选型理由写入 PROGRESS.md，单测全绿 (556 passed)
+- 6 / 完成 HybridMemoryRetriever 融合检索（向量召回 top-20 → MemoryScorer 六维重排 → 返回 top-N）与 DualTrackMemoryManager.retrieve 接线，核心验收用例（"周董"召回"喜欢周杰伦"对比测试）与全量单元测试全绿通过 (562 passed)
+
 
 
 
