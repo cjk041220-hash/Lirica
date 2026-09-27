@@ -145,4 +145,45 @@ class GestureExecutorTest {
         assertEquals("该操作属于受限范围，已停止", gestureExecutor.lastHonestReason)
         io.mockk.verify(exactly = 0) { accessibilityService.dispatchGesture(any(), any(), any()) }
     }
+
+    @Test
+    fun testExecute_communicationAppTextInput_physicallyBlocked_returnsCancelled() = runTest {
+        val gesture = GestureSpec.Click(
+            x = 300f,
+            y = 500f,
+            targetPackage = "com.tencent.mm",
+            targetText = "发送消息",
+            isTextInput = true
+        )
+
+        val result = gestureExecutor.execute(gesture)
+        assertTrue(result is GestureResult.Cancelled)
+        val cancelled = result as GestureResult.Cancelled
+        assertEquals("该操作属于受限范围，已停止", cancelled.reason)
+        assertEquals("该操作属于受限范围，已停止", gestureExecutor.lastHonestReason)
+        io.mockk.verify(exactly = 0) { accessibilityService.dispatchGesture(any(), any(), any()) }
+    }
+
+    @Test
+    fun testExecute_communicationAppClick_allowed_proceedsToDispatch() = runTest {
+        val callbackSlot = slot<AccessibilityService.GestureResultCallback>()
+        every {
+            accessibilityService.dispatchGesture(any(), capture(callbackSlot), any())
+        } answers {
+            callbackSlot.captured.onCompleted(mockk())
+            true
+        }
+
+        val gesture = GestureSpec.Click(
+            x = 300f,
+            y = 500f,
+            targetPackage = "com.tencent.mm",
+            targetText = "朋友圈",
+            isTextInput = false
+        )
+
+        val result = gestureExecutor.execute(gesture)
+        assertTrue(result is GestureResult.Completed)
+        io.mockk.verify(atLeast = 1) { accessibilityService.dispatchGesture(any(), any(), any()) }
+    }
 }

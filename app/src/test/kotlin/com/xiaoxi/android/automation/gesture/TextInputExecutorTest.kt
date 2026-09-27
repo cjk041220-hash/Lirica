@@ -140,4 +140,39 @@ class TextInputExecutorTest {
         assertEquals("安全内容", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
         coVerify(exactly = 0) { gestureExecutor.execute(any()) }
     }
+
+    @Test
+    fun testInjectText_wechatApp_physicallyBlocked_doesNotTouchClipboard() = runTest {
+        clipboardManager.setPrimaryClip(ClipData.newPlainText("user", "我的原始消息"))
+
+        val node = mockk<AccessibilityNodeInfo>(relaxed = true)
+        every { node.packageName } returns "com.tencent.mm"
+        every { node.isEditable } returns true
+
+        val bounds = ElementBounds(100, 100, 300, 200)
+        val result = textInputExecutor.executeInject(node, bounds, "代发的消息", "com.tencent.mm")
+
+        assertTrue(result is TextInputResult.Rejected)
+        val rejected = result as TextInputResult.Rejected
+        assertEquals("RULE_COMMUNICATION_TEXT_INPUT_BLOCKED", rejected.rule)
+        assertEquals("该操作属于受限范围，已停止", rejected.honestReason)
+        assertEquals("该操作属于受限范围，已停止", textInputExecutor.lastHonestReason)
+
+        // 剪贴板完全未被污染，手势与无障碍注入完全未调用
+        assertEquals("我的原始消息", clipboardManager.primaryClip?.getItemAt(0)?.text?.toString())
+        coVerify(exactly = 0) { gestureExecutor.execute(any()) }
+        io.mockk.verify(exactly = 0) { node.performAction(any()) }
+    }
+
+    @Test
+    fun testInjectText_qqApp_physicallyBlocked() = runTest {
+        val node = mockk<AccessibilityNodeInfo>(relaxed = true)
+        every { node.packageName } returns "com.tencent.mobileqq"
+
+        val bounds = ElementBounds(100, 100, 300, 200)
+        val success = textInputExecutor.injectText(node, bounds, "QQ代发消息", "com.tencent.mobileqq")
+
+        assertEquals(false, success)
+        assertEquals("该操作属于受限范围，已停止", textInputExecutor.lastHonestReason)
+    }
 }

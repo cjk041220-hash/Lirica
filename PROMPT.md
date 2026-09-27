@@ -33,3 +33,4 @@
 ## 执行记录
 
 - 批次2-1 / 执行前置校验 / GestureExecutor 与 TextInputExecutor 动作执行前接入 FinancialGatekeeper 前置安全门控；命中禁止区直接拒绝并携带诚实原因（"该操作属于受限范围，已停止"）；GestureSpec 扩展只读元数据字段；TextInputExecutor 扩展结构化 TextInputResult；单元测试验证全量通过，./gradlew testDebugUnitTest (520 tests, 0 failures, 0 ignored) 全绿。
+- 批次2-2 / 通信代发拦截 / FinancialGatekeeper 扩充通信类应用包名集合（com.tencent.mm, com.tencent.mobileqq），对通信应用的文本输入/代发动作（INPUT / TEXT_INPUT / ACTION_SET_TEXT / ACTION_PASTE 及文本注入 GestureSpec）全面物理拦截（RULE_COMMUNICATION_TEXT_INPUT_BLOCKED），点击类动作放行；单测覆盖微信/QQ文本拦截与点击放行，./gradlew testDebugUnitTest (527 tests, 0 failures, 0 ignored) 全绿。

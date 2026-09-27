@@ -160,4 +160,44 @@ class FinancialGatekeeperTest {
         assertTrue(decision is GatekeeperDecision.Allowed)
         assertEquals(RiskLevel.SAFE, (decision as GatekeeperDecision.Allowed).riskLevel)
     }
+
+    @Test
+    fun testEvaluate_communicationApp_wechatTextInput_physicallyBlocked() {
+        val action = ProposedAction(
+            actionType = "INPUT",
+            targetText = "今晚一起吃饭吗",
+            currentPackage = "com.tencent.mm"
+        )
+        val decision = gatekeeper.evaluate(action)
+        assertTrue(decision is GatekeeperDecision.PhysicalBlocked)
+        val blocked = decision as GatekeeperDecision.PhysicalBlocked
+        assertEquals("RULE_COMMUNICATION_TEXT_INPUT_BLOCKED", blocked.rule)
+        assertEquals("该操作属于受限范围，已停止", blocked.honestReason)
+    }
+
+    @Test
+    fun testEvaluate_communicationApp_qqTextInput_physicallyBlocked() {
+        val action = ProposedAction(
+            actionType = "ACTION_SET_TEXT",
+            targetText = "收到",
+            currentPackage = "com.tencent.mobileqq"
+        )
+        val decision = gatekeeper.evaluate(action)
+        assertTrue(decision is GatekeeperDecision.PhysicalBlocked)
+        val blocked = decision as GatekeeperDecision.PhysicalBlocked
+        assertEquals("RULE_COMMUNICATION_TEXT_INPUT_BLOCKED", blocked.rule)
+        assertEquals("该操作属于受限范围，已停止", blocked.honestReason)
+    }
+
+    @Test
+    fun testEvaluate_communicationApp_clickAction_notBlocked() {
+        val action = ProposedAction(
+            actionType = "CLICK",
+            targetText = "发现",
+            currentPackage = "com.tencent.mm"
+        )
+        val decision = gatekeeper.evaluate(action)
+        assertTrue(decision is GatekeeperDecision.Allowed)
+        assertEquals(RiskLevel.SAFE, (decision as GatekeeperDecision.Allowed).riskLevel)
+    }
 }

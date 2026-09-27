@@ -19,7 +19,10 @@ data class ProposedAction(
         get() = actionType.equals("INPUT", ignoreCase = true) ||
                 actionType.equals("TEXT_INPUT", ignoreCase = true) ||
                 actionType.equals("ACTION_SET_TEXT", ignoreCase = true) ||
-                actionType.equals("ACTION_PASTE", ignoreCase = true)
+                actionType.equals("ACTION_PASTE", ignoreCase = true) ||
+                actionType.contains("INPUT", ignoreCase = true) ||
+                actionType.contains("PASTE", ignoreCase = true) ||
+                extraInfo["isTextInput"]?.toBoolean() == true
 }
 
 data class RiskDetails(
