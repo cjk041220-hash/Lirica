@@ -15,7 +15,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 2. **获权情境感知（Ambient Sensing）**：在用户授权下，常驻感知前台应用、停留时长、屏幕文本结构与第三方系统通知，如同趴在屏幕边的伴侣。
 3. **真实手机操控（Device Manipulation）**：结合 Android 无障碍服务（`AccessibilityService`）实现原子手势模拟与跨应用自动化代行；视觉定位与穿透执行在路线图中（见能力状态表）。
 4. **自主生活与主动性（Proactive Living）**：具备“关于自己”的独立记忆轨（Self-Track），闲时自主上网阅读趣闻，结合情境感知在合适时机主动搭话与吐槽，异常感知关心（深夜/久未出现）带冷却台账。
-5. **本地优先与隐私安全（Local-First）**：无中心化服务器，所有记忆与屏幕数据端侧闭环，具备金融与密码框物理熔断防护。用户自备 Key（BYOK）为 experimental 能力，尚未开放配置入口。
+5. **本地优先与隐私安全（Local-First）**：无中心化服务器，所有记忆与屏幕数据端侧闭环，具备金融与密码框物理熔断防护。用户自备 Key（BYOK）多模型网关已全面落地并开放设置入口与首启引导。
 
 ### 📊 能力状态标注表
 
@@ -39,7 +39,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
 | 网页搜索 / 地图 / 塔罗 / 生理周期 | 🗺️ 规划中 | 见 M3.6 规划，原参考源已封存入 Git 历史，Android 侧待原生落地 |
-| BYOK 多模型网关（OpenAI 兼容 / Anthropic） | 🗺️ 规划中 | 当前主链路直连 DeepSeek（`network/XiaoxiLlmClient.kt`）；`ByokSettingsRepository` 为实验中未接线 |
+| BYOK 多模型网关（OpenAI 兼容 / Anthropic） | ✅ 已实现 | `network/gateway/*`（`XiaoxiLlmGateway`、`OpenAiProtocolAdapter`、`AnthropicProtocolAdapter`）、`ui/settings/SettingsScreen.kt`、`ByokSettingsRepository.kt` |
 | 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
 
 ---
