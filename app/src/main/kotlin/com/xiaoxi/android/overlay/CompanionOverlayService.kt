@@ -24,6 +24,8 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.lifecycleScope
@@ -38,6 +40,7 @@ import com.xiaoxi.android.XiaoxiApplication
 import com.xiaoxi.android.automation.coordinator.ExecutionStepItem
 import com.xiaoxi.android.automation.coordinator.StepExecutionStatus
 import com.xiaoxi.android.automation.coordinator.TaskExecutionState
+import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.emotion.model.MoodState
 import com.xiaoxi.android.overlay.ui.DraftConfirmationCard
 import com.xiaoxi.android.overlay.ui.IcebreakerBubble
@@ -159,23 +162,36 @@ class CompanionOverlayService : LifecycleService() {
 
     private fun initViewModel() {
         val app = application as? XiaoxiApplication ?: return
-        expandViewModel = OverlayExpandViewModel(
-            unspokenThoughtDao = app.database.unspokenThoughtDao(),
-            emotionEngine = app.emotionEngine,
-            llmClient = app.llmClient,
-            memoryManager = app.memoryManager,
-            phiMiddleware = app.phiMiddleware,
-            humannessFilter = app.humannessFilter,
-            proactiveCoordinator = app.proactiveCoordinator,
-            // 2026-09-27 审计 P0 修复：悬浮窗链路必须注入 BYOK 仓库。
-            // 旧代码缺省 null → sendQuickMessage 回退 BuildConfig 内嵌 Key，
-            // 用户自备 Key 被完全旁路（release 无内嵌 Key 时静默失效）。
-            byokRepository = app.byokSettingsRepository
-        )
+        val factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return OverlayExpandViewModel(
+                    unspokenThoughtDao = app.database.unspokenThoughtDao(),
+                    emotionEngine = app.emotionEngine,
+                    llmClient = app.llmClient,
+                    memoryManager = app.memoryManager,
+                    phiMiddleware = app.phiMiddleware,
+                    humannessFilter = app.humannessFilter,
+                    proactiveCoordinator = app.proactiveCoordinator,
+                    // 2026-09-27 审计 P0 修复：悬浮窗链路必须注入 BYOK 仓库。
+                    byokRepository = app.byokSettingsRepository,
+                    chatDialogueDao = app.database.chatDialogueDao(),
+                    toolAgent = app.nativeToolAgent,
+                    memoryExtractor = MemoryExtractor(
+                        llmClient = app.llmClient,
+                        userMemoryDao = app.database.userMemoryDao(),
+                        llmConfig = app.backgroundLlmConfig,
+                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
+                    )
+                ) as T
+            }
+        }
+        expandViewModel = ViewModelProvider(serviceViewModelStore, factory)[OverlayExpandViewModel::class.java]
         // 生产装配契约：OverlayExpandViewModel 的可空参数仅测试豁免，
         // 本装配点关键依赖缺失即失败启动，杜绝"装配遗漏静默关功能"。
         requireNotNull(app.byokSettingsRepository) { "生产装配必须提供 byokSettingsRepository" }
         requireNotNull(expandViewModel?.proactiveCoordinator) { "生产装配必须提供 proactiveCoordinator" }
+        requireNotNull(app.nativeToolAgent) { "生产装配必须提供 nativeToolAgent" }
     }
 
     private fun setupOverlayView() {

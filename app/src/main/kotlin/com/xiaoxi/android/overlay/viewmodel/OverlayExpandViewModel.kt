@@ -3,13 +3,18 @@ package com.xiaoxi.android.overlay.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiaoxi.android.BuildConfig
+import com.xiaoxi.android.automation.agent.NativeToolAgent
 import com.xiaoxi.android.common.settings.ByokSettingsRepository
+import com.xiaoxi.android.database.dao.ChatDialogueDao
 import com.xiaoxi.android.database.dao.UnspokenThoughtDao
+import com.xiaoxi.android.database.entity.ChatDialogueEntity
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
+import com.xiaoxi.android.database.memory.MemoryExtractor
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.emotion.model.EmotionVector
 import com.xiaoxi.android.emotion.model.MoodState
+import com.xiaoxi.android.network.ToolCallAssembler
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
@@ -27,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * 悬浮伴生体展开面板与破冰念头协调 ViewModel
@@ -44,8 +50,16 @@ class OverlayExpandViewModel(
         provider = LlmProvider.DEEPSEEK,
         model = "deepseek-chat"
     ),
-    val byokRepository: ByokSettingsRepository? = null
+    val byokRepository: ByokSettingsRepository? = null,
+    private val chatDialogueDao: ChatDialogueDao? = null,
+    private val toolAgent: NativeToolAgent? = null,
+    private val memoryExtractor: MemoryExtractor? = null
 ) : ViewModel() {
+
+    companion object {
+        const val OVERLAY_SESSION_ID = "session_overlay_companion"
+        const val MAX_TOOL_ITERATIONS = 5
+    }
 
     private val _uiState = MutableStateFlow(
         OverlayExpandUiState(currentMood = emotionEngine.currentMood)
@@ -66,26 +80,32 @@ class OverlayExpandViewModel(
     fun processPerception(snapshot: PerceptionSnapshot, nowMs: Long = System.currentTimeMillis()) {
         val coordinator = proactiveCoordinator ?: return
         viewModelScope.launch {
-            val result = coordinator.coordinate(snapshot, nowMs)
-            when (result.level) {
-                ProactivityLevel.L2_ICEBREAKER_BUBBLE -> {
-                    _uiState.update { it.copy(icebreakerThought = result.thought) }
-                }
-                ProactivityLevel.L0_SILENT -> {
-                    // L0: 静默更新内部动力学，若已有破冰气泡且已被废弃/消费则清除
-                    if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
-                        _uiState.update { it.copy(icebreakerThought = null) }
+            try {
+                val result = coordinator.coordinate(snapshot, nowMs)
+                when (result.level) {
+                    ProactivityLevel.L2_ICEBREAKER_BUBBLE -> {
+                        _uiState.update { it.copy(icebreakerThought = result.thought) }
+                    }
+                    ProactivityLevel.L0_SILENT -> {
+                        // L0: 静默更新内部动力学，若已有破冰气泡且已被废弃/消费则清除
+                        if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                            _uiState.update { it.copy(icebreakerThought = null) }
+                        }
+                    }
+                    ProactivityLevel.L1_MICRO_EXPRESSION -> {
+                        // L1: 微表情由 EmotionEngine 内部冲激驱动，不展示文字气泡
+                        if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                            _uiState.update { it.copy(icebreakerThought = null) }
+                        }
+                    }
+                    ProactivityLevel.L3_LIGHT_NOTIFICATION -> {
+                        // L3: 轻通知级别
                     }
                 }
-                ProactivityLevel.L1_MICRO_EXPRESSION -> {
-                    // L1: 微表情由 EmotionEngine 内部冲激驱动，不展示文字气泡
-                    if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
-                        _uiState.update { it.copy(icebreakerThought = null) }
-                    }
-                }
-                ProactivityLevel.L3_LIGHT_NOTIFICATION -> {
-                    // L3: 轻通知级别
-                }
+            } catch (e: CancellationException) {
+                // 协程正常取消，静默退出
+            } catch (e: Throwable) {
+                // 防御 Room 关闭或跨测试生命周期引起的 SQLite 异常漏出
             }
         }
     }
@@ -97,22 +117,28 @@ class OverlayExpandViewModel(
      */
     fun refreshIcebreaker(nowTs: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
-            unspokenThoughtDao.discardExpiredThoughts(nowTs)
-            val coordinator = proactiveCoordinator
-            if (coordinator != null) {
-                val result = coordinator.coordinateFirstFrame(nowTs)
-                _uiState.update {
-                    it.copy(
-                        icebreakerThought = if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) {
-                            result.thought
-                        } else {
-                            null
-                        }
-                    )
+            try {
+                unspokenThoughtDao.discardExpiredThoughts(nowTs)
+                val coordinator = proactiveCoordinator
+                if (coordinator != null) {
+                    val result = coordinator.coordinateFirstFrame(nowTs)
+                    _uiState.update {
+                        it.copy(
+                            icebreakerThought = if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) {
+                                result.thought
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                } else {
+                    val topList = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1)
+                    _uiState.update { it.copy(icebreakerThought = topList.firstOrNull()) }
                 }
-            } else {
-                val topList = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1)
-                _uiState.update { it.copy(icebreakerThought = topList.firstOrNull()) }
+            } catch (e: CancellationException) {
+                // 协程正常取消，静默退出
+            } catch (e: Throwable) {
+                // 忽略底层异常
             }
         }
     }
@@ -180,7 +206,7 @@ class OverlayExpandViewModel(
     }
 
     /**
-     * 发送快速轻量消息并打字机流式回传
+     * 发送快速轻量消息并打字机流式回传（支持多轮历史、持久化、工具调用与记忆抽取）
      */
     fun sendQuickMessage(text: String) {
         val trimmed = text.trim()
@@ -197,6 +223,23 @@ class OverlayExpandViewModel(
 
         viewModelScope.launch {
             try {
+                // 1. 本地持久化用户输入消息
+                val now = System.currentTimeMillis()
+                val userEntity = ChatDialogueEntity(
+                    sessionId = OVERLAY_SESSION_ID,
+                    role = ChatDialogueEntity.ROLE_USER,
+                    content = trimmed,
+                    timestamp = now
+                )
+                chatDialogueDao?.insert(userEntity)
+
+                // 2. 加载最近历史多轮会话
+                val recentDialogues = chatDialogueDao?.getRecentBySession(OVERLAY_SESSION_ID, limit = 6) ?: emptyList()
+                val history = recentDialogues
+                    .filter { it.content != trimmed || it.timestamp != now }
+                    .reversed()
+                    .map { ChatMessage(role = it.role, content = it.content) }
+
                 val currentMood = emotionEngine.currentMood
                 val dynamicContext = memoryManager.assembleDynamicContext(
                     query = trimmed,
@@ -206,12 +249,12 @@ class OverlayExpandViewModel(
                 val userMsg = ChatMessage(role = "user", content = trimmed)
                 val assembledMessages = phiMiddleware.assemble(
                     dynamicContext = dynamicContext,
-                    historyMessages = listOf(userMsg),
+                    historyMessages = history + userMsg,
                     moodState = currentMood,
-                    charName = "Lirica"
+                    charName = "Lirica",
+                    includeToolPersonaContract = toolAgent != null
                 )
 
-                val accumulated = StringBuilder()
                 val effectiveConfig = byokRepository?.getEffectiveLlmConfig() ?: llmConfig
                 if (effectiveConfig.apiKey.isBlank()) {
                     // 2026-09-27 审计 P0 修复：无 Key 时不再静默吞掉，给出用户可见错误态
@@ -224,21 +267,66 @@ class OverlayExpandViewModel(
                     return@launch
                 }
 
-                llmClient.streamChat(effectiveConfig, assembledMessages).collect { event ->
-                    when (event) {
-                        is LlmStreamEvent.Token -> {
-                            accumulated.append(event.text)
-                            _uiState.update { it.copy(streamingReply = accumulated.toString()) }
+                // 3. 多轮流式打字机累积与系统工具闭环
+                var conversationMessages = assembledMessages
+                var iteration = 0
+                val priorRoundsText = StringBuilder()
+                var finalText = ""
+
+                while (iteration < MAX_TOOL_ITERATIONS) {
+                    iteration++
+                    val accumulated = StringBuilder()
+                    val toolAssembler = ToolCallAssembler()
+
+                    llmClient.streamChat(
+                        config = effectiveConfig,
+                        messages = conversationMessages,
+                        tools = toolAgent?.declaredTools
+                    ).collect { event ->
+                        when (event) {
+                            is LlmStreamEvent.Token -> {
+                                accumulated.append(event.text)
+                                val cur = if (priorRoundsText.isNotEmpty()) "$priorRoundsText\n$accumulated" else accumulated.toString()
+                                _uiState.update { it.copy(streamingReply = cur) }
+                            }
+                            is LlmStreamEvent.ToolCallChunk -> {
+                                toolAssembler.appendChunk(event)
+                            }
+                            is LlmStreamEvent.Error -> {
+                                throw event.throwable
+                            }
+                            else -> {}
                         }
-                        is LlmStreamEvent.Error -> {
-                            throw event.throwable
+                    }
+
+                    val completedCalls = toolAssembler.getCompletedToolCalls()
+                    if (completedCalls.isNotEmpty() && toolAgent != null) {
+                        val roundContent = accumulated.toString()
+                        if (roundContent.isNotBlank()) {
+                            if (priorRoundsText.isNotEmpty()) priorRoundsText.append("\n")
+                            priorRoundsText.append(roundContent)
                         }
-                        else -> {}
+
+                        val assistantMsg = ChatMessage(
+                            role = "assistant",
+                            content = roundContent.ifBlank { null },
+                            toolCalls = completedCalls
+                        )
+
+                        val toolResults = toolAgent.executeToolCalls(completedCalls)
+                        val toolMessages = toolResults.map { it.toChatMessage() }
+                        conversationMessages = conversationMessages + assistantMsg + toolMessages
+                    } else {
+                        finalText = if (priorRoundsText.isNotEmpty()) {
+                            if (accumulated.isNotEmpty()) "$priorRoundsText\n$accumulated" else priorRoundsText.toString()
+                        } else {
+                            accumulated.toString()
+                        }
+                        break
                     }
                 }
 
-                val raw = accumulated.toString()
-                val filtered = humannessFilter.filter(raw, currentMood)
+                val filtered = humannessFilter.filter(finalText, currentMood)
                 _uiState.update {
                     it.copy(
                         streamingReply = filtered.filteredText,
@@ -246,8 +334,21 @@ class OverlayExpandViewModel(
                     )
                 }
 
-                // 微冲激情绪引擎
-                emotionEngine.applyStimulus(EmotionVector(0.05f, 0.05f))
+                // 4. 持久化助手回复
+                val assistantEntity = ChatDialogueEntity(
+                    sessionId = OVERLAY_SESSION_ID,
+                    role = ChatDialogueEntity.ROLE_ASSISTANT,
+                    content = filtered.filteredText,
+                    timestamp = System.currentTimeMillis()
+                )
+                chatDialogueDao?.insert(assistantEntity)
+
+                // 5. 触发长期记忆抽取
+                memoryExtractor?.maybeExtract(trimmed, filtered.filteredText)
+
+                // 6. 情绪动态冲激（D22 情绪混合架构）
+                val dynamicStimulus = emotionEngine.evaluateTextStimulus(trimmed, filtered.filteredText)
+                emotionEngine.applyStimulus(dynamicStimulus)
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isStreaming = false) }
                 throw e

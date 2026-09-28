@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
@@ -74,5 +75,18 @@ class KeepAliveServiceTest {
         assertEquals(Service.START_NOT_STICKY, startResult)
 
         serviceController.destroy()
+    }
+
+    @Test
+    fun testStartAndStopStaticHelpers() {
+        KeepAliveService.start(application)
+        val startedServiceIntent = shadowOf(application).nextStartedService
+        assertNotNull(startedServiceIntent)
+        assertEquals(KeepAliveService::class.java.name, startedServiceIntent.component?.className)
+
+        KeepAliveService.stop(application)
+        val stopServiceIntent = shadowOf(application).nextStartedService
+        assertNotNull(stopServiceIntent)
+        assertEquals(KeepAliveService.ACTION_STOP_SERVICE, stopServiceIntent.action)
     }
 }

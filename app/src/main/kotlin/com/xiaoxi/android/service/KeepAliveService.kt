@@ -108,6 +108,38 @@ class KeepAliveService : LifecycleService() {
         const val ACTION_START_OVERLAY = "com.xiaoxi.android.action.START_OVERLAY"
 
         /**
+         * 启动伴生保活服务（Android 8.0+ 自动提权为前台服务）
+         */
+        fun start(context: Context) {
+            try {
+                val intent = Intent(context, KeepAliveService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                Log.i(TAG, "KeepAliveService start requested")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start KeepAliveService", e)
+            }
+        }
+
+        /**
+         * 停止伴生保活服务与常驻悬浮窗
+         */
+        fun stop(context: Context) {
+            try {
+                val intent = Intent(context, KeepAliveService::class.java).apply {
+                    action = ACTION_STOP_SERVICE
+                }
+                context.startService(intent)
+                Log.i(TAG, "KeepAliveService stop requested")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop KeepAliveService", e)
+            }
+        }
+
+        /**
          * 创建 Android 8.0+ 前台通知渠道
          */
         fun createNotificationChannel(context: Context) {

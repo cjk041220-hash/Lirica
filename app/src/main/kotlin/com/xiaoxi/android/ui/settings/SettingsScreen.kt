@@ -2,6 +2,7 @@ package com.xiaoxi.android.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -68,6 +69,7 @@ import com.xiaoxi.android.network.gateway.ConnectivityResult
 import com.xiaoxi.android.network.gateway.LlmConnectivityTester
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.network.model.LlmProvider
+import com.xiaoxi.android.service.KeepAliveService
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -353,6 +355,66 @@ fun SettingsScreen(
                                 context.startActivity(intent)
                             }
                         )
+                    }
+                }
+            }
+
+            // 模块 2.5：伴生悬浮窗与常驻保活控制 (P0 接线)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("🪐 桌面伴生体与常驻保活", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "控制跨应用伴生悬浮窗及低能耗前台心智守护服务。开启后伴生体常驻桌面边缘。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    val canDrawOverlay = Settings.canDrawOverlays(context)
+                    if (!canDrawOverlay) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "⚠️ 尚未授予「悬浮窗权限」，点击下方权限体检授权后方可启动悬浮窗。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (Settings.canDrawOverlays(context)) {
+                                    KeepAliveService.start(context)
+                                    Toast.makeText(context, "伴生保活与悬浮窗已启动", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "请先在上方授予悬浮窗权限", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            enabled = canDrawOverlay,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("启动伴生体")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                KeepAliveService.stop(context)
+                                Toast.makeText(context, "伴生保活服务已停止", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("停止伴生服务")
+                        }
                     }
                 }
             }

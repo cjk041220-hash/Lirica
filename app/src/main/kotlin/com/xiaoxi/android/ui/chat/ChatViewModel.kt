@@ -425,8 +425,9 @@ class ChatViewModel(
                 // 7.2 异步触发长期记忆抽取：LLM 结构化提取，失败静默不影响对话
                 memoryExtractor?.maybeExtract(trimmed, finalText)
 
-                // 8. 情绪微调冲激（交互产生正向共鸣）
-                emotionEngine.applyStimulus(EmotionVector(valence = 0.05f, arousal = 0.05f))
+                // 8. 情绪动态冲激（依据文本情感自适应激发，D22 情绪混合架构）
+                val dynamicStimulus = emotionEngine.evaluateTextStimulus(trimmed, finalText)
+                emotionEngine.applyStimulus(dynamicStimulus)
 
             } catch (e: CancellationException) {
                 _uiState.update { state -> state.copy(isStreaming = false) }

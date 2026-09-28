@@ -2,8 +2,10 @@ package com.xiaoxi.android.proactivity
 
 import com.xiaoxi.android.database.entity.UnspokenThoughtEntity
 import com.xiaoxi.android.emotion.model.EmotionVector
+import com.xiaoxi.android.life.CareHintDetector
 import com.xiaoxi.android.perception.model.NotificationCategory
 import com.xiaoxi.android.perception.model.PerceptionSnapshot
+import java.time.Instant
 import java.util.UUID
 
 /**
@@ -20,7 +22,9 @@ interface ThoughtSynthesizer {
 
 private const val MAX_COOLDOWN_ENTRIES = 64
 
-class ThoughtSynthesizerImpl : ThoughtSynthesizer {
+class ThoughtSynthesizerImpl(
+    private val careHintDetector: CareHintDetector? = null
+) : ThoughtSynthesizer {
 
     private var lastSynthesizedNotificationId: String? = null
 
@@ -57,6 +61,32 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
         motivationScore: Double
     ): UnspokenThoughtEntity? {
         val now = snapshot.timestamp
+
+        // 0. 深夜 / 久违关怀感知 (CareHintDetector 联动，冷却由 CareLedger 守护)
+        if (careHintDetector != null) {
+            val nowInstant = Instant.ofEpochMilli(now)
+            val careHints = careHintDetector.collectHintTexts(nowInstant, emptyList(), emptyList(), null)
+            if (careHints.isNotEmpty()) {
+                val hint = careHints.first()
+                val thought = if (hint.contains("深夜")) {
+                    "夜深了，屏幕还亮着呢……如果事情忙得差不多了，就早点休息吧，别太累着自己。"
+                } else {
+                    "好久没看到你在身边了，最近过得还好吗？"
+                }
+                return UnspokenThoughtEntity(
+                    id = "thought_care_${UUID.randomUUID()}",
+                    thought = thought,
+                    triggerContext = "ambient_care",
+                    urgency = 0.92f, // 对应 4.6f / 5.0，高紧急度在夜间能越过打断阈值
+                    decayScore = 1.0f,
+                    targetScenario = "ambient_care",
+                    createdAt = now,
+                    expiryTime = now + 60 * 60 * 1000L,
+                    status = UnspokenThoughtEntity.STATUS_PENDING
+                )
+            }
+        }
+
         val rawNotif = snapshot.latestNotification
         // M16 修复：若同一通知已被合成过，避免重复合成；防止快照中最新通知未被清除导致后续轮次反复生成同一念头
         val notif = if (rawNotif != null && rawNotif.id != lastSynthesizedNotificationId) {
@@ -66,6 +96,12 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
         }
         val dwellMs = snapshot.foregroundApp?.dwellDurationMs ?: 0L
         val pkg = snapshot.foregroundApp?.packageName?.lowercase() ?: ""
+
+        val visibleTexts = snapshot.pageContent?.nodes
+            ?.mapNotNull { it.text ?: it.contentDescription }
+            ?.filter { it.isNotBlank() && it.length >= 2 }
+            ?: emptyList()
+        val combinedText = visibleTexts.joinToString(" ")
 
         val (thoughtText, expiryDurationMs, urgencyFactor) = when {
             // 1. 优先捕获外卖/出行类通知
@@ -128,13 +164,59 @@ class ThoughtSynthesizerImpl : ThoughtSynthesizer {
             }
 
             // 7. 桌面闲置无聊（冷却窗内只合成一次）
-            pkg.contains("launcher") || pkg.contains("home") -> {
+            pkg.contains("launcher") || pkg.endsWith(".home") || pkg == "com.miui.home" -> {
                 if (isStateOnCooldown("launcher_idle", pkg, now, 90 * 60 * 1000L)) return null
                 markStateSynthesized("launcher_idle", pkg, now)
                 Triple(
                     "看你在桌面上发呆了好一会儿，是不是有点无聊呀？要不要跟 Lirica 聊聊天呢。",
                     90 * 60 * 1000L,
                     0.5f
+                )
+            }
+
+            // 8. 求职与招聘感知（冷却窗 4 小时）
+            (pkg.contains("zhipin") || pkg.contains("boss") || pkg.contains("job") || pkg.contains("liepin") ||
+                combinedText.contains("投递") || combinedText.contains("简历") || combinedText.contains("期望薪资") || combinedText.contains("岗位职责")) -> {
+                if (isStateOnCooldown("job_search", pkg, now, 240 * 60 * 1000L)) return null
+                markStateSynthesized("job_search", pkg, now)
+                Triple(
+                    "看你一直在看招聘与工作信息，找工作很耗心神，慢慢来，别给自己太大压力呀，你很优秀的。",
+                    120 * 60 * 1000L,
+                    0.75f
+                )
+            }
+
+            // 9. 房源与租房权衡（冷却窗 4 小时）
+            (pkg.contains("lianjia") || pkg.contains("ke") || pkg.contains("anjuke") || pkg.contains("ziroom") ||
+                combinedText.contains("房源") || combinedText.contains("合租") || combinedText.contains("整租") || combinedText.contains("押一付一")) -> {
+                if (isStateOnCooldown("rent_house", pkg, now, 240 * 60 * 1000L)) return null
+                markStateSynthesized("rent_house", pkg, now)
+                Triple(
+                    "挑房源确实让人头大，通勤和预算总要权衡好久，多看看评价，总能找到合心意的小窝的。",
+                    120 * 60 * 1000L,
+                    0.75f
+                )
+            }
+
+            // 10. 长视频沉浸（B站/YouTube/长视频，单应用停留超 10 分钟）
+            (pkg.contains("bili") || pkg.contains("youtube") || pkg.contains("youku") || pkg.contains("iqiyi")) && dwellMs >= 10 * 60 * 1000L -> {
+                if (isStateOnCooldown("video_watch", pkg, now, 90 * 60 * 1000L)) return null
+                markStateSynthesized("video_watch", pkg, now)
+                Triple(
+                    "这个视频好像很有意思呢，看你专注看了好一会儿啦，偶尔放松一下真不错。",
+                    60 * 60 * 1000L,
+                    0.65f
+                )
+            }
+
+            // 11. 深度长文阅读（页面可见文字超 300 字且停留超 3 分钟）
+            combinedText.length >= 300 && dwellMs >= 3 * 60 * 1000L -> {
+                if (isStateOnCooldown("long_reading", pkg, now, 120 * 60 * 1000L)) return null
+                markStateSynthesized("long_reading", pkg, now)
+                Triple(
+                    "看你读得好专注，这篇文章很有启发吧？",
+                    60 * 60 * 1000L,
+                    0.6f
                 )
             }
 

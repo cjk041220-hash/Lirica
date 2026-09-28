@@ -27,12 +27,16 @@ import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.common.settings.ByokSettingsRepositoryImpl
 import com.xiaoxi.android.database.XiaoxiDatabase
+import com.xiaoxi.android.database.entity.UserMemoryEntity
 import com.xiaoxi.android.database.memory.DualTrackMemoryManager
+import com.xiaoxi.android.database.memory.MemoryVectorStore
 import com.xiaoxi.android.emotion.EmotionEngine
 import com.xiaoxi.android.life.CareHintDetector
 import com.xiaoxi.android.life.EventLifeTool
 import com.xiaoxi.android.life.SharedPreferencesCareLedger
 import com.xiaoxi.android.life.WeatherLifeTool
+import com.xiaoxi.android.memory.retrieval.HybridMemoryRetriever
+import com.xiaoxi.android.memory.retrieval.LiricaEmbeddingModel
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.perception.AccessibilityServiceHolder
@@ -64,6 +68,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 class XiaoxiApplication : Application() {
 
@@ -154,6 +159,7 @@ class XiaoxiApplication : Application() {
 
         database = XiaoxiDatabase.getInstance(this)
         memoryManager = DualTrackMemoryManager(database)
+        initVectorMemoryAsync()
         emotionEngine = EmotionEngine()
         llmClient = XiaoxiLlmClient()
         phiMiddleware = PhiMiddleware()
@@ -161,7 +167,14 @@ class XiaoxiApplication : Application() {
 
         startPerceptionPipeline()
 
-        unspokenThoughtManager = UnspokenThoughtManagerImpl(database.unspokenThoughtDao())
+        careHintDetector = CareHintDetector(
+            careLedger = SharedPreferencesCareLedger.create(this)
+        )
+
+        unspokenThoughtManager = UnspokenThoughtManagerImpl(
+            dao = database.unspokenThoughtDao(),
+            synthesizer = com.xiaoxi.android.proactivity.ThoughtSynthesizerImpl(careHintDetector = careHintDetector)
+        )
         silenceDecisionEngine = SilenceDecisionEngineImpl()
         proactiveCoordinator = ProactiveBubbleCoordinatorImpl(
             thoughtManager = unspokenThoughtManager,
@@ -259,10 +272,6 @@ class XiaoxiApplication : Application() {
             )
         )
 
-        careHintDetector = CareHintDetector(
-            careLedger = SharedPreferencesCareLedger.create(this)
-        )
-
         registerAutonomousLife()
     }
 
@@ -306,6 +315,51 @@ class XiaoxiApplication : Application() {
             unspokenThoughtDao = database.unspokenThoughtDao(),
             hardwareStateFlow = hardwareWatcher.hardwareState
         ).also { it.start(appScope) }
+    }
+
+    /**
+     * 异步装配端侧 BGE 向量模型与混合记忆检索器 (P0 接线)。
+     * 在 IO 协程中加载 Assets ONNX 模型与初始化内存向量库，规避阻塞主线程 onCreate。
+     * 若在 Robolectric 测试环境或设备不支持 native ONNX，安全捕获并降级维持 2-gram。
+     */
+    private fun initVectorMemoryAsync() {
+        appScope.launch {
+            try {
+                val vectorStore = MemoryVectorStore(database.memoryEmbeddingDao())
+                vectorStore.initFromDatabase()
+
+                val embeddingModel = runCatching {
+                    LiricaEmbeddingModel.createFromAssets(this@XiaoxiApplication)
+                }.getOrNull()
+
+                if (embeddingModel != null) {
+                    val retriever = HybridMemoryRetriever(
+                        embeddingModel = embeddingModel,
+                        vectorStore = vectorStore,
+                        userMemoryDao = database.userMemoryDao()
+                    )
+                    memoryManager.attachHybridRetriever(retriever)
+                    XiaoxiLog.i("XiaoxiApplication", "端侧 BGE 向量模型与混合记忆检索器异步装配成功")
+
+                    // 若向量库为空但数据库已有记忆，后台补齐向量索引
+                    val embeddingCount = database.memoryEmbeddingDao().count()
+                    val activeMemories = database.userMemoryDao().getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 500)
+                    if (embeddingCount < activeMemories.size) {
+                        val unindexed = activeMemories.filter { mem ->
+                            database.memoryEmbeddingDao().getByMemoryId(mem.id) == null
+                        }
+                        if (unindexed.isNotEmpty()) {
+                            retriever.indexMemories(unindexed)
+                            XiaoxiLog.i("XiaoxiApplication", "后台回填未索引记忆向量: ${unindexed.size} 条")
+                        }
+                    }
+                } else {
+                    XiaoxiLog.w("XiaoxiApplication", "端侧 BGE 向量模型加载未就绪或运行环境不支持，降级维持 2-gram 话题检索")
+                }
+            } catch (e: Throwable) {
+                XiaoxiLog.e("XiaoxiApplication", "端侧向量记忆库初始化异常", e)
+            }
+        }
     }
 
     /**

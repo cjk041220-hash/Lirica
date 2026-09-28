@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
@@ -28,6 +29,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.xiaoxi.android.common.logging.XiaoxiLog
 import com.xiaoxi.android.common.settings.ByokSettingsRepository
 import com.xiaoxi.android.database.memory.MemoryExtractor
+import com.xiaoxi.android.service.KeepAliveService
 import com.xiaoxi.android.ui.chat.ChatScreen
 import com.xiaoxi.android.ui.chat.ChatViewModel
 import com.xiaoxi.android.ui.onboarding.OnboardingScreen
@@ -88,7 +90,8 @@ class MainActivity : ComponentActivity() {
                     memoryExtractor = MemoryExtractor(
                         llmClient = app.llmClient,
                         userMemoryDao = app.database.userMemoryDao(),
-                        llmConfig = app.backgroundLlmConfig
+                        llmConfig = app.backgroundLlmConfig,
+                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
                     ),
                     toolAgent = app.nativeToolAgent,
                     careHintDetector = app.careHintDetector,
@@ -139,6 +142,9 @@ class MainActivity : ComponentActivity() {
                                     prefs.edit().putBoolean("byok_onboarding_completed", true).apply()
                                     // 首启引导完成即申请通知权限：此刻用户信任度最高
                                     ensureNotificationPermission()
+                                    if (Settings.canDrawOverlays(this@MainActivity)) {
+                                        KeepAliveService.start(this@MainActivity)
+                                    }
                                     currentScreen = AppNavScreen.CHAT
                                 }
                             )
@@ -165,6 +171,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = getSharedPreferences(ByokSettingsRepository.PREFS_NAME, Context.MODE_PRIVATE)
+        val isOnboardingCompleted = prefs.getBoolean("byok_onboarding_completed", false)
+        val app = application as? XiaoxiApplication
+        val hasKey = app?.byokSettingsRepository?.settings?.value?.hasValidKey ?: false
+        if ((isOnboardingCompleted || hasKey) && Settings.canDrawOverlays(this)) {
+            KeepAliveService.start(this)
         }
     }
 }

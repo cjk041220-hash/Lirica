@@ -2,6 +2,7 @@ package com.xiaoxi.android.database.memory
 
 import com.xiaoxi.android.database.dao.UserMemoryDao
 import com.xiaoxi.android.database.entity.UserMemoryEntity
+import com.xiaoxi.android.memory.retrieval.HybridMemoryRetriever
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.ChatMessage
 import com.xiaoxi.android.network.model.LlmConfig
@@ -24,7 +25,8 @@ class MemoryExtractor(
     private val llmConfig: LlmConfig,
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
     val throttleIntervalMs: Long = 180_000L,
-    val minTurnsAccumulated: Int = 3
+    val minTurnsAccumulated: Int = 3,
+    private val hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null
 ) {
 
     companion object {
@@ -232,6 +234,13 @@ class MemoryExtractor(
             }
         if (entities.isEmpty()) return 0
         entities.forEach { userMemoryDao.insert(it) }
+
+        // 批次 2.5/P0 贯通：抽取得到的新记忆异步建立端侧向量索引
+        hybridRetrieverProvider?.invoke()?.let { retriever ->
+            runCatching {
+                retriever.indexMemories(entities)
+            }
+        }
         return entities.size
     }
 

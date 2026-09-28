@@ -42,7 +42,8 @@ class SubconsciousDreamWorker(
                     chatDialogueDao = database.chatDialogueDao()
                 ),
                 llmClient = app?.llmClient,
-                llmConfig = app?.backgroundLlmConfig
+                llmConfig = app?.backgroundLlmConfig,
+                hybridRetriever = app?.memoryManager?.getHybridRetriever()
             )
             coordinator.runDreamCycle()
             Result.success()

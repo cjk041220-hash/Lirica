@@ -27,11 +27,15 @@ class AutonomousLifeWorker(
     override suspend fun doWork(): Result {
         return try {
             val database = XiaoxiDatabase.getInstance(applicationContext)
+            val app = applicationContext as? com.xiaoxi.android.XiaoxiApplication
             val diaryEngine = DiaryEngineImpl(
                 selfExperienceDao = database.selfExperienceDao(),
                 chatDialogueDao = database.chatDialogueDao()
             )
-            diaryEngine.generateDailyDiary()
+            diaryEngine.generateDailyDiary(
+                llmClient = app?.llmClient,
+                llmConfig = app?.backgroundLlmConfig
+            )
             Result.success()
         } catch (e: Exception) {
             Result.retry()

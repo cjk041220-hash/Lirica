@@ -26,13 +26,22 @@ import com.xiaoxi.android.persona.PhiMiddleware
  */
 class DualTrackMemoryManager(
     private val database: XiaoxiDatabase,
-    private val hybridRetriever: HybridMemoryRetriever? = null
+    private var hybridRetriever: HybridMemoryRetriever? = null
 ) {
     private val userMemoryDao = database.userMemoryDao()
     private val selfExperienceDao = database.selfExperienceDao()
     private val unspokenThoughtDao = database.unspokenThoughtDao()
     private val chatDialogueDao = database.chatDialogueDao()
     private val worldviewDao = database.worldviewDao()
+
+    /**
+     * 运行时动态挂载混合记忆检索器（支持异步加载 ONNX 模型后热挂载）
+     */
+    fun attachHybridRetriever(retriever: HybridMemoryRetriever) {
+        this.hybridRetriever = retriever
+    }
+
+    fun getHybridRetriever(): HybridMemoryRetriever? = hybridRetriever
 
     /**
      * 批次 2.5 新增：检索融合接口（向量召回 top-20 → MemoryScorer 六维重排 → top-N）
@@ -171,7 +180,7 @@ class DualTrackMemoryManager(
         preRecalledWorldviews: List<WorldviewEntity>? = null
     ): String? {
         val userMemories = preRecalledUserMemories
-            ?: recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)
+            ?: retrieve(query = query, topK = 5, nowTs = nowTs, moodValence = moodValence)
         val selfExperiences = preRecalledSelfExperiences
             ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
         val unspokenThoughts = preRecalledUnspokenThoughts
@@ -206,7 +215,7 @@ class DualTrackMemoryManager(
         preRecalledUnspokenThoughts: List<UnspokenThoughtEntity>? = null
     ): String? {
         val userMemories = preRecalledUserMemories
-            ?: recallUserMemories(query, limit = 5, moodValence = moodValence, nowTs = nowTs)
+            ?: retrieve(query = query, topK = 5, nowTs = nowTs, moodValence = moodValence)
         val selfExperiences = preRecalledSelfExperiences
             ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
         val unspokenThoughts = preRecalledUnspokenThoughts

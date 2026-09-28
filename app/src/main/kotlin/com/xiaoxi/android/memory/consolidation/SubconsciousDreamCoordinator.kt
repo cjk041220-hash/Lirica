@@ -5,6 +5,7 @@ import com.xiaoxi.android.database.dao.UnspokenThoughtDao
 import com.xiaoxi.android.database.dao.UserMemoryDao
 import com.xiaoxi.android.database.dao.WorldviewDao
 import com.xiaoxi.android.database.entity.UserMemoryEntity
+import com.xiaoxi.android.memory.retrieval.HybridMemoryRetriever
 import com.xiaoxi.android.network.XiaoxiLlmClient
 import com.xiaoxi.android.network.model.LlmConfig
 import com.xiaoxi.android.proactivity.DiaryEngine
@@ -43,7 +44,8 @@ class SubconsciousDreamCoordinator(
     private val emergenceSynthesizer: DreamEmergenceSynthesizer = DreamEmergenceSynthesizer(),
     private val llmClient: XiaoxiLlmClient? = null,
     private val llmConfig: LlmConfig? = null,
-    private val charName: String = "Lirica"
+    private val charName: String = "Lirica",
+    private val hybridRetriever: HybridMemoryRetriever? = null
 ) {
 
     suspend fun runDreamCycle(nowMs: Long = System.currentTimeMillis()): DreamCycleReport {
@@ -121,6 +123,9 @@ class SubconsciousDreamCoordinator(
             llmConfig = llmConfig
         )
         unspokenThoughtDao.insert(emergenceThought)
+
+        // 8. 流水线七：入梦流水线末端全量向量重算与索引刷新 (D21)
+        hybridRetriever?.recomputeAllVectors()
 
         return DreamCycleReport(
             originalCount = originalCount,

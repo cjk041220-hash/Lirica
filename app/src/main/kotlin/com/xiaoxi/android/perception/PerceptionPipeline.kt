@@ -100,9 +100,16 @@ class PerceptionPipeline(
                         perceivedSummary = buildPerceivedSummary(current.foregroundApp, screen, current.isPrivacyFusing)
                     )
 
-                    // 屏幕由息屏/锁屏变为解锁就绪，注入轻微唤醒与关注情绪冲激
+                    // 屏幕由息屏/锁屏变为解锁就绪，注入轻微唤醒与关注情绪冲激 (依据昼夜自适应)
                     if (prevState != ScreenState.UNLOCKED && screen.state == ScreenState.UNLOCKED) {
-                        emotionEngine?.applyStimulus(EmotionVector(valence = 0.05f, arousal = 0.05f))
+                        val cal = java.util.Calendar.getInstance()
+                        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                        val stimulus = if (hour in 0..4 || hour >= 23) {
+                            EmotionVector(valence = 0.05f, arousal = -0.10f) // 深夜安宁轻困
+                        } else {
+                            EmotionVector(valence = 0.05f, arousal = 0.05f)
+                        }
+                        emotionEngine?.applyStimulus(stimulus)
                     }
                 }
             }
