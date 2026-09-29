@@ -63,7 +63,7 @@
   - 表名: `memory_embeddings`
   - 主键: `memory_id` (TEXT)
   - 列: `track` (TEXT: 'user' / 'self'), `embedding` (BLOB, 2048字节小端序单精度浮点), `updated_at` (INTEGER)
-  - 数据库迁移: `XiaoxiDatabase` 版本升为 3，提供 `MIGRATION_2_3`
+  - 数据库迁移: `LiricaDatabase` 版本升为 3，提供 `MIGRATION_2_3`
 - **单测断言验证结果**:
   - `MemoryVectorStoreTest`: Top-K 排序正确性、双轨过滤 (Track User / Self)、删除与清空、5000 条向量性能压测 (<10ms) 全部通过。
   - `MemoryEmbeddingDaoTest`: Room 持久化写入、读取反序列化、按 track 查询、冷启动载入全部通过。
@@ -115,7 +115,7 @@
      - `HelixGuiCoordinatorImpl` 注入 `HonestNarrator`，在 Gatekeeper `PhysicalBlocked` 分支将 `honestReason` 升级为经 `HonestNarrator` 渲染的完整坦白文案，同时在 `errorReason` 保留原始 `rule` 与 `reason` 供内部排查。
      - 全面覆盖隐私黑屏熔断 (`EmptyReason.PRIVACY_BLACKOUT`)、接地失败 (`GroundingResult.NotFound`)、看门狗耗尽、手势拦截、文本注入拦截等各失败路径。
   4. **日志纪律与隐私保护**:
-     - `rule`、`technicalReason`、`targetPackage`、`scenario` 通过 `XiaoxiLog.w` 记入环形日志缓冲，`honestNarrative` 透传至用户可见输出。
+     - `rule`、`technicalReason`、`targetPackage`、`scenario` 通过 `LiricaLog.w` 记入环形日志缓冲，`honestNarrative` 透传至用户可见输出。
      - `extraInfo`（含用户输入明文、密码、卡号等私密数据）严格物理隔离，绝不进入任何日志。
   5. **批次 2 备注修复**:
      - 成功清理 `ProhibitedZones.kt` 中 `com.tencent.wepay` 幻觉包名行，并同步更新单测集合大小断言。

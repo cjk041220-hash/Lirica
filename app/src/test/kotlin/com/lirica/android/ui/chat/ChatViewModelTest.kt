@@ -1,0 +1,286 @@
+package com.lirica.android.ui.chat
+
+import app.cash.turbine.test
+import com.lirica.android.database.LiricaDatabase
+import com.lirica.android.database.dao.ChatDialogueDao
+import com.lirica.android.database.dao.ScheduledAlarmDao
+import com.lirica.android.database.entity.ChatDialogueEntity
+import com.lirica.android.database.entity.ScheduledAlarmEntity
+import com.lirica.android.database.entity.SelfExperienceEntity
+import com.lirica.android.database.entity.UnspokenThoughtEntity
+import com.lirica.android.database.entity.UserMemoryEntity
+import com.lirica.android.database.memory.DualTrackMemoryManager
+import com.lirica.android.emotion.EmotionEngine
+import com.lirica.android.emotion.model.EmotionVector
+import com.lirica.android.emotion.model.MoodState
+import com.lirica.android.life.CareEvent
+import com.lirica.android.life.CareHintDetector
+import com.lirica.android.network.LiricaLlmClient
+import com.lirica.android.network.model.LlmConfig
+import com.lirica.android.network.model.LlmStreamEvent
+import com.lirica.android.persona.HumannessFilter
+import com.lirica.android.persona.PhiMiddleware
+import com.lirica.android.persona.model.CharacterCard
+import io.mockk.slot
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class ChatViewModelTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    private val mockLlmClient = mockk<LiricaLlmClient>()
+    private val mockDatabase = mockk<LiricaDatabase>(relaxed = true)
+    private val mockChatDialogueDao = mockk<ChatDialogueDao>(relaxed = true)
+    private val mockMemoryManager = mockk<DualTrackMemoryManager>(relaxed = true)
+
+    private lateinit var emotionEngine: EmotionEngine
+    private lateinit var phiMiddleware: PhiMiddleware
+    private lateinit var humannessFilter: HumannessFilter
+    private lateinit var viewModel: ChatViewModel
+
+    @Before
+    fun setup() {
+        Dispatchers.setMain(testDispatcher)
+
+        emotionEngine = EmotionEngine(baseline = MoodState.CALM.defaultVector)
+        phiMiddleware = PhiMiddleware()
+        humannessFilter = HumannessFilter()
+
+        coEvery { mockChatDialogueDao.getRecentBySession(any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.assembleDynamicContext(any(), any(), any(), any()) } returns null
+
+        viewModel = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao
+        )
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun testInitialState() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+        val state = viewModel.uiState.value
+        assertEquals(MoodState.CALM, state.currentMood)
+        assertTrue(state.messages.isEmpty())
+        assertFalse(state.isStreaming)
+        assertNull(state.errorMessage)
+        assertFalse(state.isMoodDebugPanelVisible)
+        assertFalse(state.isCharacterCardDialogOpen)
+    }
+
+    @Test
+    fun testSendMessageStreamingAccumulation() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flow {
+            emit(LlmStreamEvent.Token("今天天气"))
+            emit(LlmStreamEvent.Token("真不错呀，"))
+            emit(LlmStreamEvent.Token("一起出去散步吧！"))
+            emit(LlmStreamEvent.Done("stop"))
+        }
+
+        viewModel.uiState.test {
+            assertEquals(0, awaitItem().messages.size)
+
+            viewModel.sendMessage("今天天气怎么样？")
+
+            // First emission: user message added & assistant message placeholder added
+            var item = awaitItem()
+            while (item.messages.size < 2) {
+                item = awaitItem()
+            }
+            assertEquals(2, item.messages.size)
+            assertEquals("今天天气怎么样？", item.messages[0].text)
+            assertEquals(MessageSender.USER, item.messages[0].sender)
+            assertEquals(MessageSender.ASSISTANT, item.messages[1].sender)
+            assertTrue(item.isStreaming)
+
+            // Streaming tokens accumulation
+            testScheduler.advanceUntilIdle()
+
+            val finalState = viewModel.uiState.value
+            assertFalse(finalState.isStreaming)
+            assertEquals(2, finalState.messages.size)
+            assertEquals("今天天气真不错呀，一起出去散步吧！", finalState.messages[1].text)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        coVerify { mockChatDialogueDao.insert(any()) }
+    }
+
+    @Test
+    fun testMemoryBadgeAssociation() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+
+        val mockUserMemory = UserMemoryEntity(
+            id = "mem_1",
+            content = "用户喜欢在晴天散步",
+            category = "爱好",
+            confidence = 1.0f,
+            importance = 9,
+            createdAt = System.currentTimeMillis()
+        )
+        val mockExperience = SelfExperienceEntity(
+            id = "exp_1",
+            title = "白鸽见闻",
+            content = "今天在公园看到一只可爱的白鸽",
+            domainTag = "见闻",
+            createdAt = System.currentTimeMillis()
+        )
+        val mockThought = UnspokenThoughtEntity(
+            id = "th_1",
+            thought = "想和用户聊聊公园的事",
+            urgency = 0.8f,
+            createdAt = System.currentTimeMillis(),
+            expiryTime = System.currentTimeMillis() + 3600_000
+        )
+
+        coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns listOf(mockUserMemory)
+        coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns listOf(mockExperience)
+        coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns listOf(mockThought)
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flowOf(
+            LlmStreamEvent.Token("真巧！"),
+            LlmStreamEvent.Done("stop")
+        )
+
+        viewModel.sendMessage("去散步")
+        testScheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(2, state.messages.size)
+        val assistantMsg = state.messages[1]
+        assertNotNull(assistantMsg.memoryBadge)
+        assertEquals(listOf("用户喜欢在晴天散步"), assistantMsg.memoryBadge?.userMemories)
+        assertEquals(listOf("今天在公园看到一只可爱的白鸽"), assistantMsg.memoryBadge?.selfExperiences)
+        assertEquals(listOf("想和用户聊聊公园的事"), assistantMsg.memoryBadge?.thoughts)
+        assertEquals(3, assistantMsg.memoryBadge?.totalCount)
+    }
+
+    @Test
+    fun testEmotionEngineStateFlowReflection() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+        assertEquals(MoodState.CALM, viewModel.uiState.value.currentMood)
+
+        // Stimulus pushing to HAPPY: high valence & high arousal
+        emotionEngine.applyStimulus(EmotionVector(0.9f, 0.6f))
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(MoodState.HAPPY, viewModel.uiState.value.currentMood)
+    }
+
+    @Test
+    fun testCharacterCardImport() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+        assertNull(viewModel.uiState.value.activeCharacterCard)
+
+        val card = CharacterCard(
+            name = "测试 Lirica",
+            description = "测试伴生助手",
+            personality = "温柔活泼"
+        )
+        viewModel.importCharacterCard(card)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("测试 Lirica", viewModel.uiState.value.activeCharacterCard?.name)
+    }
+
+    @Test
+    fun testErrorHandling() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flow {
+            emit(LlmStreamEvent.Error(RuntimeException("Connection timeout")))
+        }
+
+        viewModel.sendMessage("Hello")
+        testScheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isStreaming)
+        assertNotNull(state.errorMessage)
+        assertTrue(state.errorMessage!!.contains("Connection timeout"))
+    }
+
+    @Test
+    fun testCareHintWithScheduledExamCombo() = runTest(testDispatcher) {
+        val mockAlarmDao = mockk<ScheduledAlarmDao>(relaxed = true)
+        val mockCareDetector = mockk<CareHintDetector>()
+
+        val now = System.currentTimeMillis()
+        val alarm = ScheduledAlarmEntity(
+            id = "alarm_1",
+            triggerAt = now + 3600_000L,
+            botNote = "明天考高数",
+            status = "pending"
+        )
+        coEvery { mockAlarmDao.getUpcomingAlarms(any(), any(), any()) } returns listOf(alarm)
+        coEvery { mockChatDialogueDao.getUserTimestampsSince(any(), any()) } returns emptyList()
+        coEvery { mockChatDialogueDao.getLastUserTimestampBefore(any()) } returns null
+
+        val eventSlot = slot<List<CareEvent>>()
+        every {
+            mockCareDetector.collectHintTexts(
+                now = any(),
+                recentUserMessageTimes = any(),
+                activeEvents = capture(eventSlot),
+                lastUserMessageTime = any()
+            )
+        } returns listOf("明天有「明天考高数」，还没睡")
+
+        val vm = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao,
+            careHintDetector = mockCareDetector,
+            scheduledAlarmDao = mockAlarmDao
+        )
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flowOf(
+            LlmStreamEvent.Token("早点睡哦")
+        )
+
+        vm.sendMessage("还在看书呢")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(eventSlot.isCaptured)
+        val events = eventSlot.captured
+        assertEquals(1, events.size)
+        assertEquals("exam", events[0].eventType)
+        assertEquals("明天考高数", events[0].title)
+    }
+}

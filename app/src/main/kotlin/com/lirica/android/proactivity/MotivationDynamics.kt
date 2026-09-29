@@ -1,0 +1,169 @@
+package com.lirica.android.proactivity
+
+import com.lirica.android.emotion.model.EmotionVector
+import com.lirica.android.perception.model.NotificationCategory
+import com.lirica.android.perception.model.PerceptionSnapshot
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * 四维动机向量：好奇心 (Curiosity)、无聊感 (Boredom)、关怀度 (Warmth)、紧急度 (Urgency)
+ */
+data class MotivationVector(
+    val curiosity: Double = 0.0,
+    val boredom: Double = 0.0,
+    val warmth: Double = 0.0,
+    val urgency: Double = 0.0
+)
+
+/**
+ * 动机动力学驱动中枢
+ * 负责四大动机的带泄漏累积 (Leaky Integrator)、饱和上限约束与表达后抑制 (Satiety)
+ */
+interface MotivationDynamics {
+    fun update(snapshot: PerceptionSnapshot, emotion: EmotionVector, deltaTimeMs: Long): MotivationVector
+    fun computeTotalMotivation(vector: MotivationVector, nowMs: Long = System.currentTimeMillis()): Double
+    fun onExpressed(nowMs: Long)
+    fun getCurrentVector(): MotivationVector
+
+    companion object {
+        const val COOLDOWN_MS = 60 * 60 * 1000L // 60 分钟不应期
+        const val MAX_SCORE = 5.0
+        const val DWELL_BUCKET_MS = 30 * 60 * 1000L // warmth 长驻留计费桶宽：30 分钟
+    }
+}
+
+class MotivationDynamicsImpl(
+    private val wCuriosity: Double = 1.0,
+    private val wBoredom: Double = 1.0,
+    private val wWarmth: Double = 1.0,
+    private val wUrgency: Double = 1.0
+) : MotivationDynamics {
+
+    private var currentVector = MotivationVector()
+    private var lastExpressedMs: Long = 0L
+    private var lastPackageName: String? = null
+
+    // 2026-09-27 审计 P0 修复：事件必须与状态区分。
+    // 快照中的 latestNotification 是"持久状态"（永不清除），若不按 id 记账，
+    // 每次 update() 都会对同一事件重复加成，动机被钉死在高位、冷却与退避形同虚设。
+    private var lastChargedNotificationId: String? = null
+
+    // warmth 的长驻留加成同样按 30 分钟桶一次性计费，杜绝每 tick 重复累积
+    private var lastChargedDwellBucket: Int = -1
+
+    override fun getCurrentVector(): MotivationVector = currentVector
+
+    override fun onExpressed(nowMs: Long) {
+        lastExpressedMs = nowMs
+        // 表达后抑制 (Satiety)：动机断崖式清零重置
+        currentVector = MotivationVector(0.0, 0.0, 0.0, 0.0)
+    }
+
+    override fun update(
+        snapshot: PerceptionSnapshot,
+        emotion: EmotionVector,
+        deltaTimeMs: Long
+    ): MotivationVector {
+        val dtMinutes = max(0.0, deltaTimeMs.toDouble() / 60_000.0)
+
+        // 1. 好奇心 (Curiosity): 随时间指数泄漏衰减 (半衰期约 10 分钟)，新通知/应用切换激增
+        val curiosityDecay = exp(-dtMinutes / 10.0)
+        var newCuriosity = currentVector.curiosity * curiosityDecay
+
+        val currPkg = snapshot.foregroundApp?.packageName
+        if (currPkg != null && lastPackageName != null && currPkg != lastPackageName) {
+            newCuriosity += 0.8
+        }
+        lastPackageName = currPkg
+
+        // 同一通知只对 curiosity / urgency 各加成一次（按通知 id 记账）
+        val latestNotif = snapshot.latestNotification
+        val isNewNotification = latestNotif != null && latestNotif.id != lastChargedNotificationId
+        if (latestNotif != null && isNewNotification) {
+            newCuriosity += when (latestNotif.category) {
+                NotificationCategory.COMMUNICATION -> 1.5
+                NotificationCategory.OTHER -> 0.8
+                else -> 1.0
+            }
+        }
+        newCuriosity = newCuriosity.coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+
+        // 2. 无聊感 (Boredom): 用户长期停留桌面/闲置时逐步累积，发生有效活跃切换时重置
+        val isLauncher = currPkg?.contains("launcher") == true || currPkg?.contains("home") == true
+        var newBoredom = currentVector.boredom
+        if (isLauncher) {
+            newBoredom += dtMinutes * 0.15
+        } else {
+            // 活跃在具体 App 中，无聊感快速衰退
+            newBoredom = max(0.0, newBoredom - dtMinutes * 0.5)
+            // 切换应用且非 Launcher，无聊感直接大跌
+            if (currPkg != null && !isLauncher && snapshot.foregroundApp.dwellDurationMs < 5_000L) {
+                newBoredom = max(0.0, newBoredom * 0.2)
+            }
+        }
+        newBoredom = newBoredom.coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+
+        // 3. 关怀度 (Warmth): 连续超长使用、疲劳/负面情绪、深夜累积
+        var newWarmth = currentVector.warmth
+        val dwellMs = snapshot.foregroundApp?.dwellDurationMs ?: 0L
+        // 长驻留按 30 分钟桶一次性计费：跨过新桶才加成，换应用后桶回退自动重置
+        val dwellBucket = (dwellMs / MotivationDynamics.DWELL_BUCKET_MS).toInt()
+        if (dwellMs >= 30 * 60 * 1000L && dwellBucket > lastChargedDwellBucket) {
+            newWarmth += 0.8 + (dwellMs - 30 * 60 * 1000L).toDouble() / (30 * 60 * 1000L) * 0.5
+            lastChargedDwellBucket = dwellBucket
+        } else if (dwellBucket < lastChargedDwellBucket) {
+            // 已切换到驻留时间更短的应用：重置桶记账，新上下文停满 30 分钟仍会关怀
+            lastChargedDwellBucket = dwellBucket
+        }
+        if (emotion.valence < -0.1f) {
+            newWarmth += (-emotion.valence * 1.2).toDouble()
+        }
+        // 自然缓慢衰减
+        newWarmth = max(0.0, newWarmth - dtMinutes * 0.05).coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+
+        // 4. 紧急度 (Urgency): 由外界即时事件驱动 (外卖到达、重要日程、告警通知)
+        var newUrgency = currentVector.urgency * exp(-dtMinutes / 5.0) // 衰减迅速
+        if (latestNotif != null && isNewNotification) {
+            newUrgency += when (latestNotif.category) {
+                NotificationCategory.SCHEDULE -> 2.5
+                NotificationCategory.TRAVEL_LOGISTICS -> 2.0
+                NotificationCategory.SECURITY -> 3.0
+                NotificationCategory.SYSTEM_ALERT -> 2.0
+                NotificationCategory.COMMUNICATION -> 1.0
+                else -> 0.3
+            }
+        }
+        newUrgency = newUrgency.coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+
+        currentVector = MotivationVector(
+            curiosity = newCuriosity,
+            boredom = newBoredom,
+            warmth = newWarmth,
+            urgency = newUrgency
+        )
+
+        return currentVector
+    }
+
+    override fun computeTotalMotivation(vector: MotivationVector, nowMs: Long): Double {
+        // 加权求和并归一到 0.0 ~ 5.0（分母下限防全零权重除零产生 NaN）
+        val weightSum = (wCuriosity + wBoredom + wWarmth + wUrgency).coerceAtLeast(1e-9)
+        val totalRaw = (wCuriosity * vector.curiosity +
+            wBoredom * vector.boredom +
+            wWarmth * vector.warmth +
+            wUrgency * vector.urgency) / weightSum * 2.0
+
+        // 检查冷却不应期抑制
+        if (lastExpressedMs > 0L) {
+            val elapsed = nowMs - lastExpressedMs
+            if (elapsed in 0 until MotivationDynamics.COOLDOWN_MS) {
+                val suppressionFactor = elapsed.toDouble() / MotivationDynamics.COOLDOWN_MS
+                return (totalRaw * suppressionFactor).coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+            }
+        }
+
+        return totalRaw.coerceIn(0.0, MotivationDynamics.MAX_SCORE)
+    }
+}

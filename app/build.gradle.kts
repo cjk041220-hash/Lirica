@@ -23,11 +23,11 @@ val devApiKey: String = localProps.getProperty("DEEPSEEK_API_KEY")
     ?: ""
 
 android {
-    namespace = "com.xiaoxi.android"
+    namespace = "com.lirica.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.xiaoxi.android"
+        applicationId = "com.lirica.android"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

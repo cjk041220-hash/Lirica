@@ -3,8 +3,8 @@
 
 # Room SQLite
 -keep class androidx.room.** { *; }
--keep class com.xiaoxi.android.database.entity.** { *; }
--keep class com.xiaoxi.android.database.dao.** { *; }
+-keep class com.lirica.android.database.entity.** { *; }
+-keep class com.lirica.android.database.dao.** { *; }
 -keep class * extends androidx.room.RoomDatabase
 -keepclassmembers class * {
     @androidx.room.* <methods>;
@@ -31,9 +31,9 @@
 -dontwarn org.slf4j.impl.StaticLoggerBinder
 
 # Keep models for Automation & Perception
--keep class com.xiaoxi.android.automation.** { *; }
--keep class com.xiaoxi.android.perception.model.** { *; }
--keep class com.xiaoxi.android.network.model.** { *; }
+-keep class com.lirica.android.automation.** { *; }
+-keep class com.lirica.android.perception.model.** { *; }
+-keep class com.lirica.android.network.model.** { *; }
 
 # WorkManager：Worker 由 WorkerFactory 按类名反射实例化，
 # R8 裁剪或重命名会导致运行时 ClassNotFoundException

@@ -144,18 +144,18 @@ git push -u origin feat/m34-hardware-bus
 
 ## 6. 代码模块速查（功能写在哪里）
 
-代码位于 `app/src/main/kotlin/com/xiaoxi/android/` 下，职责分层非常明确：
+代码位于 `app/src/main/kotlin/com/lirica/android/` 下，职责分层非常明确：
 
 | 包名 | 职责说明 | 典型核心类 |
 |:---|:---|:---|
 | `automation/` | 手机操控、手势代行、宏动作分块、混合接地、金融守门与自愈看门狗 | `HelixGuiCoordinator`, `NativeToolAgent`, `HybridGroundingEngine`, `ShizukuExecutionBackend` |
-| `perception/` | 轻量环境感知、无障碍读屏、通知过滤、前台应用追踪、隐私断流器 | `XiaoxiAccessibilityService`, `PrivacyBreaker`, `UsageStatsTracker` |
+| `perception/` | 轻量环境感知、无障碍读屏、通知过滤、前台应用追踪、隐私断流器 | `LiricaAccessibilityService`, `PrivacyBreaker`, `UsageStatsTracker` |
 | `persona/` | 人格心智、PHI 语气重锚、8 轮抗漂移调度、反客服腔过滤器、酒馆角色卡解码 | `PhiMiddleware`, `DriftShieldScheduler`, `HumannessFilter`, `CharacterCardDecoder` |
 | `emotion/` | Russell 效价-唤醒度 (Valence-Arousal) 二维连续情绪动力学状态机 | `EmotionEngine`, `MoodState` |
-| `database/` | Room SQLite 数据访问对象与实体、双轨记忆打分与召回 | `XiaoxiDatabase`, `DualTrackMemoryManager`, `MemoryScorer` |
+| `database/` | Room SQLite 数据访问对象与实体、双轨记忆打分与召回 | `LiricaDatabase`, `DualTrackMemoryManager`, `MemoryScorer` |
 | `memory/` | 夜间潜意识入梦、记忆去重、时间绝对化、信念修正与自叙经历沉淀 | `SubconsciousDreamCoordinator`, `BeliefRevisionEngine`, `DreamEmergenceSynthesizer` |
 | `life/` | 生活工具生态（免 Key 天气查询、系统日程提醒约定、考前深夜关心感知） | `WeatherTool`, `EventLifeTool`, `CareHintDetector`, `CareLedger` |
-| `network/` | 大模型通信、BYOK 多模型网关（OpenAI 兼容 / Anthropic）、流式 SSE 解码 | `XiaoxiLlmGateway`, `XiaoxiLlmClient`, `SecureKeyStore` |
+| `network/` | 大模型通信、BYOK 多模型网关（OpenAI 兼容 / Anthropic）、流式 SSE 解码 | `LiricaLlmGateway`, `LiricaLlmClient`, `SecureKeyStore` |
 | `ui/` | Jetpack Compose 表现层：全屏聊天、Onboarding 权限向导、模型设置页 | `ChatScreen`, `OnboardingScreen`, `SettingsScreen` |
 | `overlay/` | 跨应用常驻悬浮伴生体、情绪呼吸光晕、破冰微气泡、代行状态卡片 | `CompanionOverlayService`, `OverlayBubble`, `OverlayExpandPanel`, `IcebreakerBubble` |
 
@@ -168,7 +168,7 @@ git push -u origin feat/m34-hardware-bus
 - [ ] 本地运行 `./gradlew testDebugUnitTest` 全绿通过（当前基线 576 项）。
 - [ ] 本地运行 `./gradlew assembleDebug` 打包成功。
 - [ ] 针对新增功能或 Bug 修复补充了对应的单元测试。
-- [ ] 未改动包名 `com.xiaoxi.android` 与数据库名 `lirica_aether.db`。
+- [ ] 未改动包名 `com.lirica.android` 与数据库名 `lirica_aether.db`。
 - [ ] 没有将个人 API Key 或敏感文件引入 Git 追踪。
 - [ ] 涉及 UI 文本和角色提示词时，使用新产品名 **Lirica**。
 - [ ] 同步更新了 `docs/PROGRESS_TRACKER.md` 的对应任务状态。

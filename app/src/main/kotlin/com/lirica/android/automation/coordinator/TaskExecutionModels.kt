@@ -1,0 +1,84 @@
+package com.lirica.android.automation.coordinator
+
+import com.lirica.android.automation.grounding.GroundingQuery
+import com.lirica.android.automation.intent.IntentAction
+
+sealed interface TaskExecutionState {
+    data object Idle : TaskExecutionState
+    data class Planning(val userGoal: String) : TaskExecutionState
+    data class ExecutingStep(
+        val stepIndex: Int,
+        val totalStepsEstimate: Int,
+        val actionDescription: String,
+        val isRecovering: Boolean = false
+    ) : TaskExecutionState
+    data class AwaitingUserConfirmation(
+        val token: String,
+        val riskDetails: String,
+        val draftContent: String? = null,
+        val draftTitle: String? = null,
+        val onConfirmed: () -> Unit,
+        val onCancelled: () -> Unit,
+        val onConfirmedWithDraft: ((String) -> Unit)? = null
+    ) : TaskExecutionState
+    data class Completed(val message: String, val stepsTaken: Int) : TaskExecutionState
+    data class Failed(
+        val errorReason: String,
+        val lastStepIndex: Int,
+        val honestNarrative: String? = null
+    ) : TaskExecutionState
+}
+
+enum class StepExecutionStatus {
+    PENDING, RUNNING, COMPLETED, FAILED
+}
+
+data class ExecutionStepItem(
+    val index: Int,
+    val description: String,
+    val status: StepExecutionStatus = StepExecutionStatus.PENDING,
+    val durationMs: Long? = null
+)
+
+enum class SwipeDirection {
+    UP, DOWN, LEFT, RIGHT
+}
+
+sealed interface CoordinatorAction {
+    data class Intent(val action: IntentAction) : CoordinatorAction
+    data class Click(
+        val query: GroundingQuery,
+        val description: String = "点击元素"
+    ) : CoordinatorAction
+    data class Type(
+        val query: GroundingQuery,
+        val text: String,
+        val description: String = "输入文本"
+    ) : CoordinatorAction
+    data class Swipe(
+        val direction: SwipeDirection,
+        val humanoid: Boolean = true,
+        val description: String = "滑动屏幕"
+    ) : CoordinatorAction
+    data class Backtrack(val description: String = "物理返回") : CoordinatorAction
+    data class PressKey(
+        val keyCode: Int,
+        val keyName: String = "按键",
+        val description: String = "按键 $keyName"
+    ) : CoordinatorAction
+    data class Delay(
+        val delayMs: Long,
+        val description: String = "等待 ${delayMs}ms"
+    ) : CoordinatorAction
+    data class Finish(val summary: String = "代行任务已完成") : CoordinatorAction
+}
+
+sealed interface TaskExecutionResult {
+    data class Success(val message: String, val stepsTaken: Int) : TaskExecutionResult
+    data class Failure(
+        val reason: String,
+        val stepIndex: Int,
+        val honestNarrative: String? = null
+    ) : TaskExecutionResult
+    data object Cancelled : TaskExecutionResult
+}

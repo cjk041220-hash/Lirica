@@ -27,7 +27,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 | SillyTavern 角色卡 V1/V2/V3 导入导出 | ✅ 已实现 | `persona/CharacterCardDecoder.kt` |
 | PHI 语气重锚 / 8 轮抗漂移 | ✅ 已实现 | `persona/PhiMiddleware.kt`、`persona/DriftShieldScheduler.kt` |
 | 工具调用态动作伴随语契约 | ✅ 已实现 | `persona/PhiMiddleware.kt`（TOOL_PERSONA_CONTRACT） |
-| 无障碍轻量读屏 + 前台/通知感知 | ✅ 已实现 | `perception/*`（`XiaoxiAccessibilityService`、`UsageStatsTracker`、`XiaoxiNotificationListenerService`） |
+| 无障碍轻量读屏 + 前台/通知感知 | ✅ 已实现 | `perception/*`（`LiricaAccessibilityService`、`UsageStatsTracker`、`LiricaNotificationListenerService`） |
 | 感知文本隐私熔断（金融/密码框物理断流） | ✅ 已实现 | `perception/PrivacyBreaker.kt`（覆盖文本节点与截屏断流；截图像素级脱敏为规划中） |
 | 无障碍手势代行（点击/滑动/文本注入） | ✅ 已实现 | `automation/gesture/*`、`automation/coordinator/HelixGuiCoordinator.kt` |
 | 混合接地（无障碍树优先 → ML Kit 离线 OCR） | ✅ 已实现 | `automation/grounding/HybridGroundingEngine.kt`、`MlKitVisualDetector.kt`、`ScreenCaptureManager.kt` |
@@ -39,7 +39,7 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 | 日程提醒（create_event / list_events） | ✅ 已实现 | `life/EventLifeTool.kt`（落 `scheduled_alarms` + 系统闹钟） |
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
 | 网页搜索 / 地图 / 塔罗 / 生理周期 | 🚫 不排期 | 按 D16 决策整批砍掉不排期；保留 LifeTool 扩展接口架构 |
-| BYOK 多模型网关（OpenAI 兼容 / Anthropic） | ✅ 已实现 | `network/gateway/*`（`XiaoxiLlmGateway`、`OpenAiProtocolAdapter`、`AnthropicProtocolAdapter`）、`ui/settings/SettingsScreen.kt`、`ByokSettingsRepository.kt` |
+| BYOK 多模型网关（OpenAI 兼容 / Anthropic） | ✅ 已实现 | `network/gateway/*`（`LiricaLlmGateway`、`OpenAiProtocolAdapter`、`AnthropicProtocolAdapter`）、`ui/settings/SettingsScreen.kt`、`ByokSettingsRepository.kt` |
 | 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
 
 ---
