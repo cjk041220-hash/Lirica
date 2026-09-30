@@ -22,12 +22,33 @@ import java.util.UUID
 class MemoryExtractor(
     private val llmClient: LiricaLlmClient,
     private val userMemoryDao: UserMemoryDao,
-    private val llmConfig: LlmConfig,
+    private val llmConfigProvider: () -> LlmConfig,
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
     val throttleIntervalMs: Long = 180_000L,
     val minTurnsAccumulated: Int = 3,
     private val hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null
 ) {
+
+    /**
+     * 保持向后兼容的二级构造函数（接收静态快照并包装为 Provider）
+     */
+    constructor(
+        llmClient: LiricaLlmClient,
+        userMemoryDao: UserMemoryDao,
+        llmConfig: LlmConfig,
+        json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
+        throttleIntervalMs: Long = 180_000L,
+        minTurnsAccumulated: Int = 3,
+        hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null
+    ) : this(
+        llmClient = llmClient,
+        userMemoryDao = userMemoryDao,
+        llmConfigProvider = { llmConfig },
+        json = json,
+        throttleIntervalMs = throttleIntervalMs,
+        minTurnsAccumulated = minTurnsAccumulated,
+        hybridRetrieverProvider = hybridRetrieverProvider
+    )
 
     companion object {
         /** 用户文本低于该长度不值得发起一次 LLM 抽取调用 */
@@ -200,7 +221,8 @@ class MemoryExtractor(
             ChatMessage(role = "user", content = "用户近期发言内容：\n$batchContext")
         )
         val sb = StringBuilder()
-        llmClient.streamChat(llmConfig, messages).collect { event ->
+        val currentConfig = llmConfigProvider()
+        llmClient.streamChat(currentConfig, messages).collect { event ->
             when (event) {
                 is LlmStreamEvent.Token -> sb.append(event.text)
                 is LlmStreamEvent.Error -> throw event.throwable

@@ -10,7 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
-import android.util.Log
+import com.lirica.android.common.logging.LiricaLog
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
@@ -27,23 +27,23 @@ class KeepAliveService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "KeepAliveService onCreate")
+        LiricaLog.i(TAG, "KeepAliveService onCreate")
         createNotificationChannel(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         val action = intent?.action
-        Log.i(TAG, "KeepAliveService onStartCommand, action: $action")
+        LiricaLog.i(TAG, "KeepAliveService onStartCommand, action: $action")
 
         if (action == ACTION_STOP_SERVICE) {
-            Log.i(TAG, "Stopping KeepAliveService foreground")
+            LiricaLog.i(TAG, "Stopping KeepAliveService foreground")
             // 同步停止伴生悬浮窗服务：否则用户点"停止伴生"后悬浮球残留屏幕，
             // 且进程被系统回收后 START_STICKY 复活时悬浮窗可能随机重现
             try {
                 stopService(Intent(this, CompanionOverlayService::class.java))
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to stop CompanionOverlayService", e)
+                LiricaLog.w(TAG, "Failed to stop CompanionOverlayService", e)
             }
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -69,9 +69,9 @@ class KeepAliveService : LifecycleService() {
 
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundType)
-            Log.i(TAG, "KeepAliveService started foreground successfully")
+            LiricaLog.i(TAG, "KeepAliveService started foreground successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground on KeepAliveService", e)
+            LiricaLog.e(TAG, "Failed to startForeground on KeepAliveService", e)
         }
     }
 
@@ -80,10 +80,10 @@ class KeepAliveService : LifecycleService() {
             if (Settings.canDrawOverlays(this)) {
                 val overlayIntent = Intent(this, CompanionOverlayService::class.java)
                 startService(overlayIntent)
-                Log.i(TAG, "CompanionOverlayService auto-launched from KeepAliveService")
+                LiricaLog.i(TAG, "CompanionOverlayService auto-launched from KeepAliveService")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Unable to auto-launch CompanionOverlayService", e)
+            LiricaLog.w(TAG, "Unable to auto-launch CompanionOverlayService", e)
         }
     }
 
@@ -94,7 +94,7 @@ class KeepAliveService : LifecycleService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.i(TAG, "KeepAliveService onDestroy")
+        LiricaLog.i(TAG, "KeepAliveService onDestroy")
     }
 
     companion object {
@@ -118,9 +118,9 @@ class KeepAliveService : LifecycleService() {
                 } else {
                     context.startService(intent)
                 }
-                Log.i(TAG, "KeepAliveService start requested")
+                LiricaLog.i(TAG, "KeepAliveService start requested")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start KeepAliveService", e)
+                LiricaLog.e(TAG, "Failed to start KeepAliveService", e)
             }
         }
 
@@ -133,9 +133,9 @@ class KeepAliveService : LifecycleService() {
                     action = ACTION_STOP_SERVICE
                 }
                 context.startService(intent)
-                Log.i(TAG, "KeepAliveService stop requested")
+                LiricaLog.i(TAG, "KeepAliveService stop requested")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop KeepAliveService", e)
+                LiricaLog.e(TAG, "Failed to stop KeepAliveService", e)
             }
         }
 

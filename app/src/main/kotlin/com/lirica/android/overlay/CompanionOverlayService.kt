@@ -8,7 +8,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
-import android.util.Log
+import com.lirica.android.common.logging.LiricaLog
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -180,7 +180,7 @@ class CompanionOverlayService : LifecycleService() {
                     memoryExtractor = MemoryExtractor(
                         llmClient = app.llmClient,
                         userMemoryDao = app.database.userMemoryDao(),
-                        llmConfig = app.backgroundLlmConfig,
+                        llmConfigProvider = { app.backgroundLlmConfig },
                         hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
                     )
                 ) as T
@@ -197,7 +197,7 @@ class CompanionOverlayService : LifecycleService() {
     private fun setupOverlayView() {
         // 权限判定防御：未授权时安全跳过，防止 SecurityException
         if (!Settings.canDrawOverlays(this)) {
-            Log.w(TAG, "SYSTEM_ALERT_WINDOW permission not granted, skipping overlay mount.")
+            LiricaLog.w(TAG, "SYSTEM_ALERT_WINDOW permission not granted, skipping overlay mount.")
             return
         }
 
@@ -373,7 +373,7 @@ class CompanionOverlayService : LifecycleService() {
             overlayComposeView = composeView
             expandViewModel?.refreshIcebreaker()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to attach overlay ComposeView to WindowManager", e)
+            LiricaLog.e(TAG, "Failed to attach overlay ComposeView to WindowManager", e)
         }
     }
 
@@ -396,7 +396,7 @@ class CompanionOverlayService : LifecycleService() {
             try {
                 wm.updateViewLayout(view, params)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to update focusable flag", e)
+                LiricaLog.e(TAG, "Failed to update focusable flag", e)
             }
         }
     }
@@ -429,7 +429,7 @@ class CompanionOverlayService : LifecycleService() {
         try {
             wm.updateViewLayout(view, params)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to update overlay view layout", e)
+            LiricaLog.e(TAG, "Failed to update overlay view layout", e)
         }
     }
 
@@ -452,7 +452,7 @@ class CompanionOverlayService : LifecycleService() {
         try {
             wm.updateViewLayout(view, params)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to snap overlay to edge", e)
+            LiricaLog.e(TAG, "Failed to snap overlay to edge", e)
         }
     }
 
@@ -464,7 +464,7 @@ class CompanionOverlayService : LifecycleService() {
                     windowManager?.removeView(view)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error removing overlay view on destroy", e)
+                LiricaLog.e(TAG, "Error removing overlay view on destroy", e)
             }
         }
         overlayComposeView = null

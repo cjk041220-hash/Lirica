@@ -409,4 +409,50 @@ class NativeToolAgentTest {
         assertFalse(result.isSuccess)
         assertTrue(result.output.contains("第 2 步执行失败"))
     }
+
+    @Test
+    fun testExecute_clickElement_failurePassesHonestNarrative() = runTest {
+        coEvery {
+            coordinator.executeTask(any(), any(), any())
+        } returns TaskExecutionResult.Failure(
+            reason = "元素未找到",
+            stepIndex = 0,
+            honestNarrative = "那个按钮今天跟我捉迷藏，我找了半天也没看到"
+        )
+
+        val call = ToolCall(
+            id = "call_click_fail",
+            function = ToolCallFunction(
+                name = "click_element",
+                arguments = """{"target_text":"确认"}"""
+            )
+        )
+
+        val result = agent.executeToolCall(call)
+        assertFalse(result.isSuccess)
+        assertEquals("那个按钮今天跟我捉迷藏，我找了半天也没看到", result.output)
+    }
+
+    @Test
+    fun testExecute_executeMacro_failurePassesHonestNarrative() = runTest {
+        coEvery {
+            coordinator.executeTask(any(), any(), any())
+        } returns TaskExecutionResult.Failure(
+            reason = "超时",
+            stepIndex = 1,
+            honestNarrative = "宏动作中途卡壳了，请等我一下"
+        )
+
+        val call = ToolCall(
+            id = "call_macro_fail",
+            function = ToolCallFunction(
+                name = "execute_macro",
+                arguments = """{"description":"测试","actions":[{"type":"click","target_text":"步骤1"}]}"""
+            )
+        )
+
+        val result = agent.executeToolCall(call)
+        assertFalse(result.isSuccess)
+        assertEquals("宏动作中途卡壳了，请等我一下", result.output)
+    }
 }

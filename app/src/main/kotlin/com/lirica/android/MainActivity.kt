@@ -90,14 +90,15 @@ class MainActivity : ComponentActivity() {
                     memoryExtractor = MemoryExtractor(
                         llmClient = app.llmClient,
                         userMemoryDao = app.database.userMemoryDao(),
-                        llmConfig = app.backgroundLlmConfig,
+                        llmConfigProvider = { app.backgroundLlmConfig },
                         hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
                     ),
                     toolAgent = app.nativeToolAgent,
                     careHintDetector = app.careHintDetector,
                     scheduledAlarmDao = app.database.scheduledAlarmDao(),
                     handoffManager = app.handoffManager,
-                    byokRepository = app.byokSettingsRepository
+                    byokRepository = app.byokSettingsRepository,
+                    perceptionPipeline = app.perceptionPipeline
                 ) as T
             }
         }

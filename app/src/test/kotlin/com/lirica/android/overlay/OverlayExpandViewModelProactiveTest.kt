@@ -68,7 +68,7 @@ class OverlayExpandViewModelProactiveTest {
         Dispatchers.resetMain()
     }
 
-    private fun createViewModel(): OverlayExpandViewModel {
+    private fun createViewModel(autoDismissTimeoutMs: Long = 0L): OverlayExpandViewModel {
         return OverlayExpandViewModel(
             unspokenThoughtDao = unspokenThoughtDao,
             emotionEngine = emotionEngine,
@@ -76,7 +76,8 @@ class OverlayExpandViewModelProactiveTest {
             memoryManager = memoryManager,
             phiMiddleware = phiMiddleware,
             humannessFilter = humannessFilter,
-            proactiveCoordinator = proactiveCoordinator
+            proactiveCoordinator = proactiveCoordinator,
+            autoDismissTimeoutMs = autoDismissTimeoutMs
         )
     }
 
@@ -222,5 +223,51 @@ class OverlayExpandViewModelProactiveTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         coVerify { proactiveCoordinator.onUserFeedback(UserFeedback.IGNORED, "thought_ignored_1", 4000L) }
+    }
+
+    @Test
+    fun testIcebreaker_autoDismissAfterTimeout_triggersIgnoredFeedback() = runTest {
+        val thought = UnspokenThoughtEntity(
+            id = "thought_timeout_1",
+            thought = "今天天气转凉了呢",
+            urgency = 0.8f,
+            createdAt = 1000L,
+            status = UnspokenThoughtEntity.STATUS_PENDING
+        )
+
+        val result = ProactiveCoordinationResult(
+            level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
+            decision = DecisionResult(
+                action = com.lirica.android.proactivity.ProactiveAction.PROACTIVE_INTERRUPT,
+                innerMotivation = 4.0,
+                interruptCost = 1.2,
+                effectiveMotivation = 4.8,
+                breakpoint = com.lirica.android.proactivity.BreakpointResult(true, com.lirica.android.proactivity.BreakpointType.SCREEN_UNLOCK, 1.2),
+                reason = "达到打断阈值"
+            ),
+            thought = thought,
+            reason = "L2破冰气泡触发",
+            bubblesShownToday = 1
+        )
+
+        coEvery { proactiveCoordinator.coordinate(any(), any()) } returns result
+        coJustRun { proactiveCoordinator.onUserFeedback(UserFeedback.IGNORED, thought.id, any()) }
+
+        val viewModel = createViewModel(autoDismissTimeoutMs = 15_000L)
+        val snapshot = PerceptionSnapshot()
+
+        viewModel.processPerception(snapshot, nowMs = 1000L)
+        testDispatcher.scheduler.runCurrent()
+
+        // 此时破冰气泡已出现
+        assertEquals("thought_timeout_1", viewModel.uiState.value.icebreakerThought?.id)
+
+        // 模拟时间推移 15 秒超时
+        testDispatcher.scheduler.advanceTimeBy(OverlayExpandViewModel.DEFAULT_ICEBREAKER_TIMEOUT_MS + 100L)
+        testDispatcher.scheduler.runCurrent()
+
+        // 破冰气泡自动淡出，并触发 IGNORED 弱负反馈
+        assertNull(viewModel.uiState.value.icebreakerThought)
+        coVerify { proactiveCoordinator.onUserFeedback(UserFeedback.IGNORED, "thought_timeout_1", any()) }
     }
 }

@@ -67,6 +67,7 @@ class ChatViewModelTest {
         humannessFilter = HumannessFilter()
 
         coEvery { mockChatDialogueDao.getRecentBySession(any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.retrieve(any(), any(), any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns emptyList()
@@ -166,6 +167,7 @@ class ChatViewModelTest {
             expiryTime = System.currentTimeMillis() + 3600_000
         )
 
+        coEvery { mockMemoryManager.retrieve(any(), any(), any(), any()) } returns listOf(mockUserMemory)
         coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns listOf(mockUserMemory)
         coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns listOf(mockExperience)
         coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns listOf(mockThought)
@@ -282,5 +284,59 @@ class ChatViewModelTest {
         assertEquals(1, events.size)
         assertEquals("exam", events[0].eventType)
         assertEquals("明天考高数", events[0].title)
+    }
+
+    @Test
+    fun testSendMessage_usesHybridMemoryRetrieveAndPassesPerception() = runTest(testDispatcher) {
+        val mockPerception = mockk<com.lirica.android.perception.PerceptionPipeline>()
+        val mockSnapshot = com.lirica.android.perception.model.PerceptionSnapshot(
+            foregroundApp = com.lirica.android.perception.model.ForegroundAppInfo(
+                packageName = "tv.danmaku.bili",
+                dwellDurationMs = 120_000L
+            )
+        )
+        every { mockPerception.snapshotFlow } returns kotlinx.coroutines.flow.MutableStateFlow(mockSnapshot)
+
+        val vm = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao,
+            perceptionPipeline = mockPerception
+        )
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flowOf(
+            LlmStreamEvent.Token("在看B站呀")
+        )
+
+        vm.sendMessage("你在干嘛")
+        testScheduler.advanceUntilIdle()
+
+        // 验证调用了混合检索 retrieve 而不是旁路的纯 2-gram
+        coVerify {
+            mockMemoryManager.retrieve(
+                query = "你在干嘛",
+                topK = 5,
+                nowTs = any(),
+                moodValence = any()
+            )
+        }
+
+        // 验证 assembleMapBasedContext 接收到了 perceptionSnapshot
+        coVerify {
+            mockMemoryManager.assembleMapBasedContext(
+                query = "你在干嘛",
+                moodValence = any(),
+                charName = any(),
+                nowTs = any(),
+                perceptionSnapshot = match { it?.foregroundApp?.packageName == "tv.danmaku.bili" },
+                preRecalledUserMemories = any(),
+                preRecalledSelfExperiences = any(),
+                preRecalledUnspokenThoughts = any(),
+                preRecalledWorldviews = any()
+            )
+        }
     }
 }

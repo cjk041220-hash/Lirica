@@ -342,4 +342,40 @@ class MemoryExtractorTest {
         assertNull(extractor.extractJsonPayload("没有任何大括号"))
         assertNull(extractor.extractJsonPayload(""))
     }
+
+    @Test
+    fun testDynamicLlmConfigProvider_updatesKeyOnDemand() = runTest {
+        var currentApiKey = "initial-key"
+        var capturedAuthHeader: String? = null
+
+        val mockEngine = MockEngine { request ->
+            capturedAuthHeader = request.headers[HttpHeaders.Authorization]
+            respond(
+                content = sseResponse("""{"memories":[]}"""),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) { json(testJson) }
+        }
+
+        val dynamicExtractor = MemoryExtractor(
+            llmClient = LiricaLlmClient(httpClient = httpClient),
+            userMemoryDao = userMemoryDao,
+            llmConfigProvider = { LlmConfig(apiKey = currentApiKey) },
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 1
+        )
+
+        // 第一次抽取
+        dynamicExtractor.maybeExtract(userText = "我平时喜欢喝拿铁咖啡，每天早上都要一杯", force = true)
+        assertEquals("Bearer initial-key", capturedAuthHeader)
+
+        // 用户更新了 Key
+        currentApiKey = "new-updated-key"
+        dynamicExtractor.maybeExtract(userText = "我晚上睡前喜欢看侦探小说，特别是阿加莎的作品", force = true)
+        assertEquals("Bearer new-updated-key", capturedAuthHeader)
+    }
 }

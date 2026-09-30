@@ -9,7 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import android.util.Log
+import com.lirica.android.common.logging.LiricaLog
 
 /**
  * 电池优化白名单与主流定制 ROM（MIUI/HyperOS, EMUI/HarmonyOS, ColorOS, OriginOS 等）
@@ -27,7 +27,7 @@ object BatteryOptimizationHelper {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to check isIgnoringBatteryOptimizations", e)
+            LiricaLog.w(TAG, "Failed to check isIgnoringBatteryOptimizations", e)
             false
         }
     }
@@ -169,10 +169,10 @@ object BatteryOptimizationHelper {
             if (isIntentResolvable(packageManager, intent)) {
                 try {
                     context.startActivity(intent)
-                    Log.i(TAG, "Opened vendor battery optimization page: ${intent.component}")
+                    LiricaLog.i(TAG, "Opened vendor battery optimization page: ${intent.component}")
                     return true
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to start vendor battery activity ${intent.component}", e)
+                    LiricaLog.w(TAG, "Failed to start vendor battery activity ${intent.component}", e)
                 }
             }
         }
@@ -184,11 +184,11 @@ object BatteryOptimizationHelper {
             }
             if (isIntentResolvable(packageManager, standardIntent)) {
                 context.startActivity(standardIntent)
-                Log.i(TAG, "Opened standard ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS")
+                LiricaLog.i(TAG, "Opened standard ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS")
                 return true
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS", e)
+            LiricaLog.w(TAG, "Failed to start ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS", e)
         }
 
         // 3. 最后回退至应用详情页面 (App Details)
@@ -198,10 +198,10 @@ object BatteryOptimizationHelper {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(detailsIntent)
-            Log.i(TAG, "Opened fallback ACTION_APPLICATION_DETAILS_SETTINGS")
+            LiricaLog.i(TAG, "Opened fallback ACTION_APPLICATION_DETAILS_SETTINGS")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "All battery optimization intents failed to open", e)
+            LiricaLog.e(TAG, "All battery optimization intents failed to open", e)
             false
         }
     }

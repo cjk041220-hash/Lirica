@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.lirica.android.common.logging.LiricaLog
 import com.lirica.android.database.LiricaDatabase
 import java.util.concurrent.TimeUnit
 
@@ -38,11 +39,13 @@ class AutonomousLifeWorker(
             )
             Result.success()
         } catch (e: Exception) {
+            LiricaLog.e(TAG, "AutonomousLifeWorker 自主日记生成任务异常，将触发重试", e)
             Result.retry()
         }
     }
 
     companion object {
+        private const val TAG = "AutonomousLifeWorker"
         const val WORK_NAME = "lirica_autonomous_life_worker"
 
         /**

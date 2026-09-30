@@ -7,11 +7,12 @@ import java.time.ZoneId
 
 class TimeDisambiguatorTest {
 
-    private val disambiguator = TimeDisambiguator()
+    private val testZoneId = ZoneId.of("Asia/Shanghai")
+    private val disambiguator = TimeDisambiguator(testZoneId)
 
     // 设定基准时间为 2026-09-21 10:00:00 UTC+8
     private val baseTimestamp = LocalDate.of(2026, 9, 21)
-        .atStartOfDay(ZoneId.of("Asia/Shanghai"))
+        .atStartOfDay(testZoneId)
         .toInstant()
         .toEpochMilli()
 

@@ -369,10 +369,12 @@ class NativeToolAgent(
                         )
                     }
                     is TaskExecutionResult.Failure -> {
+                        val failMsg = result.honestNarrative?.takeIf { it.isNotBlank() }
+                            ?: "点击操作失败: ${result.reason}"
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = false,
-                            output = "点击操作失败: ${result.reason}"
+                            output = failMsg
                         )
                     }
                     TaskExecutionResult.Cancelled -> {
@@ -405,10 +407,12 @@ class NativeToolAgent(
                         )
                     }
                     is TaskExecutionResult.Failure -> {
+                        val failMsg = result.honestNarrative?.takeIf { it.isNotBlank() }
+                            ?: "输入操作失败: ${result.reason}"
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = false,
-                            output = "输入操作失败: ${result.reason}"
+                            output = failMsg
                         )
                     }
                     TaskExecutionResult.Cancelled -> {
@@ -438,11 +442,20 @@ class NativeToolAgent(
                             output = "滑动操作完成"
                         )
                     }
-                    else -> {
+                    is TaskExecutionResult.Failure -> {
+                        val failMsg = result.honestNarrative?.takeIf { it.isNotBlank() }
+                            ?: "滑动操作失败: ${result.reason}"
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = false,
-                            output = "滑动操作失败: $result"
+                            output = failMsg
+                        )
+                    }
+                    TaskExecutionResult.Cancelled -> {
+                        ToolExecutionResult(
+                            toolCallId = call.id,
+                            isSuccess = false,
+                            output = "滑动操作被取消"
                         )
                     }
                 }
@@ -586,10 +599,12 @@ class NativeToolAgent(
                                 )
                             }
                             is TaskExecutionResult.Failure -> {
+                                val failMsg = result.honestNarrative?.takeIf { it.isNotBlank() }
+                                    ?: "宏动作在第 ${result.stepIndex} 步执行失败: ${result.reason}"
                                 ToolExecutionResult(
                                     toolCallId = call.id,
                                     isSuccess = false,
-                                    output = "宏动作在第 ${result.stepIndex} 步执行失败: ${result.reason}"
+                                    output = failMsg
                                 )
                             }
                             TaskExecutionResult.Cancelled -> {

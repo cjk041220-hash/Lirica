@@ -21,6 +21,7 @@ import com.lirica.android.network.LiricaLlmClient
 import com.lirica.android.network.model.ChatMessage
 import com.lirica.android.network.model.LlmConfig
 import com.lirica.android.network.model.LlmStreamEvent
+import com.lirica.android.perception.PerceptionPipeline
 import com.lirica.android.persona.HandoffManager
 import com.lirica.android.persona.HumannessFilter
 import com.lirica.android.persona.PhiMiddleware
@@ -55,7 +56,8 @@ class ChatViewModel(
     val scheduledAlarmDao: ScheduledAlarmDao? = null,
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
     val sessionId: String = "default_session",
-    val byokRepository: ByokSettingsRepository? = null
+    val byokRepository: ByokSettingsRepository? = null,
+    val perceptionPipeline: PerceptionPipeline? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -169,11 +171,11 @@ class ChatViewModel(
                     )
                 )
 
-                // 2. 检索双轨记忆与念头
+                // 2. 检索双轨记忆与念头（通过 retrieve 统一调度端侧 ONNX 向量 + BM25 混合检索）
                 val currentMood = emotionEngine.currentMood
-                val userMemories = memoryManager.recallUserMemories(
+                val userMemories = memoryManager.retrieve(
                     query = trimmed,
-                    limit = 5,
+                    topK = 5,
                     moodValence = currentMood.defaultVector.valence
                 )
                 val selfExps = memoryManager.recallSelfExperiences(limit = 2, unsharedOnly = true)
@@ -195,10 +197,14 @@ class ChatViewModel(
                     thoughts = thoughts.map { it.thought }
                 )
 
+                // 捕获即时情境感知快照（前台应用、停留时长、屏幕状态、通知与硬件环境）
+                val perceptionSnapshot = perceptionPipeline?.snapshotFlow?.value
+
                 val mapContext = memoryManager.assembleMapBasedContext(
                     query = trimmed,
                     moodValence = currentMood.defaultVector.valence,
                     charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
+                    perceptionSnapshot = perceptionSnapshot,
                     preRecalledUserMemories = userMemories,
                     preRecalledSelfExperiences = selfExps,
                     preRecalledUnspokenThoughts = thoughts
@@ -272,6 +278,12 @@ class ChatViewModel(
                 // 防漂移护盾：记录本轮对话轮次并传入装配（驱动 PhiMiddleware 内部触发器）
                 val turnCount = phiMiddleware.recordTurn(sessionId)
 
+                val currentAppStr = perceptionSnapshot?.foregroundApp?.packageName.orEmpty()
+                val timeFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                val currentTimeStr = Instant.ofEpochMilli(userTimestamp)
+                    .atZone(ZoneId.systemDefault())
+                    .format(timeFormatter)
+
                 val assembledMessages = phiMiddleware.assemble(
                     characterCard = _uiState.value.activeCharacterCard,
                     dynamicContext = effectiveDynamicContext,
@@ -279,6 +291,8 @@ class ChatViewModel(
                     moodState = currentMood,
                     sessionId = sessionId,
                     charName = _uiState.value.activeCharacterCard?.name ?: PhiMiddleware.DEFAULT_CHAR_NAME,
+                    currentTime = currentTimeStr,
+                    currentApp = currentAppStr,
                     turnCount = turnCount,
                     // 有可用工具时才注入"动作伴随语"契约：
                     // 无工具的纯聊天不需要这段约束，多注入反而稀释其他铁律的权重

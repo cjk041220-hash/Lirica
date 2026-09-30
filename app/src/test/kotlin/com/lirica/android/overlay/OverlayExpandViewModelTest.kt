@@ -70,7 +70,8 @@ class OverlayExpandViewModelTest {
             llmClient = llmClient,
             memoryManager = memoryManager,
             phiMiddleware = phiMiddleware,
-            humannessFilter = humannessFilter
+            humannessFilter = humannessFilter,
+            autoDismissTimeoutMs = 0L
         )
     }
 

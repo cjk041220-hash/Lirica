@@ -13,7 +13,7 @@ import java.time.temporal.TemporalAdjusters
  * 统一替换为严格的绝对 ISO 日期 (YYYY-MM-DD)，消除跨时间断层。
  */
 class TimeDisambiguator(
-    private val zoneId: ZoneId = ZoneId.of("Asia/Shanghai")
+    private val zoneId: ZoneId = ZoneId.systemDefault()
 ) {
 
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")

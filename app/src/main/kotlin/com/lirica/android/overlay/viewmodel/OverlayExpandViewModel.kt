@@ -27,6 +27,8 @@ import com.lirica.android.proactivity.ProactiveBubbleCoordinator
 import com.lirica.android.proactivity.ProactivityLevel
 import com.lirica.android.proactivity.UserFeedback
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,12 +55,31 @@ class OverlayExpandViewModel(
     val byokRepository: ByokSettingsRepository? = null,
     private val chatDialogueDao: ChatDialogueDao? = null,
     private val toolAgent: NativeToolAgent? = null,
-    private val memoryExtractor: MemoryExtractor? = null
+    private val memoryExtractor: MemoryExtractor? = null,
+    val autoDismissTimeoutMs: Long = DEFAULT_ICEBREAKER_TIMEOUT_MS
 ) : ViewModel() {
 
     companion object {
         const val OVERLAY_SESSION_ID = "session_overlay_companion"
         const val MAX_TOOL_ITERATIONS = 5
+        const val DEFAULT_ICEBREAKER_TIMEOUT_MS = 15_000L
+    }
+
+    private var icebreakerTimeoutJob: Job? = null
+
+    private fun scheduleIcebreakerTimeout(thought: UnspokenThoughtEntity?, timeoutMs: Long = autoDismissTimeoutMs) {
+        icebreakerTimeoutJob?.cancel()
+        if (thought == null || timeoutMs <= 0L) return
+        icebreakerTimeoutJob = viewModelScope.launch {
+            try {
+                delay(timeoutMs)
+                if (_uiState.value.icebreakerThought?.id == thought.id) {
+                    onIcebreakerIgnored(thought)
+                }
+            } catch (e: CancellationException) {
+                // 协程正常取消
+            }
+        }
     }
 
     private val _uiState = MutableStateFlow(
@@ -85,16 +106,19 @@ class OverlayExpandViewModel(
                 when (result.level) {
                     ProactivityLevel.L2_ICEBREAKER_BUBBLE -> {
                         _uiState.update { it.copy(icebreakerThought = result.thought) }
+                        scheduleIcebreakerTimeout(result.thought)
                     }
                     ProactivityLevel.L0_SILENT -> {
                         // L0: 静默更新内部动力学，若已有破冰气泡且已被废弃/消费则清除
                         if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                            icebreakerTimeoutJob?.cancel()
                             _uiState.update { it.copy(icebreakerThought = null) }
                         }
                     }
                     ProactivityLevel.L1_MICRO_EXPRESSION -> {
                         // L1: 微表情由 EmotionEngine 内部冲激驱动，不展示文字气泡
                         if (_uiState.value.icebreakerThought?.status != UnspokenThoughtEntity.STATUS_PENDING) {
+                            icebreakerTimeoutJob?.cancel()
                             _uiState.update { it.copy(icebreakerThought = null) }
                         }
                     }
@@ -120,21 +144,14 @@ class OverlayExpandViewModel(
             try {
                 unspokenThoughtDao.discardExpiredThoughts(nowTs)
                 val coordinator = proactiveCoordinator
-                if (coordinator != null) {
+                val chosenThought = if (coordinator != null) {
                     val result = coordinator.coordinateFirstFrame(nowTs)
-                    _uiState.update {
-                        it.copy(
-                            icebreakerThought = if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) {
-                                result.thought
-                            } else {
-                                null
-                            }
-                        )
-                    }
+                    if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) result.thought else null
                 } else {
-                    val topList = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1)
-                    _uiState.update { it.copy(icebreakerThought = topList.firstOrNull()) }
+                    unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1).firstOrNull()
                 }
+                _uiState.update { it.copy(icebreakerThought = chosenThought) }
+                scheduleIcebreakerTimeout(chosenThought)
             } catch (e: CancellationException) {
                 // 协程正常取消，静默退出
             } catch (e: Throwable) {
@@ -147,6 +164,7 @@ class OverlayExpandViewModel(
      * 用户关闭/忽略破冰气泡，标记为已废弃并回传负向反馈增加退避惩罚
      */
     fun dismissIcebreaker(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
+        icebreakerTimeoutJob?.cancel()
         viewModelScope.launch {
             proactiveCoordinator?.onUserFeedback(UserFeedback.DISMISSED, thought.id, nowMs)
             unspokenThoughtDao.markDiscarded(thought.id)
@@ -164,6 +182,7 @@ class OverlayExpandViewModel(
      * 用户点击破冰气泡接茬，标记已消费并回传正向反馈削减退避惩罚，展开面板并将念头填入输入栏
      */
     fun onIcebreakerClicked(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
+        icebreakerTimeoutJob?.cancel()
         viewModelScope.launch {
             proactiveCoordinator?.onUserFeedback(UserFeedback.CLICKED, thought.id, nowMs)
             unspokenThoughtDao.markConsumed(thought.id, nowMs)
@@ -181,6 +200,7 @@ class OverlayExpandViewModel(
      * 破冰气泡展示超时自然隐退 (弱负面反馈)
      */
     fun onIcebreakerIgnored(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
+        icebreakerTimeoutJob?.cancel()
         viewModelScope.launch {
             proactiveCoordinator?.onUserFeedback(UserFeedback.IGNORED, thought.id, nowMs)
             _uiState.update { state ->

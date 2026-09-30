@@ -3,7 +3,7 @@ package com.lirica.android.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import com.lirica.android.common.logging.LiricaLog
 import androidx.core.content.ContextCompat
 import com.lirica.android.service.KeepAliveService
 
@@ -17,21 +17,21 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        Log.i(TAG, "Received broadcast action: $action")
+        LiricaLog.i(TAG, "Received broadcast action: $action")
 
         when (action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                Log.i(TAG, "Triggering KeepAliveService wake-up from action: $action")
+                LiricaLog.i(TAG, "Triggering KeepAliveService wake-up from action: $action")
                 try {
                     val serviceIntent = Intent(context, KeepAliveService::class.java)
                     ContextCompat.startForegroundService(context, serviceIntent)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start KeepAliveService from BootReceiver", e)
+                    LiricaLog.e(TAG, "Failed to start KeepAliveService from BootReceiver", e)
                 }
             }
             else -> {
-                Log.d(TAG, "Ignoring unrelated broadcast action: $action")
+                LiricaLog.d(TAG, "Ignoring unrelated broadcast action: $action")
             }
         }
     }

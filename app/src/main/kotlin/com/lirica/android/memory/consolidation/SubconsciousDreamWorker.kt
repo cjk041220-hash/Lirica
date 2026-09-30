@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.lirica.android.LiricaApplication
+import com.lirica.android.common.logging.LiricaLog
 import com.lirica.android.database.LiricaDatabase
 import com.lirica.android.proactivity.DiaryEngineImpl
 import java.util.concurrent.TimeUnit
@@ -48,11 +49,13 @@ class SubconsciousDreamWorker(
             coordinator.runDreamCycle()
             Result.success()
         } catch (e: Exception) {
+            LiricaLog.e(TAG, "SubconsciousDreamWorker 周期入梦流水线执行失败，将触发重试", e)
             Result.retry()
         }
     }
 
     companion object {
+        private const val TAG = "SubconsciousDreamWorker"
         const val WORK_NAME = "lirica_subconscious_dream_worker"
 
         fun createPeriodicWorkRequest(): PeriodicWorkRequest {
