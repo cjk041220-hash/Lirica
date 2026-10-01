@@ -237,6 +237,24 @@ class ChatViewModel(
                     if (dynamicContext.isNullOrBlank()) careBlock else "$dynamicContext\n\n$careBlock"
                 }
 
+                // 2.6 具身生活叙事（M4.3）：将耳机、电量、作息与待机转译为伴生体第一人称生理/情境叙事
+                val cal = java.util.Calendar.getInstance().apply { timeInMillis = userTimestamp }
+                val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                val dwellMs = perceptionSnapshot?.screenState?.let {
+                    (userTimestamp - it.lastStateChangeTimestamp).coerceAtLeast(0L)
+                } ?: 0L
+                val embodiedNarrative = com.lirica.android.persona.EmbodiedNarrativeTranslator.translate(
+                    hw = perceptionSnapshot?.hardwareEnvironment,
+                    screen = perceptionSnapshot?.screenState,
+                    hourOfDay = hour,
+                    dwellDurationMs = dwellMs
+                )
+                val finalDynamicContext = if (embodiedNarrative.isNotBlank()) {
+                    if (effectiveDynamicContext.isNullOrBlank()) embodiedNarrative else "$effectiveDynamicContext\n\n$embodiedNarrative"
+                } else {
+                    effectiveDynamicContext
+                }
+
                 // 3. 追加占位助手消息
                 val assistantMessageId = UUID.randomUUID().toString()
                 val assistantTimestamp = System.currentTimeMillis()
@@ -286,7 +304,7 @@ class ChatViewModel(
 
                 val assembledMessages = phiMiddleware.assemble(
                     characterCard = _uiState.value.activeCharacterCard,
-                    dynamicContext = effectiveDynamicContext,
+                    dynamicContext = finalDynamicContext,
                     historyMessages = history,
                     moodState = currentMood,
                     sessionId = sessionId,

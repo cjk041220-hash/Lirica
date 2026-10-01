@@ -339,4 +339,44 @@ class ChatViewModelTest {
             )
         }
     }
+
+    @Test
+    fun testSendMessage_injectsEmbodiedNarrativeIntoDynamicContext() = runTest(testDispatcher) {
+        val mockPerception = mockk<com.lirica.android.perception.PerceptionPipeline>()
+        val mockSnapshot = com.lirica.android.perception.model.PerceptionSnapshot(
+            foregroundApp = com.lirica.android.perception.model.ForegroundAppInfo(
+                packageName = "com.netease.cloudmusic"
+            ),
+            hardwareEnvironment = com.lirica.android.perception.model.HardwareEnvironmentState(
+                isHeadsetPlugged = true,
+                isAudioPlaying = true
+            )
+        )
+        every { mockPerception.snapshotFlow } returns kotlinx.coroutines.flow.MutableStateFlow(mockSnapshot)
+
+        val vm = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao,
+            perceptionPipeline = mockPerception
+        )
+
+        val messagesSlot = slot<List<com.lirica.android.network.model.ChatMessage>>()
+        every { mockLlmClient.streamChat(any(), capture(messagesSlot), any()) } returns flowOf(
+            LlmStreamEvent.Token("在听歌呢")
+        )
+
+        vm.sendMessage("哈喽")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(messagesSlot.isCaptured)
+        val sentMessages = messagesSlot.captured
+        val systemMessages = sentMessages.filter { it.role == "system" }
+        assertTrue(systemMessages.isNotEmpty())
+        val combinedSystemText = systemMessages.joinToString("\n") { it.content ?: "" }
+        assertTrue("应包含具身耳机叙事", combinedSystemText.contains("戴着耳机听音乐"))
+    }
 }
