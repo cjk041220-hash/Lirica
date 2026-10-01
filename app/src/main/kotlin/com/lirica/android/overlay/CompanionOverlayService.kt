@@ -177,12 +177,8 @@ class CompanionOverlayService : LifecycleService() {
                     byokRepository = app.byokSettingsRepository,
                     chatDialogueDao = app.database.chatDialogueDao(),
                     toolAgent = app.nativeToolAgent,
-                    memoryExtractor = MemoryExtractor(
-                        llmClient = app.llmClient,
-                        userMemoryDao = app.database.userMemoryDao(),
-                        llmConfigProvider = { app.backgroundLlmConfig },
-                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
-                    )
+                    // 与主聊天共用同一实例（原实现漏传 openLoopDao，导致悬浮窗会话抽不出开环事项）
+                    memoryExtractor = app.memoryExtractor
                 ) as T
             }
         }

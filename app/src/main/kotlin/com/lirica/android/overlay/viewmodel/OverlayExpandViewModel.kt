@@ -148,7 +148,7 @@ class OverlayExpandViewModel(
                     val result = coordinator.coordinateFirstFrame(nowTs)
                     if (result.level == ProactivityLevel.L2_ICEBREAKER_BUBBLE) result.thought else null
                 } else {
-                    unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1).firstOrNull()
+                    unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1, nowMs = nowTs).firstOrNull()
                 }
                 _uiState.update { it.copy(icebreakerThought = chosenThought) }
                 scheduleIcebreakerTimeout(chosenThought)

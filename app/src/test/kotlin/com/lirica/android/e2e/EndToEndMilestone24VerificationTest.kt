@@ -107,7 +107,14 @@ class EndToEndMilestone24VerificationTest {
     private val systemAlarmScheduler: SystemAlarmScheduler = mockk(relaxed = true)
     private val llmClient: LiricaLlmClient = mockk(relaxed = true)
 
-    private var currentMockTime = 1726880000000L
+    /**
+     * 逻辑时钟基准。
+     *
+     * 必须与"生产代码生成时间戳所用的时钟"同源：schedule_wake 等链路在生产里用
+     * System.currentTimeMillis() 写 createdAt/expiryTime。若测试自带一个 2024 年的固定时间戳，
+     * 过期过滤一上线，念头就会在断言前被判为"早已过期"——那不是被测代码的问题，是尺子不同。
+     */
+    private var currentMockTime = System.currentTimeMillis()
 
     private lateinit var coordinator: HelixGuiCoordinator
     private lateinit var scheduleWakeManager: ScheduleWakeManager
@@ -119,7 +126,7 @@ class EndToEndMilestone24VerificationTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
-        currentMockTime = 1726880000000L
+        currentMockTime = System.currentTimeMillis()
         context = ApplicationProvider.getApplicationContext()
         db = Room.inMemoryDatabaseBuilder(context, LiricaDatabase::class.java)
             .allowMainThreadQueries()
@@ -157,6 +164,8 @@ class EndToEndMilestone24VerificationTest {
         val decisionEngine = SilenceDecisionEngineImpl()
         proactiveCoordinator = ProactiveBubbleCoordinatorImpl(
             thoughtManager = thoughtManager,
+            // 与 NativeToolAgent 共用同一逻辑时钟：避免"调用方给逻辑时间、内部取真实时间"的双时钟错配
+            timeProvider = { currentMockTime },
             decisionEngine = decisionEngine,
             emotionEngine = emotionEngine
         )
@@ -301,9 +310,9 @@ class EndToEndMilestone24VerificationTest {
      */
     @Test
     fun testScenario3_scheduleWakeAndProactiveEmergenceLoop() = runTest {
-        val now = 1726880000000L
-        val delayMinutes = 30.0
-        val triggerAt = now + (delayMinutes * 60 * 1000).toLong()
+        // 注意：schedule_wake 的触发时刻由**生产代码的真实时钟**决定（delay 基于 System.currentTimeMillis()），
+        // 用例不能自带一个固定时间戳，否则会与落库的 triggerAt/念头 expiryTime 不是同一把尺子，
+        // 断言就会在"逻辑时间 vs 真实时间"之间错位。这里统一改用落库后的真实 triggerAt。
         val botNote = "半小时后提醒主人喝水"
 
         // 1. LLM 发起工具调用 schedule_wake
@@ -321,17 +330,20 @@ class EndToEndMilestone24VerificationTest {
         assertTrue(toolResult.output.contains("已成功设定自定闹钟约定"))
 
         // 验证持久化
-        val pendingAlarms = db.scheduledAlarmDao().getPendingAlarms(triggerAt + 1000L)
+        val pendingAlarms = db.scheduledAlarmDao().getPendingAlarms(Long.MAX_VALUE)
         assertEquals(1, pendingAlarms.size)
         val alarm = pendingAlarms.first()
+        val triggerAt = alarm.triggerAt
         assertEquals(botNote, alarm.botNote)
         assertTrue(alarm.blockDelivery)
 
-        // 2. 模拟时间到达，系统闹钟唤醒
+        // 2. 模拟时间到达，系统闹钟唤醒（用落库的真实触发时刻）
         scheduleWakeManager.onWakeTriggered(alarm, nowMs = triggerAt)
 
         // 验证闹钟状态更新为 triggered，且念头池中生成高紧急度活水念头
-        val triggeredThought = db.unspokenThoughtDao().getTopUrgentPendingThoughts(limit = 1).firstOrNull()
+        val triggeredThought = db.unspokenThoughtDao()
+            .getTopUrgentPendingThoughts(limit = 1, nowMs = triggerAt)
+            .firstOrNull()
         assertNotNull(triggeredThought)
         assertTrue(triggeredThought!!.thought.contains(botNote))
         assertEquals(4.8f, triggeredThought.urgency, 0.01f)
@@ -345,14 +357,21 @@ class EndToEndMilestone24VerificationTest {
         )
 
         val coordResult = proactiveCoordinator.coordinate(snapshot, nowMs = triggerAt + 1000L)
-        assertEquals(ProactivityLevel.L2_ICEBREAKER_BUBBLE, coordResult.level)
+        assertEquals(
+            "诊断: level=" + coordResult.level + " reason=" + coordResult.reason +
+                " thought=" + coordResult.thought?.id + " bubbles=" + coordResult.bubblesShownToday +
+                " decision=" + coordResult.decision.action + " now=" + (triggerAt + 1000L),
+            ProactivityLevel.L2_ICEBREAKER_BUBBLE,
+            coordResult.level
+        )
         assertEquals(triggeredThought.id, coordResult.thought?.id)
 
         // 4. 用户点击气泡接茬，念头消费
         proactiveCoordinator.onUserFeedback(UserFeedback.CLICKED, triggeredThought.id, triggerAt + 1500L)
         db.unspokenThoughtDao().markConsumed(triggeredThought.id, triggerAt + 1500L)
 
-        val remainingThoughts = db.unspokenThoughtDao().getTopUrgentPendingThoughts(limit = 1)
+        val remainingThoughts = db.unspokenThoughtDao()
+            .getTopUrgentPendingThoughts(limit = 1, nowMs = triggerAt + 1500L)
         assertTrue(remainingThoughts.isEmpty())
     }
 
@@ -365,7 +384,7 @@ class EndToEndMilestone24VerificationTest {
      */
     @Test
     fun testScenario4_proactiveDisturbanceCostAndQuotaGuard() = runTest {
-        val now = 1726880000000L
+        val now = currentMockTime
 
         // 模拟全屏专注游戏 (打扰代价高达 4.5+)
         val gameSnapshot = PerceptionSnapshot(

@@ -40,13 +40,18 @@ Lirica 经历了从单一情感纪念物向**通用移动端伴生智能体**的
 | 异常感知关心（深夜/考前熬夜/久未出现） | ✅ 已实现 | `life/CareHintDetector.kt` + `life/CareLedger.kt`（冷却台账） |
 | 网页搜索 / 地图 / 塔罗 / 生理周期 | 🚫 不排期 | 按 D16 决策整批砍掉不排期；保留 LifeTool 扩展接口架构 |
 | BYOK 多模型网关（OpenAI 兼容 / Anthropic） | ✅ 已实现 | `network/gateway/*`（`LiricaLlmGateway`、`OpenAiProtocolAdapter`、`AnthropicProtocolAdapter`）、`ui/settings/SettingsScreen.kt`、`ByokSettingsRepository.kt` |
-| 端侧向量检索（语义记忆召回） | 🗺️ 不立项 | 按评审意见改为触发器制（见《评审意见——主方案 3.0 补充改进清单》第七节 A） |
+| 端侧向量检索（语义记忆召回） | ✅ 已实现 | `memory/retrieval/*`（`LiricaEmbeddingModel`、`BertWordPieceTokenizer`、`HybridMemoryRetriever`）、`database/memory/MemoryVectorStore.kt`；主聊天与悬浮窗均走 `DualTrackMemoryManager.retrieve()` 融合召回 |
+| 情境感知入梦固化（白天相处 → 夜间自叙经历） | ✅ 已实现 | `perception/SensingEpisodicBuffer.kt`（`LiricaApplication` 挂载 snapshotFlow）、`memory/consolidation/DreamEpisodeConsolidator.kt`（`SubconsciousDreamWorker` 装配） |
+| 开环记忆与闭环核销（未决事项追踪 + 完成后闭嘴） | ✅ 已实现 | `proactivity/OpenLoopLifecycleManager.kt`（抽取落库 / 到期推进 / `resolveMentionedLoops` 核销）、`ChatViewModel` 每轮对话核销入口 |
+| L3 系统通知通道（息屏/锁屏时的高优先送达） | ✅ 已实现 | `proactivity/ProactiveNotificationDispatcher.kt`（授权门 + 30 分钟冷却）、`ProactiveBubbleCoordinator.kt` L3 前置判定与每日 3 条上限 |
+| 具身生活叙事（耳机/深夜/久别的第一人称转译） | ✅ 已实现 | `persona/EmbodiedNarrativeTranslator.kt`（离开时长取 `ScreenStateSnapshot.lastUserPresentTimestamp`） |
+| 装配自检（"造了器官没接神经"防复发） | ✅ 已实现 | `MasterPlan4ClosureVerificationTest.kt`（关键基础设施存在性 + lateinit 反射巡检） |
 
 ---
 
 ## 🗺️ 架构与演进路线
 
-2.0 基础重构已完成（R8 混淆启用、工具闭环装配、576 项单测基线全绿，2026-09-27 实跑口径：105 个测试类），当前处于 **3.0 系统级演进收尾阶段**（视觉感知观测闭环 / 操控升维 / 人格深水区；BYOK 网关已落地接线）。  
+2.0 基础重构已完成（R8 混淆启用、工具闭环装配，**639 项单测基线全绿，2026-10-02 强制重跑口径：122 个测试类**），当前处于 **4.0 系统级演进（M4.x）接线收尾完成阶段**（视觉感知观测闭环 / 操控升维 / 人格深水区；BYOK 网关已落地接线）。  
 > ⚠️ 口径说明：以上测试与性能结论均为 JVM（Robolectric 模拟）环境实测，真机验证项见 PROGRESS_TRACKER 的「真机冒烟待验收」清单。
 * **核心开发蓝图**：详见 [`主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md`](./docs/主方案3.0——原生自主人格伴生智能体第三轮系统级架构与演进方案_2026-09-22.md)
 * **执行规划**：按《评审意见——主方案 3.0 补充改进清单》第八节修订路线执行：M3.1 BYOK 网关 → M3.0 活人感三件套 → M3.2 视觉感知与观测闭环 → M3.3 操控升维 → M3.4 人格深水区

@@ -47,7 +47,7 @@ DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ### 2.3 验证环境可用性
 克隆仓库后，先在命令行运行两道质检：
 ```bash
-./gradlew testDebugUnitTest  # 运行全量单元测试（当前基线 576 项全绿（105 个测试类，2026-09-27 实跑口径））
+./gradlew testDebugUnitTest  # 运行全量单元测试（当前基线 639 项全绿（122 个测试类，2026-10-02 强制重跑口径））
 ./gradlew assembleDebug      # 验证 APK 编译打包正常
 ```
 两项均通过（`BUILD SUCCESSFUL`）即代表本地环境完全就绪。
@@ -92,7 +92,7 @@ git checkout -b feat/m34-hardware-bus  # 分支命名规范：feat/功能名 或
 #### 第三步：提交前本地三重核验
 在执行 `git push` 前，必须按顺序执行以下三步：
 ```bash
-# 1. 确保所有单测全绿（不能少于既有 576 项基线（2026-09-27 实跑口径））
+# 1. 确保所有单测全绿（不能少于既有 639 项基线（2026-10-02 强制重跑口径））
 ./gradlew testDebugUnitTest
 
 # 2. 确保 APK 打包没有隐式资源/配置故障
@@ -119,8 +119,8 @@ git push -u origin feat/m34-hardware-bus
 
 这五条红线是前期演进中踩坑沉淀下来的**底线原则**，任何违反的代码均不允许合入：
 
-### 🔴 红线一：576 项测试基线全绿
-- 任何时候，合入 master 的代码单测必须 100% 通过（当前基线 576 tests，0 failures，2026-09-27 实跑口径）。
+### 🔴 红线一：639 项测试基线全绿
+- 任何时候，合入 master 的代码单测必须 100% 通过（当前基线 639 tests，0 failures，2026-10-02 强制重跑口径）。
 - “谁搞红谁自愈”：绝不允许带着测试报错提 PR 或把测试故意 `@Ignore` 绕过。
 
 ### 🔴 红线二：100% 零信任物理隐私熔断
@@ -165,7 +165,7 @@ git push -u origin feat/m34-hardware-bus
 
 在点击提交 PR 前，请自行核对以下项目：
 
-- [ ] 本地运行 `./gradlew testDebugUnitTest` 全绿通过（当前基线 576 项）。
+- [ ] 本地运行 `./gradlew testDebugUnitTest` 全绿通过（当前基线 639 项）。
 - [ ] 本地运行 `./gradlew assembleDebug` 打包成功。
 - [ ] 针对新增功能或 Bug 修复补充了对应的单元测试。
 - [ ] 未改动包名 `com.lirica.android` 与数据库名 `lirica_aether.db`。

@@ -148,7 +148,9 @@ class SubconsciousDreamCoordinatorTest {
 
         // 7. 断言清晨梦醒浮现活水：生成了一条未完成念头存入念头池
         val unspokenDao = database.unspokenThoughtDao()
-        val thoughts = unspokenDao.getTopUrgentPendingThoughts(limit = 10)
+        // 必须用同一逻辑时钟：浮现念头的 expiryTime 由 runDreamCycle(nowMs) 决定，
+        // 用真实时间查询会把它算成早已过期（这正是查询层过期过滤要堵的洞）
+        val thoughts = unspokenDao.getTopUrgentPendingThoughts(limit = 10, nowMs = nowMs)
         assertTrue(thoughts.isNotEmpty())
         assertNotNull(report.emergenceThoughtId)
     }

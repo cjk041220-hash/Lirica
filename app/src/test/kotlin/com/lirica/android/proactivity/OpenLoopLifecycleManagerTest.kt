@@ -52,6 +52,16 @@ class OpenLoopLifecycleManagerTest {
             return count
         }
         override suspend fun cleanupClosedLoops(beforeMs: Long): Int = 0
+        override suspend fun getOpenLoops(limit: Int): List<OpenLoopEntity> {
+            return loops
+                .filter {
+                    it.status == OpenLoopEntity.STATUS_OPEN ||
+                        it.status == OpenLoopEntity.STATUS_TRACKING ||
+                        it.status == OpenLoopEntity.STATUS_TRIGGERED
+                }
+                .sortedBy { it.targetTimeMs }
+                .take(limit)
+        }
     }
 
     private val fakeThoughtDao = object : UnspokenThoughtDao {
@@ -63,12 +73,23 @@ class OpenLoopLifecycleManagerTest {
         override suspend fun update(entity: UnspokenThoughtEntity) {}
         override suspend fun delete(entity: UnspokenThoughtEntity) {}
         override suspend fun deleteById(id: String) { thoughts.removeAll { it.id == id } }
+        override suspend fun getByTriggerContextPrefix(prefix: String, status: String): List<UnspokenThoughtEntity> {
+            return thoughts.filter { it.status == status && it.triggerContext?.startsWith(prefix) == true }
+        }
         override suspend fun getById(id: String): UnspokenThoughtEntity? = thoughts.find { it.id == id }
         override fun getPendingThoughts(status: String, limit: Int): kotlinx.coroutines.flow.Flow<List<UnspokenThoughtEntity>> {
             return kotlinx.coroutines.flow.flowOf(thoughts.filter { it.status == status }.take(limit))
         }
-        override suspend fun getTopUrgentPendingThoughts(status: String, limit: Int): List<UnspokenThoughtEntity> {
-            return thoughts.filter { it.status == status }.sortedByDescending { it.urgency }.take(limit)
+        override suspend fun getTopUrgentPendingThoughts(
+            status: String,
+            limit: Int,
+            nowMs: Long
+        ): List<UnspokenThoughtEntity> {
+            // 与生产 SQL 对齐：过期的念头不再返回
+            return thoughts
+                .filter { it.status == status && (it.expiryTime == null || it.expiryTime > nowMs) }
+                .sortedByDescending { it.urgency }
+                .take(limit)
         }
         override suspend fun markConsumed(id: String, consumedAt: Long, consumedStatus: String) {
             val idx = thoughts.indexOfFirst { it.id == id }

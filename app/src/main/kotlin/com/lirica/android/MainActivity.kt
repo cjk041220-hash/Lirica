@@ -87,19 +87,15 @@ class MainActivity : ComponentActivity() {
                     phiMiddleware = app.phiMiddleware,
                     humannessFilter = app.humannessFilter,
                     chatDialogueDao = app.database.chatDialogueDao(),
-                    memoryExtractor = MemoryExtractor(
-                        llmClient = app.llmClient,
-                        userMemoryDao = app.database.userMemoryDao(),
-                        llmConfigProvider = { app.backgroundLlmConfig },
-                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() },
-                        openLoopDao = app.database.openLoopDao()
-                    ),
+                    // 全应用唯一实例：节流水位线与开环写入口径统一（见 LiricaApplication.memoryExtractor）
+                    memoryExtractor = app.memoryExtractor,
                     toolAgent = app.nativeToolAgent,
                     careHintDetector = app.careHintDetector,
                     scheduledAlarmDao = app.database.scheduledAlarmDao(),
                     handoffManager = app.handoffManager,
                     byokRepository = app.byokSettingsRepository,
-                    perceptionPipeline = app.perceptionPipeline
+                    perceptionPipeline = app.perceptionPipeline,
+                    proactiveCoordinator = app.proactiveCoordinator
                 ) as T
             }
         }

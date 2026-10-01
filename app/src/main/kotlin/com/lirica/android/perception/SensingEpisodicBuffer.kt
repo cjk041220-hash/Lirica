@@ -28,12 +28,19 @@ class SensingEpisodicBuffer(
     private val sliceDao: EpisodicSensingSliceDao,
     val minDwellDurationMs: Long = DEFAULT_MIN_DWELL_MS,
     val maxDailySlices: Int = MAX_DAILY_SLICES,
+    /** 未消化切片软上限：只告警不删除，见 [pruneIfNeeded] */
+    val maxUnconsolidatedSlices: Int = MAX_UNCONSOLIDATED_SLICES,
     private val timeProvider: () -> Long = { System.currentTimeMillis() }
 ) {
 
     companion object {
         const val DEFAULT_MIN_DWELL_MS = 3 * 60 * 1000L // 默认 3 分钟以上的前台专注才计入切片
         const val MAX_DAILY_SLICES = 50                 // 单日上限 50 条切片，防 DB 膨胀
+        /**
+         * 未消化切片软上限：只用于告警，不触发删除。
+         * 设成远期两天的量级；积压到这一步说明入梦流水线长期没跑（充电 + 设备空闲约束未满足）。
+         */
+        const val MAX_UNCONSOLIDATED_SLICES = 120
     }
 
     private var lastPackage: String? = null
@@ -152,11 +159,32 @@ class SensingEpisodicBuffer(
         LiricaLog.d("SensingEpisodicBuffer", "已记录情境切片: $summary")
     }
 
+    /**
+     * 容量守门：**只淘汰已消化的旧切片**，永不删除未消化切片。
+     *
+     * 语义变更说明（本轮修复）：原实现用 getTotalCount() 判上限、deleteOldest() 删最旧的，
+     * 不看 is_consolidated。而入梦 Worker 是 24h 周期 + 充电 + 设备空闲才跑，
+     * 于是"一天用机超过上限"时会先把当天早上的未消化切片删掉，夜里只剩最近几小时可消化——
+     * 主脉看着接通了，实际记不住一整天。现在未消化切片只受 [maxUnconsolidatedSlices] 软上限约束，
+     * 且超限时淘汰的仍是**已消化**的历史，未消化原料一律保留给入梦流水线。
+     */
     private suspend fun pruneIfNeeded() {
-        val count = sliceDao.getTotalCount()
-        if (count > maxDailySlices) {
-            val toDelete = count - maxDailySlices
-            sliceDao.deleteOldest(toDelete)
+        val total = sliceDao.getTotalCount()
+        if (total > maxDailySlices) {
+            val excess = total - maxDailySlices
+            val deleted = sliceDao.deleteOldestConsolidated(excess)
+            if (deleted > 0) {
+                LiricaLog.d("SensingEpisodicBuffer", "裁剪已消化历史切片 @deleted 条，未消化原料全部保留")
+            }
+        }
+
+        val unconsolidated = sliceDao.getUnconsolidatedCount()
+        if (unconsolidated > maxUnconsolidatedSlices) {
+            // 只告警不删除：宁可多占几十 KB，也不能让"白天陪了一整天"在夜里变成空白
+            LiricaLog.w(
+                "SensingEpisodicBuffer",
+                "未消化切片积压 @unconsolidated 条（超过软上限 @maxUnconsolidatedSlices）：入梦流水线可能长时间未运行"
+            )
         }
     }
 

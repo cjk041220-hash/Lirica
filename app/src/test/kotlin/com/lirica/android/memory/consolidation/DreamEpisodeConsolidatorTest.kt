@@ -37,7 +37,7 @@ class DreamEpisodeConsolidatorTest {
         }
         override suspend fun getUnconsolidatedCount(): Int = slices.count { !it.isConsolidated }
         override suspend fun getTotalCount(): Int = slices.size
-        override suspend fun deleteOldest(count: Int): Int = 0
+        override suspend fun deleteOldestConsolidated(count: Int): Int = 0
         override suspend fun deleteOldConsolidated(beforeMs: Long): Int {
             val toDelete = slices.filter { it.isConsolidated && it.timestampMs < beforeMs }
             slices.removeAll(toDelete)

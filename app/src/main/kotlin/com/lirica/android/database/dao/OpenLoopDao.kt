@@ -28,6 +28,24 @@ interface OpenLoopDao {
     @Query("SELECT * FROM open_loops WHERE status = :status ORDER BY target_time_ms ASC")
     suspend fun getByStatus(status: String): List<OpenLoopEntity>
 
+    /**
+     * 取出全部**尚未闭环**的事项：OPEN / TRACKING / TRIGGERED。
+     *
+     * TRIGGERED 必须包含在内：那个状态只表示"已经提醒过"，事情本身还没结束——
+     * 用户这时候说"我做完了"，正是最该闭嘴的时刻；漏掉它就会出现
+     * "她刚提醒完、你回一句'早做完了'，她过会儿还来问"。
+     *
+     * 注意匹配方向：判断"用户这句话里有没有提到某个事项"，必须拿**事项标题去用户文本里找**，
+     * 而不是拿整句用户消息去 LIKE 标题（后者永远匹配不上长句）。
+     */
+    @Query("""
+        SELECT * FROM open_loops
+        WHERE status IN ('OPEN', 'TRACKING', 'TRIGGERED')
+        ORDER BY target_time_ms ASC
+        LIMIT :limit
+    """)
+    suspend fun getOpenLoops(limit: Int = 50): List<OpenLoopEntity>
+
     @Query("SELECT * FROM open_loops WHERE status IN ('OPEN', 'TRACKING') AND trigger_window_start_ms <= :currentTimeMs ORDER BY target_time_ms ASC")
     suspend fun getDueForTracking(currentTimeMs: Long): List<OpenLoopEntity>
 

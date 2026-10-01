@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.lirica.android.MainActivity
 import com.lirica.android.common.logging.LiricaLog
 
@@ -60,6 +61,18 @@ class ProactiveNotificationDispatcher(
         return (nowMs - lastDispatchedTimestampMs) >= minCooldownMs
     }
 
+    /**
+     * 系统层是否允许我们发通知。
+     *
+     * Android 13+ 未授予 POST_NOTIFICATIONS 时，[NotificationManager.notify] **不抛异常**、
+     * 静默丢弃。如果这里不前置判定，调用方会拿到 true、日志写"已递送"、并进入 30 分钟冷却——
+     * 即"日志说发了，手机上什么都没有"，且真实可送达的时机被冷却吃掉。
+     * 因此授权判定必须发生在冷却置位之前。
+     */
+    fun canPostNotifications(context: Context): Boolean =
+        runCatching { NotificationManagerCompat.from(context).areNotificationsEnabled() }
+            .getOrDefault(false)
+
     fun buildNotification(context: Context, title: String, message: String): Notification {
         createNotificationChannel(context)
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -83,9 +96,16 @@ class ProactiveNotificationDispatcher(
             .build()
     }
 
-    /** 
+    /**
      * 派发主动关怀通知
-     * @return true 成功递送并展示；false 被冷却门拦截或无权限
+     *
+     * 门控顺序（顺序即语义，不可调换）：
+     * 1. 冷却门：距上次**成功**递送不足 [minCooldownMs] 直接阻断；
+     * 2. 授权门：系统未放行通知权限时返回 false 且**不置冷却**（否则用户一旦授权，
+     *    还要白等一个不应期才能收到第一条）；
+     * 3. 真正 notify。
+     *
+     * @return true 表示已成功投递给系统通知栏；false 表示被冷却门/授权门拦截或派发异常
      */
     fun dispatchNotification(
         context: Context,
@@ -100,16 +120,20 @@ class ProactiveNotificationDispatcher(
             return false
         }
 
+        if (!canPostNotifications(context)) {
+            LiricaLog.w("NotificationDispatcher", "系统通知权限未放行，取消本次 L3 投递（不消耗冷却）")
+            return false
+        }
+
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return false
-
-        // 无论系统层是否授权，只要尝试过派发即刻进入不应期冷却，杜绝无权限时的死循环重试
-        lastDispatchedTimestampMs = now
 
         val notification = buildNotification(context, title, message)
 
         return try {
             nm.notify(notificationId, notification)
+            // 仅在真正投递成功后进入不应期：失败不该惩罚下一次投递
+            lastDispatchedTimestampMs = now
             LiricaLog.i("NotificationDispatcher", "已递送 L3 主动通知: $title - $message")
             true
         } catch (e: Exception) {

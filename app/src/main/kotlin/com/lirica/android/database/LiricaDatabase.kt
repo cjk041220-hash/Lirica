@@ -51,7 +51,7 @@ import com.lirica.android.database.memory.MemoryEmbeddingEntity
         EpisodicSensingSliceEntity::class,
         OpenLoopEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class LiricaDatabase : RoomDatabase() {
@@ -165,6 +165,20 @@ abstract class LiricaDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5：未完成念头池新增 content_title 列（L3 通知标题）。
+         * 用 NOT NULL DEFAULT '' 加列：老行自动补空串，由 L3 通道退化为兜底标题，
+         * 不产生 NULL 语义分支，也不需要回填脚本。
+         */
+        @JvmField
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    ALTER TABLE `unspoken_thoughts` ADD COLUMN `content_title` TEXT NOT NULL DEFAULT ''
+                """.trimIndent())
+            }
+        }
+
         @Volatile
         private var INSTANCE: LiricaDatabase? = null
 
@@ -180,7 +194,7 @@ abstract class LiricaDatabase : RoomDatabase() {
                 LiricaDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
         }

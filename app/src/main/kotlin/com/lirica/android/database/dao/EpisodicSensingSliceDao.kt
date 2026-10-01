@@ -34,8 +34,22 @@ interface EpisodicSensingSliceDao {
     @Query("SELECT COUNT(*) FROM episodic_sensing_slices")
     suspend fun getTotalCount(): Int
 
-    @Query("DELETE FROM episodic_sensing_slices WHERE id IN (SELECT id FROM episodic_sensing_slices ORDER BY timestamp_ms ASC LIMIT :count)")
-    suspend fun deleteOldest(count: Int): Int
+    /**
+     * 裁剪超出容量的**已消化**切片（按时间淘汰最旧的）。
+     *
+     * 关键：绝不能删未消化的切片。它们是一整天的相处原料，只有夜间入梦流水线会消费；
+     * 若在这里按"总数超限"直接删最旧的，重度使用日（停留切片 > 上限）会在当晚入梦之前
+     * 把当天早上的记忆自己抹掉——功能看起来在工作，实际只留下最近两三个小时。
+     */
+    @Query("""
+        DELETE FROM episodic_sensing_slices
+        WHERE is_consolidated = 1 AND id IN (
+            SELECT id FROM episodic_sensing_slices
+            WHERE is_consolidated = 1
+            ORDER BY timestamp_ms ASC LIMIT :count
+        )
+    """)
+    suspend fun deleteOldestConsolidated(count: Int): Int
 
     @Query("DELETE FROM episodic_sensing_slices WHERE is_consolidated = 1 AND timestamp_ms < :beforeMs")
     suspend fun deleteOldConsolidated(beforeMs: Long): Int

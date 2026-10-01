@@ -24,6 +24,20 @@ class OpenLoopLifecycleManager(
     companion object {
         const val DEFAULT_TRIGGER_LEAD_MS = 2 * 3600 * 1000L // 提前 2 小时进入关注跟踪窗口
         const val DEFAULT_EXPIRY_DURATION_MS = 72 * 3600 * 1000L // 事项截止后 72 小时静默过期
+
+        /**
+         * 组装开环事项的关怀话术。
+         *
+         * 统一带上"标题｜正文"结构（分隔符见 ProactiveBubbleCoordinator.TITLE_SEPARATOR）：
+         * - 气泡/聊天直接展示整条，自然可读；
+         * - L3 通知拆成通知标题 + 通知正文两行。
+         * 同一句话在两种通道都成立，不必为通知另写一套文案。
+         */
+        fun buildFollowUpPrompt(title: String, followUpPrompt: String?): String {
+            val body = followUpPrompt?.takeIf { it.isNotBlank() }
+                ?: "待会儿不是有「$title」嘛，准备得怎么样啦？"
+            return "$title${ProactiveBubbleCoordinator.TITLE_SEPARATOR}$body"
+        }
     }
 
     /** 创建新的未决事件 */
@@ -37,8 +51,7 @@ class OpenLoopLifecycleManager(
     ): OpenLoopEntity {
         val nowMs = timeProvider()
         val triggerWindowStart = (targetTimeMs - leadTimeMs).coerceAtLeast(nowMs)
-        val prompt = followUpPrompt?.takeIf { it.isNotBlank() }
-            ?: "待会儿不是有「$title」嘛，准备得怎么样啦？"
+        val prompt = buildFollowUpPrompt(title, followUpPrompt)
 
         val entity = OpenLoopEntity(
             id = UUID.randomUUID().toString(),
@@ -69,7 +82,7 @@ class OpenLoopLifecycleManager(
             if (unspokenThoughtDao != null && loop.status != OpenLoopEntity.STATUS_TRIGGERED) {
                 val thought = UnspokenThoughtEntity(
                     id = UUID.randomUUID().toString(),
-                    thought = loop.followUpPrompt,
+                    thought = buildFollowUpPrompt(loop.title, loop.followUpPrompt),
                     triggerContext = "open_loop:${loop.id}",
                     urgency = (0.6f + loop.urgencyLevel * 0.15f).coerceAtMost(0.95f),
                     decayScore = 1.0f,
@@ -91,7 +104,41 @@ class OpenLoopLifecycleManager(
     /** 用户提及或完成事件，核销闭环 */
     suspend fun resolveLoop(id: String) {
         openLoopDao.updateStatus(id, OpenLoopEntity.STATUS_RESOLVED)
-        LiricaLog.i("OpenLoopManager", "成功闭环核销事项: $id")
+        LiricaLog.i("OpenLoopManager", "成功闭环核销事项: @id")
+    }
+
+    /**
+     * 用户主动提到某件事 → 即时核销相关开环，并撤回已经推进到念头池的对应念头。
+     *
+     * 这是"别再唠叨"的关键一环：原实现只有 [resolveLoop] 这个**没有任何调用方**的方法，
+     * 事项只能靠 72 小时超时消失；用户明明已经考完了，她还会在截止后继续追问。
+     *
+     * @return 被核销的开环条目
+     */
+    suspend fun resolveMentionedLoops(userText: String, nowMs: Long = timeProvider()): List<OpenLoopEntity> {
+        if (userText.isBlank()) return emptyList()
+        val resolved = mutableListOf<OpenLoopEntity>()
+        for (loop in openLoopDao.getOpenLoops().filter { it.title.isNotBlank() && userText.contains(it.title) }) {
+            openLoopDao.updateStatus(loop.id, OpenLoopEntity.STATUS_RESOLVED)
+            retractOpenLoopThought(loop, nowMs)
+            resolved.add(loop)
+        }
+        if (resolved.isNotEmpty()) {
+            LiricaLog.i("OpenLoopManager", "用户已提及，核销开环 @{resolved.size} 条: @{resolved.map { it.title }}")
+        }
+        return resolved
+    }
+
+    /**
+     * 撤回某条开环对应的待表达念头。
+     *
+     * 念头是用 UUID 主键、不带 title 字段的，只有 [UnspokenThoughtEntity.triggerContext]
+     * 记着 "open_loop:<loopId>"，因此用前缀匹配定位——避免误伤普通感知念头。
+     */
+    private suspend fun retractOpenLoopThought(loop: OpenLoopEntity, nowMs: Long) {
+        val prefix = "open_loop:${loop.id}"
+        unspokenThoughtDao?.getByTriggerContextPrefix(prefix)
+            ?.forEach { unspokenThoughtDao.deleteById(it.id) }
     }
 
     /** 标记超期未完成事项为过期 */

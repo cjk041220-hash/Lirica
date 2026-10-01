@@ -88,7 +88,7 @@ class OverlayExpandViewModelTest {
         )
 
         coEvery { unspokenThoughtDao.discardExpiredThoughts(any()) } returns 2
-        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1) } returns listOf(thought)
+        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1, nowMs = any()) } returns listOf(thought)
 
         val viewModel = createViewModel()
         testDispatcher.scheduler.advanceUntilIdle()
@@ -97,7 +97,7 @@ class OverlayExpandViewModelTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         coVerify { unspokenThoughtDao.discardExpiredThoughts(2000L) }
-        coVerify { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1) }
+        coVerify { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1, nowMs = any()) }
 
         val state = viewModel.uiState.value
         assertNotNull(state.icebreakerThought)
@@ -115,7 +115,7 @@ class OverlayExpandViewModelTest {
             status = UnspokenThoughtEntity.STATUS_PENDING
         )
 
-        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1) } returns listOf(thought)
+        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1, nowMs = any()) } returns listOf(thought)
         coJustRun { unspokenThoughtDao.markDiscarded(thought.id) }
 
         val viewModel = createViewModel()
@@ -141,7 +141,7 @@ class OverlayExpandViewModelTest {
             status = UnspokenThoughtEntity.STATUS_PENDING
         )
 
-        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1) } returns listOf(thought)
+        coEvery { unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 1, nowMs = any()) } returns listOf(thought)
         coJustRun { unspokenThoughtDao.markConsumed(thought.id, any()) }
 
         val viewModel = createViewModel()

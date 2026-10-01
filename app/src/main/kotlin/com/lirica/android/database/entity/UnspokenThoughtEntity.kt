@@ -28,6 +28,15 @@ data class UnspokenThoughtEntity(
     @ColumnInfo(name = "thought")
     val thought: String,
 
+    /**
+     * 主动送达时的标题（L3 通知用）。
+     * 空串表示无专属标题，L3 通道会退化为"按时间/来源生成的兜底标题"。
+     * 之所以单独建模而不是从正文里拆：正文是给用户看的原话，标题是承载语气的短句，
+     * 二者语义不同，拆字符串会让后续换文案时不得不改动已落库的历史数据。
+     */
+    @ColumnInfo(name = "content_title", defaultValue = "")
+    val contentTitle: String = "",
+
     @ColumnInfo(name = "trigger_context")
     val triggerContext: String? = null,
 

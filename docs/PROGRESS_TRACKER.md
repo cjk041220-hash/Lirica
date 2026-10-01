@@ -1,8 +1,8 @@
 # Lirica (Project Aether) 开发进度看板 (Progress Tracker)
 
 > **项目更名说明**：本项目自 2026-09-23 起正式定名 **Lirica**（意大利语中的抒情诗，原名“小汐 / sonetto”）。  
-> **当前阶段**：第三轮系统级架构演进（3.0）· **M3.3 手机操控升维与动作分块 全绿达成**  
-> **最后更新**：2026-09-27（2026-09-27 全面审计修复轮：动机去重 / BYOK 收口 / 通知权限 / PII 防线 / MIGRATION_2_3 守护测试等，测试基线更新为 105 类 / 576 例全绿）  
+> **当前阶段**：第四轮系统级架构演进（4.0-M4.x）· **接线收尾轮已完成**（M4.1 情境感知入梦 / M4.2 开环记忆 / M4.3 具身叙事 / M4.4 L3 通知通道）  
+> **最后更新**：2026-10-02（接线收尾轮：L3 通知真接线 / 切片不再误删未消化记忆 / 久别语义修正 / 过期念头查询层拦截 / 开环闭环核销 / 记忆抽取器单例化 + 装配自检测试，测试基线更新为 122 类 / 639 例全绿）  
 > **整体技术栈**：100% Native Android Kotlin + Jetpack Compose + Ktor SSE + Room SQLite + Coroutines + WorkManager（旧 Python `backend/` 参考源已清理删除并封存至 Git 历史）  
 > ⚠️ **口径声明**：本看板中全部测试与性能结论均为 JVM（Robolectric 模拟）环境实测；真机验证（无障碍 / 悬浮窗 / Room / SSE / 硬件 Keystore / 16KB 设备）尚未执行，相关条目以「真机待验」标注为准。
 
@@ -1149,6 +1149,38 @@
   - `./gradlew testDebugUnitTest`: **515 tests completed, 0 failed, 100% pass** (测试套件从 504 扩充至 515，净增 11 项单测)
   - `./gradlew assembleDebug`: **BUILD SUCCESSFUL in 6s** (0 error, 0 warning)
 - **阶段验收结论**：APPROVED。第三轮系统级架构演进第七里程碑（M3.4 人格深水区与全域监视闭环）全绿达成！
+---
+
+## Round 4 · 接线收尾轮（2026-10-02 完成）
+
+> **本轮定位**：前三轮 + M4.x 把"器官"都造出来了，但审计发现多处**接线悬空**（类/实体/DAO/测试齐全，生产代码 0 调用方）。
+> 本轮以"调用方 grep + 强制重跑测试"为验收口径，把断链逐条接上，并加装防复发断言。
+
+### 一、修复的悬空与缺陷（逐条附证据口径）
+
+| # | 问题 | 修复 | 验收 |
+|:--|:--|:--|:--|
+| 1 | **L3 主动通知是死代码**：`dispatchNotification()` 生产 0 调用方；协调器从不返回 `L3_LIGHT_NOTIFICATION`；息屏/锁屏时高优先事项无任何送达通道 | `ProactiveBubbleCoordinatorImpl` 新增 L3 前置判定（屏幕未解锁 + 紧急度 ≥ 4.5 + 非隐私熔断 + 非通话）+ 每日 3 条硬上限（持久化），投递成功后核销念头；首帧路径同样接入 | `L3NotificationChannelTest`（6 例）：息屏送达并核销 / 解锁不走通知 / 隐私熔断拦截 / 通话拦截 / 过期不送 / 每日上限生效 |
+| 2 | **通知权限判定缺失**：Android 13+ 无 `POST_NOTIFICATIONS` 时 `notify()` 静默丢弃，旧实现仍返回 true、写"已递送"日志并进入 30 分钟冷却 | 新增 `canPostNotifications()` 前置门；未授权返回 false 且**不消耗冷却**；冷却改为仅在真正投递成功后置位 | `ProactiveNotificationDispatcherGateTest`（3 例）：无权限不消耗冷却 / 有权限投递并置冷却 / 冷却窗口阻断 |
+| 3 | **切片缓冲器误删未消化记忆**：`pruneIfNeeded` 按"总数超限"调 `deleteOldest()` 删最旧，不看 `is_consolidated`；入梦 Worker 是 24h+充电+空闲才跑，重度使用日会把当天早上的记忆在入梦前删光 | 裁剪改为 `deleteOldestConsolidated`（只淘汰已消化历史）；未消化切片仅受软上限约束（只告警不删除） | `SensingEpisodicBufferTest`：未消化原料一条不少 + 容量由已消化历史顶上 |
+| 4 | **久别重聚永不触发**：判据用"屏幕状态变更间隔"，而解锁动作本身会刷新该戳 → 离家 6 小时回来算 0 秒；连续亮屏 6 小时反而被算成"沉睡好久" | `ScreenStateSnapshot` 新增 `lastUserPresentTimestamp`（息屏/锁屏时记账）；`EmbodiedNarrativeTranslator` 改用真实离开时长 | 正向：离开 6h 后解锁 → 生成重聚叙事；反向：连续使用 6h **不得**说"沉睡"；2h 不触发 |
+| 5 | **过期念头仍被当最高优先递出**：`getTopUrgentPendingThoughts` 不过滤 `expiry_time`，只有刷新破冰时才批量丢弃 | 查询层加 `expiry_time IS NULL OR > :nowMs`；DAO 的 `nowMs` 改为必填，杜绝"领域层逻辑时间 vs DAO 真实时间"双时钟错配 | `UnspokenThoughtExpiryQueryTest`（2 例）：过期高优先念头被拦 / 无过期时间不受影响 / 过期念头仍可按 trigger_context 撤回 |
+| 6 | **开环闭环只做了一半**：`resolveLoop()` 生产 0 调用方；`TRACKING` 状态无任何写入；用户说"考完了"她仍会继续追问到 72h 超时 | 新增 `resolveMentionedLoops(userText)`：按"用户文本包含事项标题"匹配（含 **TRIGGERED** 状态——已提醒但未完成的同样要能关掉），核销并撤回对应念头；`ChatViewModel` 每轮对话入口调用 | `MasterPlan4ClosureVerificationTest`：核销 + 撤回念头 / 无关文本不误伤 / 经协调器入口同样生效 |
+| 7 | **两条聊天链路抽取器各自为政**：MainActivity 与悬浮窗各 new 一个 `MemoryExtractor`（节流为实例级），且悬浮窗那份**漏传 `openLoopDao`** → 悬浮窗会话抽不出开环、同一批对话可能抽两次 | 收敛为 `LiricaApplication.memoryExtractor` 单例，两个装配点共用 | 装配自检断言 + `MasterPlan4ClosureVerificationTest` |
+| 8 | **高优先履约念头被动机门控吞掉**：自定闹钟（urgency 4.8）的送达要过"内隐动机 ≥ 3.6"，而动机来自闲时动力学——用户专注/刚被打扰时会低于阈值，**用户亲口定的约定被静默吞掉** | 新增"高优先履约"旁路：紧急度 ≥ 4.5 或 `thought_wake_*` 且屏幕可交互时绕过动机门控直接送达（隐私熔断/通话仍硬拦） | `EndToEndMilestone24VerificationTest` 场景三：定闹钟 → 唤醒 → 裁决浮现 L2 履约气泡 → 点击消费 |
+
+### 二、防复发：装配自检测试
+
+- `MasterPlan4ClosureVerificationTest.testApplicationWiring_constructsInfrastructureOnCreate`：断言 `perceptionPipeline` / `sensingEpisodicBuffer` / `openLoopLifecycleManager` / `proactiveNotificationDispatcher` / `proactiveCoordinator` / `memoryExtractor` 在 `onCreate` 后**真实存在**。
+- `testLateinitInfrastructure_isInitializedAfterOnCreate`：反射遍历 `LiricaApplication` 中所有 `com.lirica.android.*` 类型的 `lateinit` 字段，任何一个声明了却没在 `onCreate` 赋值即红灯。
+> 依据：本项目已三次出现同一失效模式——"类、实体、DAO、测试全做完，留下谁调用它的线没接"。把调用方验证固化成测试，才能在下一次 AI 批量优化后第一时间报警。
+
+### 三、测试与口径
+
+- `./gradlew testDebugUnitTest --rerun-tasks`：**122 个测试类 / 639 项 / 0 失败 / 0 跳过**（基线由 620 提升至 639，净增 19 项）。
+- 本轮全部结论为 JVM（Robolectric）口径；真机冒烟（M4.0）仍未执行，L3 通知在国产 ROM 上的实际送达率需真机复核。
+- 数据库版本 4 → 5（`unspoken_thoughts` 新增 `content_title` 列，`MIGRATION_4_5` 已注册并有迁移链路测试覆盖）。
+
 
 
 

@@ -155,7 +155,7 @@ class DualTrackMemoryManager(
         // 先触发自然遗忘：清理已超过 expiryTime 的过期念头
         unspokenThoughtDao.discardExpiredThoughts(currentTs)
         // 提取紧急度最高的 pending 念头
-        return unspokenThoughtDao.getTopUrgentPendingThoughts(limit = limit)
+        return unspokenThoughtDao.getTopUrgentPendingThoughts(limit = limit, nowMs = currentTs)
     }
 
     /**

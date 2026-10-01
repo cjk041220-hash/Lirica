@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
+import com.lirica.android.proactivity.ProactiveBubbleCoordinator
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
@@ -57,7 +58,12 @@ class ChatViewModel(
     private val llmConfig: LlmConfig = LlmConfig(apiKey = BuildConfig.DEEPSEEK_API_KEY),
     val sessionId: String = "default_session",
     val byokRepository: ByokSettingsRepository? = null,
-    val perceptionPipeline: PerceptionPipeline? = null
+    val perceptionPipeline: PerceptionPipeline? = null,
+    /**
+     * 主动协调中枢。这里只用到它的"开环闭环"能力：用户提到某件未决事项时立即核销，
+     * 避免"考完了她还在问考得怎么样"。null = 关闭该能力（既有测试与装配无需改动）。
+     */
+    private val proactiveCoordinator: ProactiveBubbleCoordinator? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -171,6 +177,10 @@ class ChatViewModel(
                     )
                 )
 
+                // 1.5 开环闭环（M4.2 收尾）：用户这轮提到的事项立即核销，
+                // 并撤回已推进到念头池的对应提醒——"他都说完了，别再提醒"
+                runCatching { proactiveCoordinator?.resolveOpenLoopsMentionedIn(trimmed) }
+
                 // 2. 检索双轨记忆与念头（通过 retrieve 统一调度端侧 ONNX 向量 + BM25 混合检索）
                 val currentMood = emotionEngine.currentMood
                 val userMemories = memoryManager.retrieve(
@@ -240,14 +250,20 @@ class ChatViewModel(
                 // 2.6 具身生活叙事（M4.3）：将耳机、电量、作息与待机转译为伴生体第一人称生理/情境叙事
                 val cal = java.util.Calendar.getInstance().apply { timeInMillis = userTimestamp }
                 val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-                val dwellMs = perceptionSnapshot?.screenState?.let {
-                    (userTimestamp - it.lastStateChangeTimestamp).coerceAtLeast(0L)
+                // 久别时长 = 距"上一次用户真正在场"的间隔（息屏/锁屏期间累积）。
+                // 不用屏幕状态变更间隔、也不用前台停留时长——这两个都会把语义算反。
+                val absenceMs = perceptionSnapshot?.screenState?.let { screen ->
+                    if (screen.lastUserPresentTimestamp > 0L) {
+                        (userTimestamp - screen.lastUserPresentTimestamp).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    }
                 } ?: 0L
                 val embodiedNarrative = com.lirica.android.persona.EmbodiedNarrativeTranslator.translate(
                     hw = perceptionSnapshot?.hardwareEnvironment,
                     screen = perceptionSnapshot?.screenState,
                     hourOfDay = hour,
-                    dwellDurationMs = dwellMs
+                    absenceDurationMs = absenceMs
                 )
                 val finalDynamicContext = if (embodiedNarrative.isNotBlank()) {
                     if (effectiveDynamicContext.isNullOrBlank()) embodiedNarrative else "$effectiveDynamicContext\n\n$embodiedNarrative"

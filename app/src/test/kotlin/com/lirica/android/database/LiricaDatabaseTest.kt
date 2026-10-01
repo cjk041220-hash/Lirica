@@ -232,7 +232,8 @@ class LiricaDatabaseTest {
         unspokenThoughtDao.insertAll(listOf(thought1, thought2, thought3))
 
         // 获取高优先级待倾诉念头（按 urgency 降序）
-        val urgentThoughts = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 2)
+        // now 取用例内的逻辑时间：过期过滤在查询层，必须显式给时钟
+        val urgentThoughts = unspokenThoughtDao.getTopUrgentPendingThoughts(limit = 2, nowMs = now)
         assertEquals(2, urgentThoughts.size)
         assertEquals("thought_03", urgentThoughts[0].id) // 0.95 最高
         assertEquals("thought_01", urgentThoughts[1].id) // 0.85 次之

@@ -122,7 +122,8 @@ class MasterPlan4WiringIntegrationTest {
 
         val count = extractor.maybeExtract(
             userText = "我明天上午有一场高数期末考试，得好好复习了",
-            force = true
+            force = true,
+            nowMs = 1_000_000L
         )
 
         assertEquals(2, count)
@@ -160,7 +161,7 @@ class MasterPlan4WiringIntegrationTest {
         // 触发协调，应当自动扫描并推进开环事项
         coordinator.coordinate(PerceptionSnapshot(), now)
 
-        val thoughts = unspokenDao.getTopUrgentPendingThoughts()
+        val thoughts = unspokenDao.getTopUrgentPendingThoughts(nowMs = now)
         assertTrue("开环事项应已推入念头池", thoughts.any { it.thought.contains("毕业设计终审答辩") })
     }
 }

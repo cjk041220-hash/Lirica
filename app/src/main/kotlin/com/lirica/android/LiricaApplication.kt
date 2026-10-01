@@ -151,6 +151,17 @@ class LiricaApplication : Application() {
         private set
 
     /**
+     * 记忆抽取器单例。
+     *
+     * 必须全应用唯一：抽取节流（pendingTurns / lastExtractionTimestamp / 失败退避）是**实例级状态**，
+     * 之前 MainActivity 与 CompanionOverlayService 各 new 一个，等于两条聊天链路各算各的 3 分钟/3 轮门槛，
+     * 同一批对话会被抽两次、记忆重复入库、开环事项开出两条。
+     * 同时它也是主聊天与悬浮窗唯一的构造入口——避免某一侧漏传 openLoopDao 导致"开环只在主界面生效"。
+     */
+    lateinit var memoryExtractor: com.lirica.android.database.memory.MemoryExtractor
+        private set
+
+    /**
      * 后台任务（记忆抽取等）共用的 LLM 配置（动态消费用户有效设置）
      */
     val backgroundLlmConfig: LlmConfig
@@ -288,6 +299,14 @@ class LiricaApplication : Application() {
                     scheduledAlarmDao = database.scheduledAlarmDao()
                 )
             )
+        )
+
+        memoryExtractor = com.lirica.android.database.memory.MemoryExtractor(
+            llmClient = llmClient,
+            userMemoryDao = database.userMemoryDao(),
+            llmConfigProvider = { backgroundLlmConfig },
+            hybridRetrieverProvider = { memoryManager.getHybridRetriever() },
+            openLoopDao = database.openLoopDao()
         )
 
         registerAutonomousLife()

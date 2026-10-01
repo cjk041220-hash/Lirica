@@ -53,7 +53,8 @@ class UnspokenThoughtManagerImpl(
     }
 
     override suspend fun getTopPendingThoughts(limit: Int): List<UnspokenThoughtEntity> {
-        return dao.getTopUrgentPendingThoughts(limit = limit)
+        // 时钟在此注入：DAO 不做时间默认值，避免"领域层想用逻辑时间、DAO 偷偷用真实时间"的错配
+        return dao.getTopUrgentPendingThoughts(limit = limit, nowMs = System.currentTimeMillis())
     }
 
     override suspend fun consumeThought(id: String, nowMs: Long) {

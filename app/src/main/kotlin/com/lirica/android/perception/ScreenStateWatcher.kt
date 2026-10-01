@@ -86,10 +86,18 @@ class ScreenStateWatcher {
                     } else {
                         current.totalStandbyDurationMs
                     }
+                    // 熄屏期间用户不在场：此刻把"上次在场"钉在息屏之前，
+                    // 供重新解锁时计算真实离开时长（见 ScreenStateSnapshot.lastUserPresentTimestamp）
+                    val lastPresent = if (current.state == ScreenState.OFF && current.lastUserPresentTimestamp > 0L) {
+                        current.lastUserPresentTimestamp
+                    } else {
+                        lastTime.takeIf { it > 0L } ?: currentTimeMs
+                    }
                     _screenState.value = current.copy(
                         state = ScreenState.ON,
                         lastStateChangeTimestamp = currentTimeMs,
-                        totalStandbyDurationMs = newStandby
+                        totalStandbyDurationMs = newStandby,
+                        lastUserPresentTimestamp = lastPresent
                     )
                 }
 
@@ -99,10 +107,16 @@ class ScreenStateWatcher {
                     } else {
                         current.totalInteractiveDurationMs
                     }
+                    // 解锁：延续上一次在场时间（若从未记录过则用上一次状态变更时刻兜底），
+                    // 不在这里刷新——"离开多久"要等下一次息屏才重新计时
+                    val lastPresent = current.lastUserPresentTimestamp
+                        .takeIf { it > 0L }
+                        ?: (if (current.state == ScreenState.ON) lastTime else currentTimeMs)
                     _screenState.value = current.copy(
                         state = ScreenState.UNLOCKED,
                         lastStateChangeTimestamp = currentTimeMs,
-                        totalInteractiveDurationMs = newInteractive
+                        totalInteractiveDurationMs = newInteractive,
+                        lastUserPresentTimestamp = lastPresent
                     )
                 }
 
@@ -115,7 +129,9 @@ class ScreenStateWatcher {
                     _screenState.value = current.copy(
                         state = ScreenState.OFF,
                         lastStateChangeTimestamp = currentTimeMs,
-                        totalInteractiveDurationMs = newInteractive
+                        totalInteractiveDurationMs = newInteractive,
+                        // 息屏前最后一眼 = 本次在场的终点，离开计时从这里开始
+                        lastUserPresentTimestamp = lastTime.takeIf { it > 0L } ?: currentTimeMs
                     )
                 }
             }
