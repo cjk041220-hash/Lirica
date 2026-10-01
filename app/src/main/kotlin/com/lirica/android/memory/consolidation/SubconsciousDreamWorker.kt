@@ -44,7 +44,11 @@ class SubconsciousDreamWorker(
                 ),
                 llmClient = app?.llmClient,
                 llmConfig = app?.backgroundLlmConfig,
-                hybridRetriever = app?.memoryManager?.getHybridRetriever()
+                hybridRetriever = app?.memoryManager?.getHybridRetriever(),
+                episodeConsolidator = DreamEpisodeConsolidator(
+                    sliceDao = database.episodicSensingSliceDao(),
+                    selfExperienceDao = database.selfExperienceDao()
+                )
             )
             coordinator.runDreamCycle()
             Result.success()

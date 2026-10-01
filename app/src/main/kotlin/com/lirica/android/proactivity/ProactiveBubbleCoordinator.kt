@@ -83,7 +83,10 @@ class ProactiveBubbleCoordinatorImpl(
      * 生产装配由 LiricaApplication 注入 SharedPreferences——杀进程重启后每日配额
      * 与退避不再清零，堵住"重启规避退避"的漏洞。
      */
-    private val statePrefs: android.content.SharedPreferences? = null
+    private val statePrefs: android.content.SharedPreferences? = null,
+    val openLoopManager: OpenLoopLifecycleManager? = null,
+    val notificationDispatcher: ProactiveNotificationDispatcher? = null,
+    private val contextProvider: (() -> android.content.Context)? = null
 ) : ProactiveBubbleCoordinator {
 
     // 并发互斥：overlay 的 processPerception / refreshIcebreaker / onUserFeedback
@@ -139,6 +142,9 @@ class ProactiveBubbleCoordinatorImpl(
             backoffPenalty = max(0.0, backoffPenalty * 0.5)
             persistState(currentDay)
         }
+
+        // 1.5 扫描并推进已到期的开环未决事项进入念头池 (M4.2 联动)
+        openLoopManager?.checkAndPromoteDueLoops(nowMs)
 
         // 2. 动机动力学计算与念头更新 (融合即时感知动力学与待决念头池最高紧急度)
         val perceptionMotivation = thoughtManager.processPerception(snapshot, emotionEngine.currentVector, nowMs)

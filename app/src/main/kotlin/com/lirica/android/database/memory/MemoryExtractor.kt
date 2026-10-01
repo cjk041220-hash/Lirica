@@ -1,6 +1,8 @@
 package com.lirica.android.database.memory
 
+import com.lirica.android.database.dao.OpenLoopDao
 import com.lirica.android.database.dao.UserMemoryDao
+import com.lirica.android.database.entity.OpenLoopEntity
 import com.lirica.android.database.entity.UserMemoryEntity
 import com.lirica.android.memory.retrieval.HybridMemoryRetriever
 import com.lirica.android.network.LiricaLlmClient
@@ -26,7 +28,8 @@ class MemoryExtractor(
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
     val throttleIntervalMs: Long = 180_000L,
     val minTurnsAccumulated: Int = 3,
-    private val hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null
+    private val hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null,
+    val openLoopDao: OpenLoopDao? = null
 ) {
 
     /**
@@ -39,7 +42,8 @@ class MemoryExtractor(
         json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
         throttleIntervalMs: Long = 180_000L,
         minTurnsAccumulated: Int = 3,
-        hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null
+        hybridRetrieverProvider: (() -> HybridMemoryRetriever?)? = null,
+        openLoopDao: OpenLoopDao? = null
     ) : this(
         llmClient = llmClient,
         userMemoryDao = userMemoryDao,
@@ -47,7 +51,8 @@ class MemoryExtractor(
         json = json,
         throttleIntervalMs = throttleIntervalMs,
         minTurnsAccumulated = minTurnsAccumulated,
-        hybridRetrieverProvider = hybridRetrieverProvider
+        hybridRetrieverProvider = hybridRetrieverProvider,
+        openLoopDao = openLoopDao
     )
 
     companion object {
@@ -68,14 +73,15 @@ class MemoryExtractor(
         const val FAILURE_BACKOFF_MAX_MS = 15 * 60_000L
 
         private val EXTRACTION_SYSTEM_PROMPT = """
-            你是记忆抽取器。从对话的用户发言中提取值得长期记住的用户事实（偏好、习惯、人际关系、作息、计划、身份信息等）。
+            你是记忆抽取器。从对话的用户发言中提取值得长期记住的用户事实（偏好、习惯、人际关系、作息、计划、身份信息等）及未来未决事务（考试、面试、就医、出行约定等）。
             规则：
             1. 只提取关于用户本人的客观事实，不要提取助手的回复内容
             2. 没有值得记录的信息时返回空列表
             3. 严格只输出 JSON，不要输出任何其他文字或 markdown 代码块标记，格式：
-               {"memories":[{"content":"事实描述","category":"分类","importance":5}]}
+               {"memories":[{"content":"事实描述","category":"分类","importance":5}],"open_loops":[{"title":"事项标题","target_offset_hours":24,"urgency":1}]}
             4. category 可选值：偏好/作息/人际关系/计划/身份/其他；importance 为 1-10 整数
             5. 每条 content 以"用户"开头，不超过 60 字
+            6. 若有未来约定的未决事项，放入 open_loops（target_offset_hours 为预计距今小时数，urgency 为 1-3）；无则为空列表
         """.trimIndent()
     }
 
@@ -111,8 +117,16 @@ class MemoryExtractor(
     )
 
     @Serializable
+    data class ExtractedOpenLoop(
+        val title: String,
+        val target_offset_hours: Int = 24,
+        val urgency: Int = 1
+    )
+
+    @Serializable
     data class ExtractionResult(
-        val memories: List<ExtractedMemory> = emptyList()
+        val memories: List<ExtractedMemory> = emptyList(),
+        val open_loops: List<ExtractedOpenLoop> = emptyList()
     )
 
     /**
@@ -254,16 +268,39 @@ class MemoryExtractor(
                     source = "llm_extraction"
                 )
             }
-        if (entities.isEmpty()) return 0
-        entities.forEach { userMemoryDao.insert(it) }
-
-        // 批次 2.5/P0 贯通：抽取得到的新记忆异步建立端侧向量索引
-        hybridRetrieverProvider?.invoke()?.let { retriever ->
-            runCatching {
-                retriever.indexMemories(entities)
+        if (entities.isNotEmpty()) {
+            entities.forEach { userMemoryDao.insert(it) }
+            // 批次 2.5/P0 贯通：抽取得到的新记忆异步建立端侧向量索引
+            hybridRetrieverProvider?.invoke()?.let { retriever ->
+                runCatching {
+                    retriever.indexMemories(entities)
+                }
             }
         }
-        return entities.size
+
+        // M4.2 贯通：抽取得到的未决开环事项存入 open_loops 表
+        if (openLoopDao != null && result.open_loops.isNotEmpty()) {
+            val loopEntities = result.open_loops
+                .filter { it.title.isNotBlank() }
+                .map { loop ->
+                    val targetMs = now + loop.target_offset_hours.coerceAtLeast(1) * 3600 * 1000L
+                    OpenLoopEntity(
+                        id = UUID.randomUUID().toString(),
+                        title = loop.title.trim(),
+                        targetTimeMs = targetMs,
+                        triggerWindowStartMs = (targetMs - 2 * 3600 * 1000L).coerceAtLeast(now),
+                        status = OpenLoopEntity.STATUS_OPEN,
+                        urgencyLevel = loop.urgency.coerceIn(1, 3),
+                        followUpPrompt = "待会儿不是有「${loop.title.trim()}」嘛，准备得怎么样啦？",
+                        createdAt = now
+                    )
+                }
+            if (loopEntities.isNotEmpty()) {
+                openLoopDao.insertAll(loopEntities)
+            }
+        }
+
+        return entities.size + result.open_loops.size
     }
 
     /**

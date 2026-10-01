@@ -138,6 +138,15 @@ class LiricaApplication : Application() {
     lateinit var careHintDetector: CareHintDetector
         private set
 
+    lateinit var sensingEpisodicBuffer: com.lirica.android.perception.SensingEpisodicBuffer
+        private set
+
+    lateinit var openLoopLifecycleManager: com.lirica.android.proactivity.OpenLoopLifecycleManager
+        private set
+
+    lateinit var proactiveNotificationDispatcher: com.lirica.android.proactivity.ProactiveNotificationDispatcher
+        private set
+
     lateinit var byokSettingsRepository: ByokSettingsRepository
         private set
 
@@ -167,6 +176,12 @@ class LiricaApplication : Application() {
 
         startPerceptionPipeline()
 
+        openLoopLifecycleManager = com.lirica.android.proactivity.OpenLoopLifecycleManager(
+            openLoopDao = database.openLoopDao(),
+            unspokenThoughtDao = database.unspokenThoughtDao()
+        )
+        proactiveNotificationDispatcher = com.lirica.android.proactivity.ProactiveNotificationDispatcher()
+
         careHintDetector = CareHintDetector(
             careLedger = SharedPreferencesCareLedger.create(this)
         )
@@ -181,7 +196,10 @@ class LiricaApplication : Application() {
             decisionEngine = silenceDecisionEngine,
             emotionEngine = emotionEngine,
             // 2026-09-27 审计 P2 修复：配额/退避/冷却台账持久化，防杀进程重启规避
-            statePrefs = getSharedPreferences("lirica_proactivity_prefs", Context.MODE_PRIVATE)
+            statePrefs = getSharedPreferences("lirica_proactivity_prefs", Context.MODE_PRIVATE),
+            openLoopManager = openLoopLifecycleManager,
+            notificationDispatcher = proactiveNotificationDispatcher,
+            contextProvider = { this }
         )
 
         scheduleWakeManager = com.lirica.android.proactivity.ScheduleWakeManager(
@@ -315,6 +333,13 @@ class LiricaApplication : Application() {
             unspokenThoughtDao = database.unspokenThoughtDao(),
             hardwareStateFlow = hardwareWatcher.hardwareState
         ).also { it.start(appScope) }
+
+        // M4.1 接线：挂载情境感知切片聚合缓冲器，实时将前台驻留与硬件跃迁沉淀入库
+        sensingEpisodicBuffer = com.lirica.android.perception.SensingEpisodicBuffer(
+            sliceDao = database.episodicSensingSliceDao()
+        ).also {
+            it.start(appScope, perceptionPipeline.snapshotFlow)
+        }
     }
 
     /**

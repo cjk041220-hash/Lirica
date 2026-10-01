@@ -37,6 +37,10 @@ class AutonomousLifeWorker(
                 llmClient = app?.llmClient,
                 llmConfig = app?.backgroundLlmConfig
             )
+
+            // M4.2 联动：闲时自动清理与失效超期 72 小时的开环未决事项
+            app?.openLoopLifecycleManager?.expireOverdueLoops()
+
             Result.success()
         } catch (e: Exception) {
             LiricaLog.e(TAG, "AutonomousLifeWorker 自主日记生成任务异常，将触发重试", e)

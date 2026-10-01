@@ -91,7 +91,8 @@ class MainActivity : ComponentActivity() {
                         llmClient = app.llmClient,
                         userMemoryDao = app.database.userMemoryDao(),
                         llmConfigProvider = { app.backgroundLlmConfig },
-                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() }
+                        hybridRetrieverProvider = { app.memoryManager.getHybridRetriever() },
+                        openLoopDao = app.database.openLoopDao()
                     ),
                     toolAgent = app.nativeToolAgent,
                     careHintDetector = app.careHintDetector,
