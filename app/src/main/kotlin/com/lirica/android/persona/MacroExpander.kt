@@ -9,7 +9,8 @@ object MacroExpander {
         currentTime: String = "",
         currentApp: String = "",
         batteryLevel: String = "",
-        idleDuration: String = ""
+        idleDuration: String = "",
+        embodiedContext: String = ""
     ): String {
         return template
             .replace("{{char}}", charName, ignoreCase = true)
@@ -23,5 +24,6 @@ object MacroExpander {
             .replace("{{current_app}}", currentApp, ignoreCase = true)
             .replace("{{battery_level}}", batteryLevel, ignoreCase = true)
             .replace("{{idle_duration}}", idleDuration, ignoreCase = true)
+            .replace("{{embodied_context}}", embodiedContext, ignoreCase = true)
     }
 }
