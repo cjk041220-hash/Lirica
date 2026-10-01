@@ -17,19 +17,22 @@ data class DreamCycleReport(
     val timeDisambiguatedCount: Int,
     val supersededCount: Int,
     val worldviewPromotedCount: Int,
-    val emergenceThoughtId: String?
+    val emergenceThoughtId: String?,
+    val consolidatedEpisodesCount: Int = 0
 )
 
 /**
  * 自叙梦系统总控中枢 (Subconscious Dream Coordinator)
  *
- * 统筹夜间入梦的六大整理流水线：
+ * 统筹夜间入梦的核心整理流水线：
+ * 0. 白天情境感知切片提炼自叙生活经历（Track B - M4.1 核心）
  * 1. 相对时间绝对化
  * 2. 语义去重合并（反囤积铁律）
  * 3. 矛盾消歧与信念修正
  * 4. 高层世界观认知晋升
  * 5. 闲时日记沉淀与占位日记刷新
  * 6. 梦醒浮现活水注入念头池
+ * 7. 向量索引全量刷新
  */
 class SubconsciousDreamCoordinator(
     private val userMemoryDao: UserMemoryDao,
@@ -45,16 +48,25 @@ class SubconsciousDreamCoordinator(
     private val llmClient: LiricaLlmClient? = null,
     private val llmConfig: LlmConfig? = null,
     private val charName: String = "Lirica",
-    private val hybridRetriever: HybridMemoryRetriever? = null
+    private val hybridRetriever: HybridMemoryRetriever? = null,
+    private val episodeConsolidator: DreamEpisodeConsolidator? = null
 ) {
 
     suspend fun runDreamCycle(nowMs: Long = System.currentTimeMillis()): DreamCycleReport {
+        // 0. 流水线零：白天积累的情境切片提炼自叙生活经历（Track B）
+        val consolidatedCount = episodeConsolidator?.consolidateDailyEpisodes(
+            nowMs = nowMs,
+            charName = charName,
+            llmClient = llmClient,
+            llmConfig = llmConfig
+        ) ?: 0
+
         // 1. 获取所有活跃记忆
         val allActive = userMemoryDao.getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 500)
         val originalCount = allActive.size
         if (allActive.isEmpty()) {
             diaryEngine?.generateDailyDiary(nowMs, charName, llmClient, llmConfig)
-            return DreamCycleReport(0, 0, 0, 0, 0, 0, null)
+            return DreamCycleReport(0, 0, 0, 0, 0, 0, null, consolidatedEpisodesCount = consolidatedCount)
         }
 
         // 2. 流水线一：相对时间绝对化
@@ -81,7 +93,6 @@ class SubconsciousDreamCoordinator(
         }
 
         // 4. 流水线三：矛盾消歧与信念修正 (LLM 增强)
-        // 在剩余活跃记忆内部检测新旧事实冲突（按创建时间先后顺序）
         val sortedByDate = dedupResult.survivingMemories.sortedBy { it.createdAt }
         val olderMemories = sortedByDate.take(sortedByDate.size / 2 + 1)
         val newerMemories = sortedByDate.drop(sortedByDate.size / 2 + 1)
@@ -134,7 +145,8 @@ class SubconsciousDreamCoordinator(
             timeDisambiguatedCount = timeDisambiguatedCount,
             supersededCount = revisionResult.supersededMemories.size,
             worldviewPromotedCount = promotedWorldviews.size,
-            emergenceThoughtId = emergenceThought.id
+            emergenceThoughtId = emergenceThought.id,
+            consolidatedEpisodesCount = consolidatedCount
         )
     }
 }

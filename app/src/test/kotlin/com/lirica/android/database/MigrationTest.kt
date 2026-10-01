@@ -138,7 +138,7 @@ class MigrationTest {
         //    随后全量校验 v3 schema 与 identity hash，不匹配即抛异常
         val db = Room.databaseBuilder(context, LiricaDatabase::class.java, dbFile.name)
             .allowMainThreadQueries()
-            .addMigrations(LiricaDatabase.MIGRATION_1_2, LiricaDatabase.MIGRATION_2_3)
+            .addMigrations(LiricaDatabase.MIGRATION_1_2, LiricaDatabase.MIGRATION_2_3, LiricaDatabase.MIGRATION_3_4)
             .build()
         try {
             runBlocking {

@@ -328,9 +328,12 @@ class LiricaApplication : Application() {
                 val vectorStore = MemoryVectorStore(database.memoryEmbeddingDao())
                 vectorStore.initFromDatabase()
 
-                val embeddingModel = runCatching {
-                    LiricaEmbeddingModel.createFromAssets(this@LiricaApplication)
-                }.getOrNull()
+                val isRobolectric = android.os.Build.FINGERPRINT == "robolectric"
+                val embeddingModel = if (!isRobolectric) {
+                    runCatching {
+                        LiricaEmbeddingModel.createFromAssets(this@LiricaApplication)
+                    }.getOrNull()
+                } else null
 
                 if (embeddingModel != null) {
                     val retriever = HybridMemoryRetriever(

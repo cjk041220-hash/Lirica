@@ -152,4 +152,40 @@ class SubconsciousDreamCoordinatorTest {
         assertTrue(thoughts.isNotEmpty())
         assertNotNull(report.emergenceThoughtId)
     }
+
+    @Test
+    fun testRunDreamCycle_withEpisodicConsolidator_consolidatesSlicesSuccessfully() = runBlocking {
+        val sliceDao = database.episodicSensingSliceDao()
+        val slice = com.lirica.android.database.entity.EpisodicSensingSliceEntity(
+            id = "test_slice_1",
+            timestampMs = System.currentTimeMillis(),
+            dwellDurationMs = 300000L,
+            appCategory = com.lirica.android.database.entity.EpisodicSensingSliceEntity.CATEGORY_STUDY,
+            primaryPackage = "com.study.app",
+            summaryScene = "专注在自习应用 5 分钟",
+            isConsolidated = false
+        )
+        sliceDao.insert(slice)
+
+        val consolidator = DreamEpisodeConsolidator(
+            sliceDao = sliceDao,
+            selfExperienceDao = database.selfExperienceDao()
+        )
+
+        val coordWithConsolidator = SubconsciousDreamCoordinator(
+            userMemoryDao = database.userMemoryDao(),
+            worldviewDao = database.worldviewDao(),
+            selfExperienceDao = database.selfExperienceDao(),
+            unspokenThoughtDao = database.unspokenThoughtDao(),
+            diaryEngine = mockDiaryEngine,
+            episodeConsolidator = consolidator
+        )
+
+        val report = coordWithConsolidator.runDreamCycle(System.currentTimeMillis())
+        assertEquals(1, report.consolidatedEpisodesCount)
+
+        val experiences = database.selfExperienceDao().getActiveExperiences(limit = 10)
+        assertTrue(experiences.isNotEmpty())
+        assertTrue(experiences.any { it.domainTag == "情境感知" })
+    }
 }

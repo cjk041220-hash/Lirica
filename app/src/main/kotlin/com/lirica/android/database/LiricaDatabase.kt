@@ -7,12 +7,16 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.lirica.android.database.dao.ChatDialogueDao
+import com.lirica.android.database.dao.EpisodicSensingSliceDao
+import com.lirica.android.database.dao.OpenLoopDao
 import com.lirica.android.database.dao.ScheduledAlarmDao
 import com.lirica.android.database.dao.SelfExperienceDao
 import com.lirica.android.database.dao.UnspokenThoughtDao
 import com.lirica.android.database.dao.UserMemoryDao
 import com.lirica.android.database.dao.WorldviewDao
 import com.lirica.android.database.entity.ChatDialogueEntity
+import com.lirica.android.database.entity.EpisodicSensingSliceEntity
+import com.lirica.android.database.entity.OpenLoopEntity
 import com.lirica.android.database.entity.ScheduledAlarmEntity
 import com.lirica.android.database.entity.SelfExperienceEntity
 import com.lirica.android.database.entity.UnspokenThoughtEntity
@@ -32,6 +36,8 @@ import com.lirica.android.database.memory.MemoryEmbeddingEntity
  * 5. worldview_entities (高层世界观与认知升维表)
  * 6. scheduled_alarms (自主闹钟与日程约定表)
  * 7. memory_embeddings (双轨记忆端侧向量索引表)
+ * 8. episodic_sensing_slices (情境感知驻留切片缓存表 - v4 新增)
+ * 9. open_loops (开环记忆未决事务生命周期表 - v4 新增)
  */
 @Database(
     entities = [
@@ -41,9 +47,11 @@ import com.lirica.android.database.memory.MemoryEmbeddingEntity
         ChatDialogueEntity::class,
         WorldviewEntity::class,
         ScheduledAlarmEntity::class,
-        MemoryEmbeddingEntity::class
+        MemoryEmbeddingEntity::class,
+        EpisodicSensingSliceEntity::class,
+        OpenLoopEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class LiricaDatabase : RoomDatabase() {
@@ -55,6 +63,8 @@ abstract class LiricaDatabase : RoomDatabase() {
     abstract fun worldviewDao(): WorldviewDao
     abstract fun scheduledAlarmDao(): ScheduledAlarmDao
     abstract fun memoryEmbeddingDao(): MemoryEmbeddingDao
+    abstract fun episodicSensingSliceDao(): EpisodicSensingSliceDao
+    abstract fun openLoopDao(): OpenLoopDao
 
     companion object {
         const val DATABASE_NAME = "lirica_aether.db"
@@ -107,6 +117,54 @@ abstract class LiricaDatabase : RoomDatabase() {
             }
         }
 
+        @JvmField
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `episodic_sensing_slices` (
+                        `id` TEXT NOT NULL,
+                        `timestamp_ms` INTEGER NOT NULL,
+                        `dwell_duration_ms` INTEGER NOT NULL,
+                        `app_category` TEXT NOT NULL,
+                        `primary_package` TEXT NOT NULL,
+                        `summary_scene` TEXT NOT NULL,
+                        `hardware_context_json` TEXT NOT NULL,
+                        `is_consolidated` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_sensing_slices_timestamp` ON `episodic_sensing_slices` (`timestamp_ms`)
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_sensing_slices_consolidated` ON `episodic_sensing_slices` (`is_consolidated`)
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `open_loops` (
+                        `id` TEXT NOT NULL,
+                        `source_memory_id` TEXT,
+                        `title` TEXT NOT NULL,
+                        `target_time_ms` INTEGER NOT NULL,
+                        `trigger_window_start_ms` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `urgency_level` INTEGER NOT NULL,
+                        `follow_up_prompt` TEXT NOT NULL,
+                        `retry_count` INTEGER NOT NULL,
+                        `last_prompted_ms` INTEGER NOT NULL,
+                        `created_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_open_loops_status` ON `open_loops` (`status`)
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_open_loops_target_time` ON `open_loops` (`target_time_ms`)
+                """.trimIndent())
+            }
+        }
+
         @Volatile
         private var INSTANCE: LiricaDatabase? = null
 
@@ -122,7 +180,7 @@ abstract class LiricaDatabase : RoomDatabase() {
                 LiricaDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
         }
