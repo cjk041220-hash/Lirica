@@ -151,6 +151,16 @@ class LiricaApplication : Application() {
         private set
 
     /**
+     * BYOK 密钥存储实例。
+     *
+     * 2026-10-02 P0 安全修复：降级路径不再使用源码硬编码常量，改为设备绑定的随机密钥。
+     * 暴露此字段是为了让设置页能通过 [com.lirica.android.common.settings.SecureKeyStore.isHardwareBacked]
+     * 向用户诚实披露加密强度，而非默认宣称"已加密"。
+     */
+    lateinit var secureKeyStore: com.lirica.android.common.settings.SecureKeyStore
+        private set
+
+    /**
      * 记忆抽取器单例。
      *
      * 必须全应用唯一：抽取节流（pendingTurns / lastExtractionTimestamp / 失败退避）是**实例级状态**，
@@ -175,7 +185,19 @@ class LiricaApplication : Application() {
         LiricaLog.i("LiricaApplication", "Lirica 系统已启动，本地崩溃守护与环形日志已就绪")
 
         val byokPrefs = getSharedPreferences(ByokSettingsRepository.PREFS_NAME, Context.MODE_PRIVATE)
-        byokSettingsRepository = ByokSettingsRepositoryImpl(byokPrefs)
+        // 2026-10-02 P0 安全修复：把降级密钥的持久化容器注入 SecureKeyStore。
+        // 旧实现内置源码常量作为兜底根密钥，可被反编译直接提取；现改为设备绑定的随机密钥。
+        val softwareKeyPrefs = getSharedPreferences(
+            com.lirica.android.common.settings.DefaultSecureKeyStore.SOFTWARE_KEY_PREFS_NAME,
+            Context.MODE_PRIVATE
+        )
+        secureKeyStore = com.lirica.android.common.settings.DefaultSecureKeyStore(
+            fallbackPrefs = softwareKeyPrefs
+        )
+        byokSettingsRepository = ByokSettingsRepositoryImpl(
+            prefs = byokPrefs,
+            secureKeyStore = secureKeyStore
+        )
 
         database = LiricaDatabase.getInstance(this)
         memoryManager = DualTrackMemoryManager(database)

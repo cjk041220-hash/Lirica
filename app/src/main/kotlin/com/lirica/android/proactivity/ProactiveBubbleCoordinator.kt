@@ -187,6 +187,46 @@ class ProactiveBubbleCoordinatorImpl(
         }
     }
 
+    /**
+     * 跨天重置每日配额。
+     *
+     *## 2026-10-02 修复：L3 配额重置曾被排在配额守门之后
+     *
+     * 旧实现里，L3 配额的跨天重置写在 [dispatchL3Notification] 内部、
+     * 且排在 `l3DeliveredToday >= DAILY_L3_NOTIFICATION_QUOTA` 守门**之后**。
+     * 于是形成死锁：
+     * 1. 某日发满 3 条 L3 → `l3DeliveredToday = 3`
+     * 2. 跨天时，本方法原先只重置气泡配额，不碰 L3 配额
+     * 3. 再次进入派发 → 守门 `3 >= 3` 直接 return false → 重置代码永不可达
+     *
+     * 后果：L3 通道在用户首次用满 3 条后**永久失效**，闹钟约定与开环高优先事项
+     * 在息屏场景下再也无法送达，且清数据前不会恢复。
+     *
+     * 现把两类配额的重置统一收口到本方法，由 [coordinateLocked] 与
+     * [coordinateFirstFrame] 的日期检查共同调用。
+     *
+     * 防御性设计：**同时**在 [dispatchL3Notification] 内保留一次幂等重置，
+     * 防止未来新增调用入口绕过本方法导致同类回归。
+     *
+     * @return true 表示确实发生了跨天（调用方据此决定是否落盘）
+     */
+    private fun rolloverQuotasIfNewDay(currentDay: String): Boolean {
+        var rolled = false
+        if (currentDay != lastBubbleDay) {
+            lastBubbleDay = currentDay
+            bubblesShownToday = 0
+            // 跨天退避惩罚衰减一半
+            backoffPenalty = max(0.0, backoffPenalty * 0.5)
+            rolled = true
+        }
+        if (currentDay != lastL3Day) {
+            lastL3Day = currentDay
+            l3DeliveredToday = 0
+            rolled = true
+        }
+        return rolled
+    }
+
     override fun getBackoffPenalty(): Double = backoffPenalty
     override fun getBubblesShownToday(): Int = bubblesShownToday
 
@@ -273,6 +313,10 @@ class ProactiveBubbleCoordinatorImpl(
         val dispatcher = notificationDispatcher ?: return false
         val context = contextProvider?.invoke() ?: return false
 
+        // 防御性跨天重置：正常路径已由 rolloverQuotasIfNewDay 处理，
+        // 此处幂等兜底，防止未来新增调用入口绕过日期检查导致配额死锁复发。
+        rolloverQuotasIfNewDay(today)
+
         if (l3DeliveredToday >= ProactiveBubbleCoordinator.DAILY_L3_NOTIFICATION_QUOTA) {
             LiricaLog.d(
                 TAG,
@@ -300,10 +344,7 @@ class ProactiveBubbleCoordinatorImpl(
             return false
         }
 
-        if (today != lastL3Day) {
-            lastL3Day = today
-            l3DeliveredToday = 0
-        }
+        // 跨天重置已在派发入口幂等完成，此处直接计数
         l3DeliveredToday++
         // 与气泡同源的"已表达"记账：推进不应期、压缩动机，避免紧接着又来一轮
         thoughtManager.markExpressed(nowMs)
@@ -342,13 +383,10 @@ class ProactiveBubbleCoordinatorImpl(
         snapshot: PerceptionSnapshot,
         nowMs: Long
     ): ProactiveCoordinationResult {
-        // 1. 日期跨天重置配额
+        // 1. 日期跨天重置配额（气泡 + L3 通知统一收口，见 rolloverQuotasIfNewDay）
         val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
-        if (currentDay != lastBubbleDay) {
-            lastBubbleDay = currentDay
-            bubblesShownToday = 0
-            // 跨天退避惩罚衰减一半
-            backoffPenalty = max(0.0, backoffPenalty * 0.5)
+        val dayRolled = rolloverQuotasIfNewDay(currentDay)
+        if (dayRolled) {
             persistState(currentDay)
         }
 
@@ -487,11 +525,10 @@ class ProactiveBubbleCoordinatorImpl(
 
     override suspend fun coordinateFirstFrame(nowMs: Long): ProactiveCoordinationResult = stateMutex.withLock {
         // 跨天配额重置与退避衰减，语义与 coordinate 保持一致
+        // （L3 配额同样在此重置——见 rolloverQuotasIfNewDay 的死锁修复说明）
         val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
-        if (currentDay != lastBubbleDay) {
-            lastBubbleDay = currentDay
-            bubblesShownToday = 0
-            backoffPenalty = max(0.0, backoffPenalty * 0.5)
+        val dayRolled = rolloverQuotasIfNewDay(currentDay)
+        if (dayRolled) {
             persistState(currentDay)
         }
 
@@ -575,6 +612,8 @@ class ProactiveBubbleCoordinatorImpl(
         nowMs: Long
     ) = stateMutex.withLock {
         val currentDay = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date(nowMs))
+        // 同样走统一跨天重置，避免反馈路径把已过期的天数写回台账
+        rolloverQuotasIfNewDay(currentDay)
         when (feedback) {
             UserFeedback.CLICKED -> {
                 // 正向反馈：消耗念头，标记已表达，减轻退避惩罚

@@ -16,7 +16,7 @@
 
 ## 2. ONNX Runtime 依赖引入
 
-- **依赖项**: `com.microsoft.onnxruntime:onnxruntime-android:1.19.2`（以及 host 单测 `com.microsoft.onnxruntime:onnxruntime:1.19.2`）
+- **依赖项**: `com.microsoft.onnxruntime:onnxruntime-android:1.25.0`（以及 host 单测 `com.microsoft.onnxruntime:onnxruntime:1.25.0`）
 - **选型说明**: 选用 1.x 官方最新稳定版，包含 Android 平台（arm64-v8a, armeabi-v7a, x86_64）原生推导支持与 Java/Kotlin 绑定层。
 - **验证结果**: Gradle 依赖解析正常，全量 533 单测通过。
 
@@ -94,7 +94,7 @@
 - **测试通过率**: 100%（562 passed, 0 failed, 0 skipped/ignored）
 - **硬约束检查**:
   1. 模型仅从 `hf-mirror.com` 下载 INT8 量化模型（24.0MB），经校验无损坏；
-  2. 依赖仅引入 `com.microsoft.onnxruntime:onnxruntime-android:1.19.2`（宿主单测仅引入对应官方 JVM 运行时包）；
+  2. 依赖仅引入 `com.microsoft.onnxruntime:onnxruntime-android:1.25.0`（宿主单测仅引入对应官方 JVM 运行时包）；
   3. 未修改 `MemoryScorer.kt` 既有实现；未修改 `proactivity/**`, `emotion/**`, `persona/**`, `automation/**`, `perception/**`, `network/**`, PRD, `docs/**`；
   4. 未引入任何其他额外第三方依赖，未执行删除文件、reset、checkout 或 push；
   5. `.gitignore` 正确配置忽略 `*.onnx`，仅小文本资产 `tokenizer.json` 入库。

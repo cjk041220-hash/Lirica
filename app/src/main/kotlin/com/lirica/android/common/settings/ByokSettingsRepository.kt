@@ -70,9 +70,14 @@ class ByokSettingsRepositoryImpl(
             } else {
                 // 解密失败说明是升级前的旧明文 Key，执行自动迁移：加密写回
                 LiricaLog.i("ByokSettings", "检测到旧版明文 API Key，执行 AES-GCM 安全迁移")
-                val encrypted = secureKeyStore.encrypt(rawStoredKey)
-                if (encrypted.isNotBlank()) {
+                // 2026-10-02：encrypt 改为抛错契约，用 runCatching 承接；
+                // 迁移失败时保留原明文（当前仍在内存中可用），只是下一进程读到的仍是明文，
+                // 不会因为加密写回失败而丢 Key。
+                val encrypted = runCatching { secureKeyStore.encrypt(rawStoredKey) }.getOrNull()
+                if (!encrypted.isNullOrBlank()) {
                     prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, encrypted).apply()
+                } else {
+                    LiricaLog.w("ByokSettings", "旧明文 Key 加密迁移失败，本次运行仍使用内存中的明文")
                 }
                 rawStoredKey
             }
@@ -129,14 +134,14 @@ class ByokSettingsRepositoryImpl(
 
     override fun saveCustomApiKey(apiKey: String) {
         val trimmed = apiKey.trim()
-        val cipherText = secureKeyStore.encrypt(trimmed)
-        if (cipherText.isBlank()) {
-            // 2026-09-27 审计 P3 修复：加密失败时旧代码会把空密文写进 prefs，
-            // 重载后 customApiKey 变 null，用户已配置的 Key 被静默清空。
-            // 现改为保留旧密文并记录错误日志。
-            LiricaLog.e("ByokSettings", "API Key 加密失败，保留原有密文不覆盖")
-            return
-        }
+        // 2026-10-02：encrypt 改为抛错契约（不再返回空串）。
+        // 旧实现依赖"空串 = 失败"这个哨兵值，但空串也是合法返回的一部分，
+        // 一旦上游异常被吞成空串，用户已配置的 Key 会被静默清空。
+        val cipherText = runCatching { secureKeyStore.encrypt(trimmed) }
+            .getOrElse { e ->
+                LiricaLog.e("ByokSettings", "API Key 加密失败，保留原有密文不覆盖", e)
+                return
+            }
         prefs.edit().putString(ByokSettingsRepository.KEY_API_KEY, cipherText).apply()
         _settings.value = _settings.value.copy(customApiKey = trimmed)
     }

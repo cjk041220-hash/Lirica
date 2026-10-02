@@ -148,6 +148,14 @@ dependencies {
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // 真机仪器测试（批次 C：填补"644 项单测全绿但零真机验证"的验证真空）
+    // androidTestImplementation 只在真机/模拟器上生效，不进APK、不影响包体积。
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    // WorkManager 测试支撑：让"入队成功/约束设置"可在真机上被断言，而非被 runCatching 静默吞掉
+    androidTestImplementation("androidx.work:work-testing:$workVersion")
 }
 
 ksp {

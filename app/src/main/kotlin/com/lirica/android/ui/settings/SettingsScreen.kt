@@ -77,6 +77,11 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     byokRepository: ByokSettingsRepository,
     onBack: () -> Unit,
+    /**
+     * 当前 API Key 加密是否由硬件密钥库支撑。
+     * 默认 true（乐观假设）；不可用时调用方传入 false，界面会如实降级提示。
+     */
+    isHardwareKeyStore: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -233,6 +238,20 @@ fun SettingsScreen(
                         label = { Text("API Key (密文存储)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        supportingText = {
+                            // 2026-10-02 P0 安全修复配套：向用户诚实披露当前加密强度。
+                            // 软件降级模式下密文能挡住"随手翻 prefs"，但挡不住 root / 物理接触，
+                            // 不披露就等于让用户以为自己在受硬件保护。
+                            Text(
+                                text = if (isHardwareKeyStore) {
+                                    "由硬件密钥库（AndroidKeyStore）加密，密钥不可导出"
+                                } else {
+                                    "当前设备不支持硬件密钥库，已降级为设备绑定随机密钥加密" +
+                                        "（可防应用数据被直接读取，但无法抵御 root 或物理接触）"
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        },
                         visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
                             Text(

@@ -185,7 +185,10 @@ class MainActivity : ComponentActivity() {
                                 byokRepository = app.byokSettingsRepository,
                                 onBack = {
                                     currentScreen = AppNavScreen.CHAT
-                                }
+                                },
+                                // 2026-10-02 P0 安全修复配套：如实告知用户当前加密强度，
+                                // 避免在无硬件保护的设备上让用户误以为密钥受硬件隔离。
+                                isHardwareKeyStore = app.secureKeyStore.isHardwareBacked()
                             )
                         }
                     }
