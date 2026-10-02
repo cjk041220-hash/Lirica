@@ -304,7 +304,7 @@ class EndToEndMilestone24VerificationTest {
      * LLM 调用 schedule_wake 定下两小时后闹钟 ->
      * 持久化写入 scheduled_alarms 且系统 AlarmManager 注册 ->
      * 模拟时间到达系统闹钟触发 onWakeTriggered ->
-     * 自动向 unspoken_thoughts 写入第一人称破冰念头活水 (urgency=4.8f) ->
+     * 自动向 unspoken_thoughts 写入第一人称破冰念头活水 (urgency=0.96f, 念头池 0~1 尺度) ->
      * ProactiveBubbleCoordinator 裁决浮现 L2 破冰气泡 ->
      * 用户点击接茬代入对话并消费念头。
      */
@@ -346,7 +346,7 @@ class EndToEndMilestone24VerificationTest {
             .firstOrNull()
         assertNotNull(triggeredThought)
         assertTrue(triggeredThought!!.thought.contains(botNote))
-        assertEquals(4.8f, triggeredThought.urgency, 0.01f)
+        assertEquals(0.96f, triggeredThought.urgency, 0.01f)
 
         // 3. 此时屏幕解锁，ProactiveBubbleCoordinator 裁决
         val snapshot = PerceptionSnapshot(

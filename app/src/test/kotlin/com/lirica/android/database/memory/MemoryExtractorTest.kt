@@ -378,4 +378,115 @@ class MemoryExtractorTest {
         dynamicExtractor.maybeExtract(userText = "我晚上睡前喜欢看侦探小说，特别是阿加莎的作品", force = true)
         assertEquals("Bearer new-updated-key", capturedAuthHeader)
     }
+
+    // ---------- 开环建环去重（2026-10-02 审查 P1-4） ----------
+
+    /** 内存版 OpenLoopDao：只服务建环去重断言 */
+    private class FakeOpenLoopDao : com.lirica.android.database.dao.OpenLoopDao {
+        val loops = mutableListOf<com.lirica.android.database.entity.OpenLoopEntity>()
+        var insertCalls = 0
+        var updateCalls = 0
+
+        private fun active() = listOf(
+            com.lirica.android.database.entity.OpenLoopEntity.STATUS_OPEN,
+            com.lirica.android.database.entity.OpenLoopEntity.STATUS_TRACKING,
+            com.lirica.android.database.entity.OpenLoopEntity.STATUS_TRIGGERED
+        )
+
+        override suspend fun insert(entity: com.lirica.android.database.entity.OpenLoopEntity): Long {
+            loops.add(entity); insertCalls++; return loops.size.toLong()
+        }
+        override suspend fun insertAll(entities: List<com.lirica.android.database.entity.OpenLoopEntity>) {
+            loops.addAll(entities)
+        }
+        override suspend fun update(entity: com.lirica.android.database.entity.OpenLoopEntity) {
+            updateCalls++
+            val idx = loops.indexOfFirst { it.id == entity.id }
+            if (idx != -1) loops[idx] = entity
+        }
+        override suspend fun getById(id: String) = loops.find { it.id == id }
+        override suspend fun getByStatus(status: String) = loops.filter { it.status == status }
+        override suspend fun getOpenLoops(limit: Int) =
+            loops.filter { it.status in active() }.sortedBy { it.targetTimeMs }.take(limit)
+        override suspend fun getDueForTracking(currentTimeMs: Long) = emptyList<com.lirica.android.database.entity.OpenLoopEntity>()
+        override suspend fun getActiveByTitle(title: String) =
+            loops.firstOrNull { it.title == title && it.status in active() }
+        override suspend fun updateStatus(id: String, newStatus: String) {
+            val idx = loops.indexOfFirst { it.id == id }
+            if (idx != -1) loops[idx] = loops[idx].copy(status = newStatus)
+        }
+        override suspend fun markPromptedIfActive(id: String, promptedMs: Long, newStatus: String): Int = 0
+        override suspend fun expireOldLoops(expiryThresholdMs: Long): Int = 0
+        override suspend fun cleanupClosedLoops(beforeMs: Long): Int = 0
+    }
+
+    private fun buildExtractorWithDao(responseData: String, loopDao: FakeOpenLoopDao): MemoryExtractor {
+        val mockEngine = MockEngine { _ ->
+            respond(
+                content = responseData,
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/event-stream")
+            )
+        }
+        val httpClient = HttpClient(mockEngine) {
+            install(ContentNegotiation) { json(testJson) }
+        }
+        return MemoryExtractor(
+            llmClient = LiricaLlmClient(httpClient = httpClient),
+            userMemoryDao = userMemoryDao,
+            llmConfig = LlmConfig(apiKey = "test-key"),
+            json = testJson,
+            throttleIntervalMs = 0L,
+            minTurnsAccumulated = 1,
+            openLoopDao = loopDao
+        )
+    }
+
+    @Test
+    fun testMaybeExtract_openLoop_sameBatchDuplicateTitles_mergedIntoOneLoop() = runTest {
+        coEvery { userMemoryDao.insert(any()) } returns 1L
+        val loopDao = FakeOpenLoopDao()
+        val extractor = buildExtractorWithDao(
+            sseResponse(
+                """{"memories":[],"open_loops":[""" +
+                    """{"title":"准备期末答辩","target_offset_hours":24,"urgency":1},""" +
+                    """{"title":"准备期末答辩","target_offset_hours":48,"urgency":3}]}"""
+            ),
+            loopDao
+        )
+
+        val count = extractor.maybeExtract("我下周有个期末答辩，还没开始准备，好紧张。")
+
+        // 返回值 = 实际落库数：0 条记忆 + 1 条去重后的开环（原始数组有 2 条，不得照抄）
+        assertEquals(1, count)
+        assertEquals("批内重复标题只建一个环", 1, loopDao.loops.size)
+        assertEquals("批内合并保留紧急度最高的一条", 3, loopDao.loops[0].urgencyLevel)
+        assertEquals(1, loopDao.insertCalls)
+        assertEquals(0, loopDao.updateCalls)
+    }
+
+    @Test
+    fun testMaybeExtract_openLoop_existingActiveLoopRefreshed_notDuplicated() = runTest {
+        coEvery { userMemoryDao.insert(any()) } returns 1L
+        val loopDao = FakeOpenLoopDao()
+        val first = buildExtractorWithDao(
+            sseResponse("""{"memories":[],"open_loops":[{"title":"准备期末答辩","target_offset_hours":24,"urgency":2}]}"""),
+            loopDao
+        )
+        first.maybeExtract("我下周有个期末答辩。", force = true)
+        assertEquals(1, loopDao.loops.size)
+        assertEquals(1, loopDao.insertCalls)
+
+        // 隔几轮用户重提同一事项（时间后挪、紧急度提高）：必须刷新既有环而非新建
+        val second = buildExtractorWithDao(
+            sseResponse("""{"memories":[],"open_loops":[{"title":"准备期末答辩","target_offset_hours":72,"urgency":3}]}"""),
+            loopDao
+        )
+        second.maybeExtract("期末答辩的事我又想了想，准备时间要往后挪一挪。", force = true)
+
+        assertEquals("跨批次重提同一事项不得重复建环", 1, loopDao.loops.size)
+        assertEquals("存量环走更新而非插入", 1, loopDao.updateCalls)
+        assertEquals(1, loopDao.insertCalls)
+        assertEquals("紧急度只升不降", 3, loopDao.loops[0].urgencyLevel)
+    }
 }

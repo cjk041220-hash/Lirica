@@ -91,7 +91,7 @@ class UnspokenThoughtExpiryQueryTest {
                 id = "thought_open_loop_x",
                 thought = "答辩｜准备得怎么样啦？",
                 triggerContext = "open_loop:loop_x",
-                urgency = 4.8f,
+                urgency = 0.96f,
                 createdAt = now - 7200_000L,
                 expiryTime = now - 3600_000L,
                 status = UnspokenThoughtEntity.STATUS_PENDING

@@ -37,9 +37,15 @@ class OpenLoopLifecycleManagerTest {
             val idx = loops.indexOfFirst { it.id == id }
             if (idx != -1) loops[idx] = loops[idx].copy(status = newStatus)
         }
-        override suspend fun markPrompted(id: String, promptedMs: Long, newStatus: String) {
+        override suspend fun markPromptedIfActive(id: String, promptedMs: Long, newStatus: String): Int {
             val idx = loops.indexOfFirst { it.id == id }
-            if (idx != -1) loops[idx] = loops[idx].copy(status = newStatus, lastPromptedMs = promptedMs, retryCount = loops[idx].retryCount + 1)
+            if (idx == -1) return 0
+            // 与生产 SQL 对齐：仅 OPEN/TRACKING 态可占坑，TRIGGERED/RESOLVED/EXPIRED 返回 0
+            if (loops[idx].status != OpenLoopEntity.STATUS_OPEN && loops[idx].status != OpenLoopEntity.STATUS_TRACKING) {
+                return 0
+            }
+            loops[idx] = loops[idx].copy(status = newStatus, lastPromptedMs = promptedMs, retryCount = loops[idx].retryCount + 1)
+            return 1
         }
         override suspend fun expireOldLoops(expiryThresholdMs: Long): Int {
             var count = 0
@@ -62,6 +68,15 @@ class OpenLoopLifecycleManagerTest {
                 .sortedBy { it.targetTimeMs }
                 .take(limit)
         }
+        override suspend fun getActiveByTitle(title: String): OpenLoopEntity? {
+            return loops.firstOrNull {
+                it.title == title && (
+                    it.status == OpenLoopEntity.STATUS_OPEN ||
+                        it.status == OpenLoopEntity.STATUS_TRACKING ||
+                        it.status == OpenLoopEntity.STATUS_TRIGGERED
+                    )
+            }
+        }
     }
 
     private val fakeThoughtDao = object : UnspokenThoughtDao {
@@ -77,8 +92,12 @@ class OpenLoopLifecycleManagerTest {
             return thoughts.filter { it.status == status && it.triggerContext?.startsWith(prefix) == true }
         }
         override suspend fun getById(id: String): UnspokenThoughtEntity? = thoughts.find { it.id == id }
-        override fun getPendingThoughts(status: String, limit: Int): kotlinx.coroutines.flow.Flow<List<UnspokenThoughtEntity>> {
-            return kotlinx.coroutines.flow.flowOf(thoughts.filter { it.status == status }.take(limit))
+        override fun getPendingThoughts(status: String, limit: Int, nowMs: Long): kotlinx.coroutines.flow.Flow<List<UnspokenThoughtEntity>> {
+            return kotlinx.coroutines.flow.flowOf(
+                thoughts.filter {
+                    it.status == status && (it.expiryTime == null || it.expiryTime > nowMs)
+                }.take(limit)
+            )
         }
         override suspend fun getTopUrgentPendingThoughts(
             status: String,
@@ -149,6 +168,42 @@ class OpenLoopLifecycleManagerTest {
         assertEquals(1, thoughts.size)
         assertTrue(thoughts[0].thought.contains("医院挂号看诊"))
         assertTrue(thoughts[0].triggerContext!!.startsWith("open_loop:"))
+    }
+
+    @Test
+    fun testCheckAndPromoteDueLoops_idempotent_noDuplicateInjection() = runBlocking {
+        // 幂等回归（2026-10-02 审查 P2-7）：事项被置为 TRIGGERED 后，再次扫描不得重复注入念头。
+        // 正确性来自 markPromptedIfActive 的条件更新（先占坑再注入），而非依赖调用方加锁。
+        manager.createLoop(
+            title = "周五组会汇报",
+            targetTimeMs = currentTime + 3600 * 1000L,
+            leadTimeMs = 2 * 3600 * 1000L
+        )
+
+        val first = manager.checkAndPromoteDueLoops(currentTime)
+        assertEquals(1, first.size)
+        assertEquals(1, thoughts.size)
+
+        val second = manager.checkAndPromoteDueLoops(currentTime + 60_000L)
+        assertTrue("TRIGGERED 后不应再推进", second.isEmpty())
+        assertEquals("不得重复注入念头", 1, thoughts.size)
+    }
+
+    @Test
+    fun testCheckAndPromoteDueLoops_urgencyFollowsScaleAndL3Threshold() = runBlocking {
+        // 量纲回归（2026-10-02 审查 P1-1）：开环念头 urgency 走 0~1 存储尺度，
+        // level 3 → 0.9 恰好达到 L3 通知门槛（ProactiveBubbleCoordinator.L3_URGENCY_THRESHOLD）。
+        manager.createLoop(
+            title = "明天上午的面试",
+            targetTimeMs = currentTime + 3600 * 1000L,
+            urgencyLevel = 3
+        )
+        manager.checkAndPromoteDueLoops(currentTime)
+
+        assertEquals(1, thoughts.size)
+        val thought = thoughts[0]
+        assertEquals("level 3 开环应达到 L3 门槛 0.9", 0.9f, thought.urgency, 0.0001f)
+        assertTrue("0.9 应可进入 L3 通知通道", thought.urgency >= ProactiveBubbleCoordinator.L3_URGENCY_THRESHOLD)
     }
 
     @Test

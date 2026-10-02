@@ -1,6 +1,7 @@
 package com.lirica.android.memory.consolidation
 
 import android.content.Context
+import androidx.room.withTransaction
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -47,7 +48,9 @@ class SubconsciousDreamWorker(
                 hybridRetriever = app?.memoryManager?.getHybridRetriever(),
                 episodeConsolidator = DreamEpisodeConsolidator(
                     sliceDao = database.episodicSensingSliceDao(),
-                    selfExperienceDao = database.selfExperienceDao()
+                    selfExperienceDao = database.selfExperienceDao(),
+                    // 写经历与标记切片同生共死：包进 Room 事务，防止进程中断导致同批切片重复沉淀
+                    transactionRunner = { block -> database.withTransaction { block() } }
                 )
             )
             coordinator.runDreamCycle()

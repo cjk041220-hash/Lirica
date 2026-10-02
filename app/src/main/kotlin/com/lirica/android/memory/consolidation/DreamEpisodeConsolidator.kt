@@ -20,7 +20,13 @@ import java.util.UUID
  */
 class DreamEpisodeConsolidator(
     private val sliceDao: EpisodicSensingSliceDao,
-    private val selfExperienceDao: SelfExperienceDao
+    private val selfExperienceDao: SelfExperienceDao,
+    /**
+     * 跨 DAO 原子写入的交接点："写经历 + 标记切片已消化"必须同生共死——
+     * 两步分开执行时进程被杀会导致同批切片下次重跑、重复写入同一段自叙经历。
+     * 生产装配传 Room 的 withTransaction；测试用默认直执行（无 Room 依赖）。
+     */
+    private val transactionRunner: suspend (suspend () -> Unit) -> Unit = { block -> block() }
 ) {
 
     suspend fun consolidateDailyEpisodes(
@@ -56,8 +62,10 @@ class DreamEpisodeConsolidator(
             isPlaceholder = false
         )
 
-        selfExperienceDao.insert(experienceEntity)
-        sliceDao.markAsConsolidated(unconsolidated.map { it.id })
+        transactionRunner {
+            selfExperienceDao.insert(experienceEntity)
+            sliceDao.markAsConsolidated(unconsolidated.map { it.id })
+        }
 
         // 自动清理 7 天前已消化的旧切片，杜绝空间泄漏
         sliceDao.deleteOldConsolidated(nowMs - 7L * 24 * 3600 * 1000L)

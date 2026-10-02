@@ -76,7 +76,7 @@ class L3NotificationChannelTest {
         screenState = ScreenStateSnapshot(state = ScreenState.UNLOCKED, lastStateChangeTimestamp = now)
     )
 
-    private fun urgentThought(id: String = "thought_wake_1", urgency: Float = 4.8f) = UnspokenThoughtEntity(
+    private fun urgentThought(id: String = "thought_wake_1", urgency: Float = 0.96f) = UnspokenThoughtEntity(
         id = id,
         thought = "期末答辩｜待会儿不是有「期末答辩」嘛，准备得怎么样啦？",
         urgency = urgency,
@@ -207,7 +207,7 @@ class L3NotificationChannelTest {
 
         repeat(ProactiveBubbleCoordinator.DAILY_L3_NOTIFICATION_QUOTA + 2) { i ->
             coEvery { thoughtManager.getTopPendingThoughts(limit = 1) } returns
-                listOf(urgentThought(id = "thought_wake_$i", urgency = 4.9f))
+                listOf(urgentThought(id = "thought_wake_$i", urgency = 0.98f))
             coord.coordinate(screenOffSnapshot(), now + i * 1000L)
         }
 

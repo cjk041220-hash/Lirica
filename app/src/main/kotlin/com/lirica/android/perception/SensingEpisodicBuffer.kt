@@ -21,13 +21,13 @@ import java.util.UUID
  * 核心职能：
  * 1. 监听 PerceptionPipeline 快照流，聚合应用停留时长与关键物理环境跃迁；
  * 2. 聚类为轻量情境切片（Episodic Slice），写入 episodic_sensing_slices 表；
- * 3. 严格限制单日存储上限 50 条（全天额外 DB 占用 <15KB），杜绝日志无界膨胀；
+ * 3. 严格限制全表存储上限 50 条（只淘汰已消化的历史，未消化原料全保留），杜绝日志无界膨胀；
  * 4. 为夜间自叙梦系统（SubconsciousDreamCoordinator）提供情境原料。
  */
 class SensingEpisodicBuffer(
     private val sliceDao: EpisodicSensingSliceDao,
     val minDwellDurationMs: Long = DEFAULT_MIN_DWELL_MS,
-    val maxDailySlices: Int = MAX_DAILY_SLICES,
+    val maxTotalSlices: Int = MAX_TOTAL_SLICES,
     /** 未消化切片软上限：只告警不删除，见 [pruneIfNeeded] */
     val maxUnconsolidatedSlices: Int = MAX_UNCONSOLIDATED_SLICES,
     private val timeProvider: () -> Long = { System.currentTimeMillis() }
@@ -35,7 +35,12 @@ class SensingEpisodicBuffer(
 
     companion object {
         const val DEFAULT_MIN_DWELL_MS = 3 * 60 * 1000L // 默认 3 分钟以上的前台专注才计入切片
-        const val MAX_DAILY_SLICES = 50                 // 单日上限 50 条切片，防 DB 膨胀
+        /**
+         * 全表总上限（非"单日"）：[pruneIfNeeded] 按 getTotalCount() 对比本值裁剪，
+         * 跨天语义由入梦流水线的 7 天清理（DreamEpisodeConsolidator.deleteOldConsolidated）兜底。
+         * 命名与实现保持一致（原 MAX_DAILY_SLICES 名不副实，2026-10-02 审查 P3 修正）。
+         */
+        const val MAX_TOTAL_SLICES = 50
         /**
          * 未消化切片软上限：只用于告警，不触发删除。
          * 设成远期两天的量级；积压到这一步说明入梦流水线长期没跑（充电 + 设备空闲约束未满足）。
@@ -46,7 +51,9 @@ class SensingEpisodicBuffer(
     private var lastPackage: String? = null
     private var lastActivity: String? = null
     private var dwellStartTimeMs: Long = 0L
-    private var lastHeadsetPlugged: Boolean = false
+
+    /** 三态：null = 本次进程内尚未见过耳机状态（首帧不建"戴上耳机"切片，避免把存量状态当跃迁记录） */
+    private var lastHeadsetPlugged: Boolean? = null
     private var lastLateNightRecordedDate: String? = null
     private var collectionJob: Job? = null
 
@@ -83,10 +90,10 @@ class SensingEpisodicBuffer(
             dwellStartTimeMs = nowMs
         }
 
-        // 2. 物理硬件跃迁：耳机插拔且开启媒体
+        // 2. 物理硬件跃迁：耳机插拔且开启媒体（首帧只记录基线、不产生切片）
         val hw = snapshot.hardwareEnvironment
         if (hw != null) {
-            if (hw.isHeadsetPlugged && hw.isAudioPlaying && !lastHeadsetPlugged) {
+            if (hw.isHeadsetPlugged && hw.isAudioPlaying && lastHeadsetPlugged == false) {
                 commitDirectSlice(
                     summary = "戴上耳机听音乐，沉浸在私人音频空间",
                     category = EpisodicSensingSliceEntity.CATEGORY_ENTERTAINMENT,
@@ -170,11 +177,11 @@ class SensingEpisodicBuffer(
      */
     private suspend fun pruneIfNeeded() {
         val total = sliceDao.getTotalCount()
-        if (total > maxDailySlices) {
-            val excess = total - maxDailySlices
+        if (total > maxTotalSlices) {
+            val excess = total - maxTotalSlices
             val deleted = sliceDao.deleteOldestConsolidated(excess)
             if (deleted > 0) {
-                LiricaLog.d("SensingEpisodicBuffer", "裁剪已消化历史切片 @deleted 条，未消化原料全部保留")
+                LiricaLog.d("SensingEpisodicBuffer", "裁剪已消化历史切片 $deleted 条，未消化原料全部保留")
             }
         }
 
@@ -183,7 +190,7 @@ class SensingEpisodicBuffer(
             // 只告警不删除：宁可多占几十 KB，也不能让"白天陪了一整天"在夜里变成空白
             LiricaLog.w(
                 "SensingEpisodicBuffer",
-                "未消化切片积压 @unconsolidated 条（超过软上限 @maxUnconsolidatedSlices）：入梦流水线可能长时间未运行"
+                "未消化切片积压 $unconsolidated 条（超过软上限 $maxUnconsolidatedSlices）：入梦流水线可能长时间未运行"
             )
         }
     }

@@ -67,7 +67,7 @@ class SensingEpisodicBufferTest {
         buffer = SensingEpisodicBuffer(
             sliceDao = fakeDao,
             minDwellDurationMs = 180000L, // 3 分钟
-            maxDailySlices = 5,
+            maxTotalSlices = 5,
             timeProvider = { currentTime }
         )
     }
@@ -115,7 +115,19 @@ class SensingEpisodicBufferTest {
 
     @Test
     fun testHeadsetPluggedWithMusic_triggersDirectSlice() = runBlocking {
-        // 插入耳机并在听音乐
+        // 首帧建立耳机基线（不建切片）：修复"启动即假跃迁"后，存量状态不再被当成跃迁记录
+        val baseline = PerceptionSnapshot(
+            foregroundApp = ForegroundAppInfo("com.netease.cloudmusic", "PlayerActivity"),
+            hardwareEnvironment = HardwareEnvironmentState(
+                isHeadsetPlugged = false,
+                isAudioPlaying = false,
+                isCharging = false
+            )
+        )
+        buffer.processSnapshot(baseline, currentTime)
+        assertEquals(0, recordedSlices.size)
+
+        // 插入耳机并在听音乐：false -> true 的真实跃迁才产生切片
         val snap = PerceptionSnapshot(
             foregroundApp = ForegroundAppInfo("com.netease.cloudmusic", "PlayerActivity"),
             hardwareEnvironment = HardwareEnvironmentState(
@@ -132,6 +144,22 @@ class SensingEpisodicBufferTest {
         assertTrue(slice.summaryScene.contains("耳机"))
     }
 
+    @Test
+    fun testHeadsetAlreadyPluggedAtStartup_noFalseTransitionSlice() = runBlocking {
+        // 进程启动时耳机已插（无基线）：首个快照只记录状态，不得产生"戴上耳机"切片
+        val snap = PerceptionSnapshot(
+            foregroundApp = ForegroundAppInfo("com.netease.cloudmusic", "PlayerActivity"),
+            hardwareEnvironment = HardwareEnvironmentState(
+                isHeadsetPlugged = true,
+                isAudioPlaying = true,
+                isCharging = false
+            )
+        )
+        buffer.processSnapshot(snap, currentTime)
+
+        assertEquals(0, recordedSlices.size)
+    }
+
 
     @Test
     fun testCapacityPruning_evictsConsolidatedHistoryAndKeepsAllUnconsolidated() = runBlocking {
@@ -140,7 +168,7 @@ class SensingEpisodicBufferTest {
         val fresh = SensingEpisodicBuffer(
             sliceDao = fakeDao,
             minDwellDurationMs = 180000L,
-            maxDailySlices = 5,
+            maxTotalSlices = 5,
             timeProvider = { now }
         )
 

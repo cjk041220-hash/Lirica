@@ -171,13 +171,13 @@ class ProactiveBubbleCoordinatorTest {
         val normalThought = UnspokenThoughtEntity(
             id = "thought-normal",
             thought = "普通闲聊念头",
-            urgency = 2.0f,
+            urgency = 0.4f,
             createdAt = 100_000L
         )
         val priorityWakeThought = UnspokenThoughtEntity(
             id = "thought_wake_alarm_999",
             thought = "【自定约定】时间到了，提醒喝水",
-            urgency = 4.8f,
+            urgency = 0.96f,
             createdAt = 103_000L
         )
 

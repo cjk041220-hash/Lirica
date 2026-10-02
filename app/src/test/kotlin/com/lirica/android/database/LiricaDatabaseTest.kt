@@ -252,8 +252,8 @@ class LiricaDatabaseTest {
         val expiredThought = unspokenThoughtDao.getById("thought_01")
         assertEquals("discarded", expiredThought?.status)
 
-        // thought_02 仍处于 pending
-        val remainingPending = unspokenThoughtDao.getPendingThoughts().first()
+        // thought_02 仍处于 pending（getPendingThoughts 查询层过滤过期条目）
+        val remainingPending = unspokenThoughtDao.getPendingThoughts(nowMs = futureTime).first()
         assertEquals(1, remainingPending.size)
         assertEquals("thought_02", remainingPending[0].id)
     }

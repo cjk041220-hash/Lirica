@@ -49,11 +49,32 @@ interface OpenLoopDao {
     @Query("SELECT * FROM open_loops WHERE status IN ('OPEN', 'TRACKING') AND trigger_window_start_ms <= :currentTimeMs ORDER BY target_time_ms ASC")
     suspend fun getDueForTracking(currentTimeMs: Long): List<OpenLoopEntity>
 
+    /**
+     * 按归一化标题查找仍活跃（未闭环）的开环事项。
+     * 供记忆抽取器建环前去重：用户隔几轮重提同一事项时刷新既有环而非重复建环。
+     */
+    @Query("""
+        SELECT * FROM open_loops
+        WHERE status IN ('OPEN', 'TRACKING', 'TRIGGERED') AND title = :title
+        ORDER BY target_time_ms ASC
+        LIMIT 1
+    """)
+    suspend fun getActiveByTitle(title: String): OpenLoopEntity?
+
     @Query("UPDATE open_loops SET status = :newStatus WHERE id = :id")
     suspend fun updateStatus(id: String, newStatus: String)
 
-    @Query("UPDATE open_loops SET status = :newStatus, last_prompted_ms = :promptedMs, retry_count = retry_count + 1 WHERE id = :id")
-    suspend fun markPrompted(id: String, promptedMs: Long, newStatus: String = OpenLoopEntity.STATUS_TRIGGERED)
+    /**
+     * 条件更新：仅当事项仍处于可提醒状态（OPEN/TRACKING）时置为 [newStatus] 并累计提醒次数。
+     * @return 受影响行数：1 = 占坑成功（本次负责投递念头）；0 = 已被并发路径处理，调用方必须跳过注入。
+     * 这是"先占坑再注入"幂等模式的核心：正确性不再依赖调用方持有外部状态锁。
+     */
+    @Query("""
+        UPDATE open_loops
+        SET status = :newStatus, last_prompted_ms = :promptedMs, retry_count = retry_count + 1
+        WHERE id = :id AND status IN ('OPEN', 'TRACKING')
+    """)
+    suspend fun markPromptedIfActive(id: String, promptedMs: Long, newStatus: String = OpenLoopEntity.STATUS_TRIGGERED): Int
 
     @Query("UPDATE open_loops SET status = 'EXPIRED' WHERE status IN ('OPEN', 'TRACKING', 'TRIGGERED') AND target_time_ms < :expiryThresholdMs")
     suspend fun expireOldLoops(expiryThresholdMs: Long): Int

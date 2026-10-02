@@ -44,10 +44,16 @@ interface UnspokenThoughtDao {
         status: String = UnspokenThoughtEntity.STATUS_PENDING
     ): List<UnspokenThoughtEntity>
 
-    @Query("SELECT * FROM unspoken_thoughts WHERE status = :status ORDER BY urgency DESC, created_at DESC LIMIT :limit")
+    @Query("""
+        SELECT * FROM unspoken_thoughts
+        WHERE status = :status
+          AND (expiry_time IS NULL OR expiry_time > :nowMs)
+        ORDER BY urgency DESC, created_at DESC LIMIT :limit
+    """)
     fun getPendingThoughts(
         status: String = UnspokenThoughtEntity.STATUS_PENDING,
-        limit: Int = 20
+        limit: Int = 20,
+        nowMs: Long
     ): Flow<List<UnspokenThoughtEntity>>
 
     /**

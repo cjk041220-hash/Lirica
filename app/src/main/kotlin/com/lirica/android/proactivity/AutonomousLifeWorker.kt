@@ -41,6 +41,14 @@ class AutonomousLifeWorker(
             // M4.2 联动：闲时自动清理与失效超期 72 小时的开环未决事项
             app?.openLoopLifecycleManager?.expireOverdueLoops()
 
+            // 闲时清理已闭环 7 天以上的历史环（RESOLVED/EXPIRED），防表缓胀。
+            // 用数据库时钟而非 Worker 本地变量，语义与 expireOldLoops 的阈值口径一致。
+            val nowMs = System.currentTimeMillis()
+            val cleaned = database.openLoopDao().cleanupClosedLoops(nowMs - 7L * 24 * 3600 * 1000L)
+            if (cleaned > 0) {
+                LiricaLog.i(TAG, "闲时清理历史闭环事项: $cleaned 条")
+            }
+
             Result.success()
         } catch (e: Exception) {
             LiricaLog.e(TAG, "AutonomousLifeWorker 自主日记生成任务异常，将触发重试", e)

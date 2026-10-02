@@ -129,7 +129,8 @@ class DreamEmergenceSynthesizer {
             id = "dream_emergence_${UUID.randomUUID()}",
             thought = text,
             triggerContext = "subconscious_dream_consolidation",
-            urgency = 4.5f,
+            // 念头池 urgency 统一 0~1 存储尺度（0.9 ≈ 0~5 尺度下的 4.5，见 ProactiveBubbleCoordinator.THOUGHT_URGENCY_SCALE）
+            urgency = 0.9f,
             decayScore = 1.0f,
             targetScenario = "morning_icebreaker",
             createdAt = nowMs,

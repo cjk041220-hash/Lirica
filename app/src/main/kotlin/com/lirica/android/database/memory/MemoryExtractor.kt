@@ -1,5 +1,6 @@
 package com.lirica.android.database.memory
 
+import com.lirica.android.common.logging.LiricaLog
 import com.lirica.android.database.dao.OpenLoopDao
 import com.lirica.android.database.dao.UserMemoryDao
 import com.lirica.android.database.entity.OpenLoopEntity
@@ -278,29 +279,55 @@ class MemoryExtractor(
             }
         }
 
-        // M4.2 贯通：抽取得到的未决开环事项存入 open_loops 表
+        var processedLoopCount = 0
+        // M4.2 贯通：抽取得到的未决开环事项存入 open_loops 表。
+        // 去重双闸：①批内按归一化标题合并（同批重复抽取只留紧急度最高的一条）；
+        // ②对账存量——用户隔几轮重提同一事项时刷新既有环的目标时间与紧急度，
+        //   而不是再建一个同名环造成双份提醒、双份念头注入（2026-10-02 审查 P1-4）。
         if (openLoopDao != null && result.open_loops.isNotEmpty()) {
-            val loopEntities = result.open_loops
-                .filter { it.title.isNotBlank() }
-                .map { loop ->
-                    val targetMs = now + loop.target_offset_hours.coerceAtLeast(1) * 3600 * 1000L
-                    OpenLoopEntity(
-                        id = UUID.randomUUID().toString(),
-                        title = loop.title.trim(),
-                        targetTimeMs = targetMs,
-                        triggerWindowStartMs = (targetMs - 2 * 3600 * 1000L).coerceAtLeast(now),
-                        status = OpenLoopEntity.STATUS_OPEN,
-                        urgencyLevel = loop.urgency.coerceIn(1, 3),
-                        followUpPrompt = "待会儿不是有「${loop.title.trim()}」嘛，准备得怎么样啦？",
-                        createdAt = now
+            val batchMerged = LinkedHashMap<String, ExtractedOpenLoop>()
+            for (loop in result.open_loops) {
+                val title = loop.title.trim()
+                if (title.isBlank()) continue
+                val existing = batchMerged[title]
+                if (existing == null || loop.urgency > existing.urgency) {
+                    batchMerged[title] = loop
+                }
+            }
+            for ((title, loop) in batchMerged) {
+                val targetMs = now + loop.target_offset_hours.coerceAtLeast(1) * 3600 * 1000L
+                val stale = openLoopDao.getActiveByTitle(title)
+                if (stale != null) {
+                    // 刷新既有环：目标时间以本次提及为准，紧急度只升不降
+                    openLoopDao.update(
+                        stale.copy(
+                            targetTimeMs = targetMs,
+                            triggerWindowStartMs = (targetMs - 2 * 3600 * 1000L).coerceAtLeast(now),
+                            urgencyLevel = maxOf(stale.urgencyLevel, loop.urgency.coerceIn(1, 3)),
+                            followUpPrompt = "待会儿不是有「$title」嘛，准备得怎么样啦？"
+                        )
+                    )
+                    LiricaLog.i("MemoryExtractor", "开环「$title」已存在，刷新目标时间与紧急度而非重复建环")
+                } else {
+                    openLoopDao.insert(
+                        OpenLoopEntity(
+                            id = UUID.randomUUID().toString(),
+                            title = title,
+                            targetTimeMs = targetMs,
+                            triggerWindowStartMs = (targetMs - 2 * 3600 * 1000L).coerceAtLeast(now),
+                            status = OpenLoopEntity.STATUS_OPEN,
+                            urgencyLevel = loop.urgency.coerceIn(1, 3),
+                            followUpPrompt = "待会儿不是有「$title」嘛，准备得怎么样啦？",
+                            createdAt = now
+                        )
                     )
                 }
-            if (loopEntities.isNotEmpty()) {
-                openLoopDao.insertAll(loopEntities)
+                processedLoopCount++
             }
         }
 
-        return entities.size + result.open_loops.size
+        // 返回"实际落库"数量：记忆条数 + 去重后的开环条数（原始 open_loops 数会把批内重复算进去）
+        return entities.size + processedLoopCount
     }
 
     /**

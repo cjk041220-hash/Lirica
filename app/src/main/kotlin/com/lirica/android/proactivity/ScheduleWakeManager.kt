@@ -160,7 +160,8 @@ class ScheduleWakeManager(
         val thought = UnspokenThoughtEntity(
             id = "thought_wake_${alarmEntity.id}",
             thought = "【自定约定】时间到了，我之前记着：${alarmEntity.botNote}",
-            urgency = 4.8f,
+            // 念头池 urgency 统一 0~1 存储尺度（0.96 ≈ 0~5 尺度下的 4.8，见 ProactiveBubbleCoordinator.THOUGHT_URGENCY_SCALE）
+            urgency = 0.96f,
             decayScore = 1.0f,
             createdAt = nowMs,
             expiryTime = nowMs + 3600_000L,

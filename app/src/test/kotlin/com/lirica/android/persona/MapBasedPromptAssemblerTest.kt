@@ -56,7 +56,7 @@ class MapBasedPromptAssemblerTest {
         val dreamEmergence = UnspokenThoughtEntity(
             id = "thought_1",
             thought = "昨晚入梦整理时，看到你最近一直专注高效，今天也一起加油呀！",
-            urgency = 4.5f,
+            urgency = 0.9f,
             createdAt = 3000L
         )
         val selfExperiences = listOf(

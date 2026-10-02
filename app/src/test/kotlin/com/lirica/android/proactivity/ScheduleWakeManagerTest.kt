@@ -88,7 +88,7 @@ class ScheduleWakeManagerTest {
 
         val createdThought = thoughtSlot.captured
         assertTrue(createdThought.thought.contains("记得给猫咪加粮"))
-        assertEquals(4.8f, createdThought.urgency, 0.01f)
+        assertEquals(0.96f, createdThought.urgency, 0.01f)
         assertEquals(UnspokenThoughtEntity.STATUS_PENDING, createdThought.status)
     }
 

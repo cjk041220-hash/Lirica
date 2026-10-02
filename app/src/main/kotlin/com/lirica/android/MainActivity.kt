@@ -41,12 +41,17 @@ enum class AppNavScreen {
     SETTINGS
 }
 
+/** 通知权限申请状态持久化：区分"从未问过"与"永久拒绝" */
+private const val PREFS_PERMISSION_STATE = "lirica_permission_state"
+private const val KEY_NOTIF_ASKED = "post_notifications_asked"
+
 class MainActivity : ComponentActivity() {
 
     /**
      * 2026-09-27 审计 P0 修复：POST_NOTIFICATIONS 运行时申请。
      * Android 13+ 通知默认拒绝，仅 Manifest 声明不足以让主动性气泡/日程提醒可见。
-     * 用户拒绝后不再反复骚扰（交给系统 rationale 机制），可在系统设置中恢复。
+     * 2026-10-02 补充：区分"从未问过 / 拒绝过但可再问 / 永久拒绝"三态——
+     * 永久拒绝时引导跳系统通知设置，否则 L3 通知通道将无限期静默且用户无从得知。
      */
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -63,9 +68,26 @@ class MainActivity : ComponentActivity() {
             val granted = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
-            // 未授权且从未被拒绝过（rationale 未触发）时申请；拒绝过则尊重用户选择
-            if (!granted && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            if (granted) return
+
+            val prefs = getSharedPreferences(PREFS_PERMISSION_STATE, Context.MODE_PRIVATE)
+            val hasAskedBefore = prefs.getBoolean(KEY_NOTIF_ASKED, false)
+            val canAskAgain = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+            when {
+                // 首次：申请并记录，避免"永久拒绝"与"从未问过"无法区分
+                !hasAskedBefore -> {
+                    prefs.edit().putBoolean(KEY_NOTIF_ASKED, true).apply()
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                // 拒绝过但系统仍允许弹窗：再问一次
+                canAskAgain -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                // 永久拒绝：不再骚扰，直接给一条去系统设置的快捷通道
+                else -> runCatching {
+                    startActivity(
+                        android.content.Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    )
+                }.onFailure { LiricaLog.w("MainActivity", "跳转系统通知设置失败", it) }
             }
         }
     }

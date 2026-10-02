@@ -97,7 +97,19 @@ interface ProactiveBubbleCoordinator {
         const val DAILY_L3_NOTIFICATION_QUOTA = 3
 
         /** L3 候选的紧急度下限：低于此值走静默/微表情，绝不用通知吵人 */
-        const val L3_URGENCY_THRESHOLD = 4.5f
+        const val L3_URGENCY_THRESHOLD = 0.9f
+
+        /**
+         * 念头池 urgency 的存储尺度换算系数。
+         *
+         * 历史教训（2026-10-02 审查）：念头池的 urgency 生产者（ThoughtSynthesizer /
+         * OpenLoopLifecycleManager / DreamEmergenceSynthesizer）统一输出 **0~1** 尺度，
+         * 而动机动力学（InterruptibilityEstimator / SilenceDecisionEngine）走 **0~5** 尺度。
+         * 消费端把 0~1 的值直接与 0~5 尺度的门槛比较，会让感知/关怀/开环念头在动机竞赛中
+         * 被压缩 5 倍——只有曾经写死 4.8 的履约念头"碰巧"能过门槛。
+         * 现约定：**存储一律 0~1；进 0~5 尺度的动机比较前必须乘以本系数**。
+         */
+        const val THOUGHT_URGENCY_SCALE = 5.0
 
         /**
          * 念头正文里的"标题｜正文"分隔符。
@@ -264,7 +276,7 @@ class ProactiveBubbleCoordinatorImpl(
         if (l3DeliveredToday >= ProactiveBubbleCoordinator.DAILY_L3_NOTIFICATION_QUOTA) {
             LiricaLog.d(
                 TAG,
-                "当日 L3 通知配额已用尽 (@l3DeliveredToday/@DAILY_L3_NOTIFICATION_QUOTA)，保留念头待明日"
+                "当日 L3 通知配额已用尽 ($l3DeliveredToday/${ProactiveBubbleCoordinator.DAILY_L3_NOTIFICATION_QUOTA})，保留念头待明日"
             )
             return false
         }
@@ -284,7 +296,7 @@ class ProactiveBubbleCoordinatorImpl(
 
         val delivered = dispatcher.dispatchNotification(context, title, message)
         if (!delivered) {
-            LiricaLog.w(TAG, "L3 通知未送达，念头保留待下次机会: @thought.id")
+            LiricaLog.w(TAG, "L3 通知未送达，念头保留待下次机会: ${thought.id}")
             return false
         }
 
@@ -297,7 +309,7 @@ class ProactiveBubbleCoordinatorImpl(
         thoughtManager.markExpressed(nowMs)
         onThoughtDelivered(thought.id, nowMs)
         persistState(today)
-        LiricaLog.i(TAG, "L3 通知已送达并核销念头: @thought.id")
+        LiricaLog.i(TAG, "L3 通知已送达并核销念头: ${thought.id}")
         return true
     }
 
@@ -346,7 +358,9 @@ class ProactiveBubbleCoordinatorImpl(
         // 2. 动机动力学计算与念头更新 (融合即时感知动力学与待决念头池最高紧急度)
         val perceptionMotivation = thoughtManager.processPerception(snapshot, emotionEngine.currentVector, nowMs)
         val topPendingThought = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
-        val thoughtUrgency = topPendingThought?.urgency?.toDouble() ?: 0.0
+        // 念头池存储为 0~1 尺度，动机比较在 0~5 尺度——必须换算，否则念头对动机的贡献被压缩 5 倍
+        val thoughtUrgency = (topPendingThought?.urgency?.toDouble() ?: 0.0) *
+            ProactiveBubbleCoordinator.THOUGHT_URGENCY_SCALE
         val rawMotivation = max(perceptionMotivation, thoughtUrgency)
 
         // 3. 用户退避惩罚抵扣
@@ -384,18 +398,11 @@ class ProactiveBubbleCoordinatorImpl(
 
         // 4.6 高优先履约念头：绕过动机门控直接送达（本轮修复的第二个断链）
         //
-        // 起因：自定闹钟约定（schedule_wake）生成 urgency=4.8 的念头，但它的送达要过
+        // 起因：自定闹钟约定（schedule_wake）生成的履约念头，但它的送达要过
         // 「内隐动机 >= 3.6」这道门——而动机来自闲时动力学，在用户专注/刚被打扰/退避惩罚生效时
         // 完全可能低于阈值，于是**用户亲口定下的约定被静默吞掉**。
         // 政策：用户显式约定 > 系统自律。屏幕可交互时直接给气泡，不走代价模型（否则息屏/通话
         // 等物理边界仍会把它变成通知或继续静默，物理红线优先）。
-        run {
-            val dbgTop = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
-            LiricaLog.i(
-                "ProactiveCoordinator",
-                "DBG decision=@decision.action top=@{dbgTop?.id}/@{dbgTop?.urgency}/exp=@{dbgTop?.expiryTime} now=@{timeProvider()} screen=@{snapshot.screenState.state}"
-            )
-        }
         if (isPriorityWakeThoughtCompat(decision, snapshot)) {
             val priorityThought = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
             if (priorityThought != null) {
@@ -405,7 +412,7 @@ class ProactiveBubbleCoordinatorImpl(
                     level = ProactivityLevel.L2_ICEBREAKER_BUBBLE,
                     decision = decision,
                     thought = priorityThought,
-                    reason = "高优先履约念头（用户显式约定/紧急度 >= @L3_URGENCY_THRESHOLD）：绕过动机门控直接送达，不计入每日闲聊配额",
+                    reason = "高优先履约念头（用户显式约定或紧急度达标）：绕过动机门控直接送达，不计入每日闲聊配额",
                     bubblesShownToday = bubblesShownToday
                 )
             }
@@ -437,8 +444,9 @@ class ProactiveBubbleCoordinatorImpl(
                 val topThoughts = thoughtManager.getTopPendingThoughts(limit = 1)
                 val topThought = topThoughts.firstOrNull()
                 val isPriorityWakeThought = topThought != null && (
-                    topThought.id.startsWith("thought_wake_") || topThought.urgency >= 4.5f
-                )
+                    topThought.id.startsWith("thought_wake_") ||
+                        topThought.urgency >= ProactiveBubbleCoordinator.L3_URGENCY_THRESHOLD
+                    )
 
                 // 每日配额硬约束守门 (高优先级自定约定闹钟念头跳过闲聊配额限制)
                 if (bubblesShownToday >= ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA && !isPriorityWakeThought) {
@@ -498,8 +506,9 @@ class ProactiveBubbleCoordinatorImpl(
 
         val topThought = thoughtManager.getTopPendingThoughts(limit = 1).firstOrNull()
         val isPriorityWakeThought = topThought != null && (
-            topThought.id.startsWith("thought_wake_") || topThought.urgency >= 4.5f
-        )
+            topThought.id.startsWith("thought_wake_") ||
+                topThought.urgency >= ProactiveBubbleCoordinator.L3_URGENCY_THRESHOLD
+            )
         val quotaAllowed = bubblesShownToday < ProactiveBubbleCoordinator.DAILY_BUBBLE_QUOTA
 
         // 首帧同样先试 L3；失败（锁屏/无权限/冷却）再走气泡

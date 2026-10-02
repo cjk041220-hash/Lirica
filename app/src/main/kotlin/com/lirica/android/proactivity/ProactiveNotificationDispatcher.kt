@@ -53,6 +53,9 @@ class ProactiveNotificationDispatcher(
         }
     }
 
+    // @Volatile：dispatcher 是 Application 公开字段，冷却时间戳可能被协调器之外的未来调用方
+    // 在其他线程读写；当前靠协调器 stateMutex 串行，加 volatile 让隐式契约显式化（2026-10-02 审查 P3）
+    @Volatile
     var lastDispatchedTimestampMs: Long = 0L
         private set
 
