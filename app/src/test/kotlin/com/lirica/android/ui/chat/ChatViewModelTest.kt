@@ -69,6 +69,7 @@ class ChatViewModelTest {
         coEvery { mockChatDialogueDao.getRecentBySession(any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.retrieve(any(), any(), any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns emptyList()
+        coEvery { mockMemoryManager.recallSelfExperiences(any(), any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns emptyList()
         coEvery { mockMemoryManager.assembleDynamicContext(any(), any(), any(), any()) } returns null
@@ -169,6 +170,7 @@ class ChatViewModelTest {
 
         coEvery { mockMemoryManager.retrieve(any(), any(), any(), any()) } returns listOf(mockUserMemory)
         coEvery { mockMemoryManager.recallUserMemories(any(), any(), any(), any()) } returns listOf(mockUserMemory)
+        coEvery { mockMemoryManager.recallSelfExperiences(any(), any(), any()) } returns listOf(mockExperience)
         coEvery { mockMemoryManager.recallSelfExperiences(any(), any()) } returns listOf(mockExperience)
         coEvery { mockMemoryManager.recallUnspokenThoughts(any(), any()) } returns listOf(mockThought)
 

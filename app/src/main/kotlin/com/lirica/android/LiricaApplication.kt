@@ -405,22 +405,29 @@ class LiricaApplication : Application() {
                     val retriever = HybridMemoryRetriever(
                         embeddingModel = embeddingModel,
                         vectorStore = vectorStore,
-                        userMemoryDao = database.userMemoryDao()
+                        userMemoryDao = database.userMemoryDao(),
+                        selfExperienceDao = database.selfExperienceDao()
                     )
                     memoryManager.attachHybridRetriever(retriever)
                     LiricaLog.i("LiricaApplication", "端侧 BGE 向量模型与混合记忆检索器异步装配成功")
 
-                    // 若向量库为空但数据库已有记忆，后台补齐向量索引
-                    val embeddingCount = database.memoryEmbeddingDao().count()
+                    // 若向量库为空但数据库已有记忆/经历，后台补齐向量索引
                     val activeMemories = database.userMemoryDao().getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 500)
-                    if (embeddingCount < activeMemories.size) {
-                        val unindexed = activeMemories.filter { mem ->
-                            database.memoryEmbeddingDao().getByMemoryId(mem.id) == null
-                        }
-                        if (unindexed.isNotEmpty()) {
-                            retriever.indexMemories(unindexed)
-                            LiricaLog.i("LiricaApplication", "后台回填未索引记忆向量: ${unindexed.size} 条")
-                        }
+                    val unindexedUser = activeMemories.filter { mem ->
+                        database.memoryEmbeddingDao().getByMemoryId(mem.id) == null
+                    }
+                    if (unindexedUser.isNotEmpty()) {
+                        retriever.indexMemories(unindexedUser)
+                        LiricaLog.i("LiricaApplication", "后台回填未索引用户记忆向量: ${unindexedUser.size} 条")
+                    }
+
+                    val activeExperiences = database.selfExperienceDao().getActiveExperiences(limit = 200)
+                    val unindexedSelf = activeExperiences.filter { exp ->
+                        database.memoryEmbeddingDao().getByMemoryId(exp.id) == null
+                    }
+                    if (unindexedSelf.isNotEmpty()) {
+                        retriever.indexSelfExperiences(unindexedSelf)
+                        LiricaLog.i("LiricaApplication", "后台回填未索引自叙经历向量: ${unindexedSelf.size} 条")
                     }
                 } else {
                     LiricaLog.w("LiricaApplication", "端侧 BGE 向量模型加载未就绪或运行环境不支持，降级维持 2-gram 话题检索")

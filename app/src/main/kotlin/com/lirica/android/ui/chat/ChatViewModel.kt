@@ -188,7 +188,7 @@ class ChatViewModel(
                     topK = 5,
                     moodValence = currentMood.defaultVector.valence
                 )
-                val selfExps = memoryManager.recallSelfExperiences(limit = 2, unsharedOnly = true)
+                val selfExps = memoryManager.recallSelfExperiences(limit = 2, unsharedOnly = true, query = trimmed)
                 val thoughts = memoryManager.recallUnspokenThoughts(limit = 2)
 
                 // 记忆命中回写：本轮被召回的用户记忆立即更新按日去重命中统计与使用标记

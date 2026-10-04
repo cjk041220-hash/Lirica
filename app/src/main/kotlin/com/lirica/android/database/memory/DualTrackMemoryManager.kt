@@ -16,11 +16,11 @@ import com.lirica.android.persona.PhiMiddleware
  *
  * 协调 Room 数据库中的四大心智实体表：
  * 1. Track A: 用户轨 (User Profile & Facts) - 6因子复合检索与二段分层召回
- * 2. Track B: 自叙轨 (Agent Self-Experiences) - 自主经历与新鲜见闻
+ * 2. Track B: 自叙轨 (Agent Self-Experiences) - 自主经历与新鲜见闻，支持向量语义唤醒
  * 3. 念头池: Unspoken Thoughts - 碎片念头、自然衰减与紧急度优先
  * 4. 会话轨: Chat Dialogues - 多轮历史归档
  * 5. 世界观轨: Worldview Entities - 高层综合认知
- * 6. 向量融合检索: HybridMemoryRetriever (D21) - 向量召回 top-20 + 六维精排
+ * 6. 向量融合检索: HybridMemoryRetriever (D21) - 向量召回 top-20 + 六维精排 (支持 Track A & Track B)
  *
  * 为 PhiMiddleware 动态上下文装配提供完备的高质量认知活水。
  */
@@ -121,12 +121,33 @@ class DualTrackMemoryManager(
     }
 
     /**
-     * 自叙轨经历召回 (Track B)
+     * 自叙轨经历召回 (Track B) - 兼容既有调用点与单测
      */
     suspend fun recallSelfExperiences(
         limit: Int = 5,
         unsharedOnly: Boolean = false
     ): List<SelfExperienceEntity> {
+        return recallSelfExperiences(limit = limit, unsharedOnly = unsharedOnly, query = "")
+    }
+
+    /**
+     * 自叙轨经历召回 (Track B)
+     *
+     * 当提供了 query 且挂载了 hybridRetriever 时，优先走语义向量检索召回最契合的经历；
+     * 若未命中或未装配，平滑降级为按时序/分享状态召回。
+     */
+    suspend fun recallSelfExperiences(
+        limit: Int = 5,
+        unsharedOnly: Boolean = false,
+        query: String = ""
+    ): List<SelfExperienceEntity> {
+        if (query.isNotBlank() && hybridRetriever != null) {
+            val hits = hybridRetriever?.retrieveSelfExperiences(query, limit, unsharedOnly)
+            if (!hits.isNullOrEmpty()) {
+                return hits
+            }
+        }
+
         return if (unsharedOnly) {
             selfExperienceDao.getUnsharedExperiences(limit = limit)
         } else {
@@ -182,7 +203,7 @@ class DualTrackMemoryManager(
         val userMemories = preRecalledUserMemories
             ?: retrieve(query = query, topK = 5, nowTs = nowTs, moodValence = moodValence)
         val selfExperiences = preRecalledSelfExperiences
-            ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
+            ?: recallSelfExperiences(limit = 2, unsharedOnly = true, query = query)
         val unspokenThoughts = preRecalledUnspokenThoughts
             ?: recallUnspokenThoughts(limit = 3, currentTs = nowTs)
         val worldviews = preRecalledWorldviews ?: recallWorldviews(limit = 5)
@@ -217,7 +238,7 @@ class DualTrackMemoryManager(
         val userMemories = preRecalledUserMemories
             ?: retrieve(query = query, topK = 5, nowTs = nowTs, moodValence = moodValence)
         val selfExperiences = preRecalledSelfExperiences
-            ?: recallSelfExperiences(limit = 2, unsharedOnly = true)
+            ?: recallSelfExperiences(limit = 2, unsharedOnly = true, query = query)
         val unspokenThoughts = preRecalledUnspokenThoughts
             ?: recallUnspokenThoughts(limit = 2, currentTs = nowTs)
 
@@ -278,5 +299,21 @@ class DualTrackMemoryManager(
      */
     suspend fun consumeUnspokenThought(id: String, consumedAt: Long = System.currentTimeMillis()) {
         unspokenThoughtDao.markConsumed(id, consumedAt)
+    }
+
+    /**
+     * 删除用户记忆并同步移除端侧向量索引（防止孤儿向量）
+     */
+    suspend fun deleteUserMemory(id: String) {
+        userMemoryDao.deleteById(id)
+        hybridRetriever?.removeVector(id)
+    }
+
+    /**
+     * 删除自叙经历并同步移除端侧向量索引
+     */
+    suspend fun deleteSelfExperience(id: String) {
+        selfExperienceDao.deleteById(id)
+        hybridRetriever?.removeVector(id)
     }
 }
