@@ -486,9 +486,7 @@ class AutonomousActionLoop(
                     observation = observation,
                     actionSummary = actionDescription(action),
                     reason = "动作已派发但页面未见变化",
-                    pageFingerprint = verification.let { v ->
-                        if (v is ActionVerification.NoVisibleEffect) v.after?.hash ?: 0L else 0L
-                    }
+                    pageFingerprint = verification.after?.hash ?: 0L
                 )
                 if (healing is HealingOutcome.Exhausted) {
                     return failWithNarration(healing.reason, stepIndex, TraceFinalState.FAILED, healing.narrative)

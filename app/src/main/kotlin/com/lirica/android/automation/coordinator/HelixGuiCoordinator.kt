@@ -142,7 +142,7 @@ class HelixGuiCoordinatorImpl(
     private val _state = MutableStateFlow<TaskExecutionState>(TaskExecutionState.Idle)
     override val state: StateFlow<TaskExecutionState> = _state.asStateFlow()
 
-    private val feedbackHub = ActionFeedbackHub(listOf(feedbackListener))
+    private val feedbackHub = (feedbackListener as? ActionFeedbackHub) ?: ActionFeedbackHub(listOf(feedbackListener))
 
     private val isCancelled: AtomicBoolean = cancelSignal ?: AtomicBoolean(false)
 

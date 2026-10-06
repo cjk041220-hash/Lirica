@@ -528,6 +528,10 @@ class LiricaApplication : Application() {
         // 而不是只把状态显示改成"已取消"却继续把手势打完
         val taskCancelSignal = java.util.concurrent.atomic.AtomicBoolean(false)
 
+        // 具身反馈共享中枢：协调器触控尾迹与动态闭环事件（抢占/回放/进度）同源多播，
+        // 彻底杜绝双通道未打通导致闭环事件落入 NoOp 的隐形接线陷阱
+        val feedbackHub = com.lirica.android.automation.feedback.ActionFeedbackHub()
+
         val autonomousLoop = com.lirica.android.automation.coordinator.AutonomousActionLoop(
             observer = observationBuilder,
             planner = stepPlanner,
@@ -540,6 +544,7 @@ class LiricaApplication : Application() {
             policyEngine = policyEngine,
             resourceGuard = resourceGuard,
             currentPackageProvider = currentPackageProvider,
+            feedback = feedbackHub,
             cancellationCheck = { taskCancelSignal.get() }
         )
 
@@ -557,6 +562,8 @@ class LiricaApplication : Application() {
             executionBackend = hybridExecutionManager,
             // M5.1：统一安全裁决引擎注入执行层（未注入 = 双态模式与漫游只读整体失效）
             safetyPolicy = policyEngine,
+            // M5.1 具身反馈：注入共享中枢（闭环抢占/步骤进度与协调器触控尾迹同源广播）
+            feedbackListener = feedbackHub,
             // M5.2：单步动态闭环（execute_macro 只给目标时自动升级为 ReAct 闭环）
             autonomousLoop = autonomousLoop,
             // 与闭环共用同一个取消信号（用户喊停 → 两条路径同时停）

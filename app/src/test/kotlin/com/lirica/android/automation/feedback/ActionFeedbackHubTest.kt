@@ -62,4 +62,25 @@ class ActionFeedbackHubTest {
             ActionVisualFeedback.MacroReplayProgress(macroId = "m1", stepIndex = 1, totalSteps = 3)
         )
     }
+
+    @Test
+    fun testSharedHubReceivesEventsFromBothCoordinatorAndDirectDispatch() {
+        val sharedHub = ActionFeedbackHub()
+        val received = mutableListOf<ActionVisualFeedback>()
+        sharedHub.register { received.add(it) }
+
+        // 模拟 Coordinator 派发 TouchTrace
+        sharedHub.onFeedback(
+            ActionVisualFeedback.TouchTrace(0f, 0f, 100f, 100f, 50L, TouchKind.TAP)
+        )
+
+        // 模拟闭环派发 StepProgress
+        sharedHub.onFeedback(
+            ActionVisualFeedback.StepProgress(stepIndex = 1, totalSteps = 12, description = "点击搜索")
+        )
+
+        assertEquals(2, received.size)
+        assertTrue(received[0] is ActionVisualFeedback.TouchTrace)
+        assertTrue(received[1] is ActionVisualFeedback.StepProgress)
+    }
 }

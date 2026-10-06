@@ -42,6 +42,16 @@ class SafetyPolicyEngineTest {
     }
 
     @Test
+    fun testLaunchNormalAppAutoPasses() {
+        val decision = engine().evaluate(
+            SafetyRequest.IntentDispatch(IntentAction.LaunchApp("com.bilibili.app"))
+        )
+        assertTrue("非金融普通 App 应自动放行", decision is SafetyDecision.Allowed)
+    }
+
+
+
+    @Test
     fun testSendSmsRequiresConfirmationNotBlock() {
         val decision = engine().evaluate(
             SafetyRequest.IntentDispatch(IntentAction.SendSms("10086", "晚点回家"))

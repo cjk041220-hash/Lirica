@@ -52,6 +52,11 @@ class ApplicationWiringTest {
             com.lirica.android.automation.policy.ActionExecutionMode.SHARED,
             app.helixCoordinator.currentMode()
         )
+
+        // 具身反馈共享中枢验证：协调器提供 registerFeedbackListener 入口且正常注册
+        val testListener = com.lirica.android.automation.feedback.ActionVisualFeedbackListener { }
+        (app.helixCoordinator as com.lirica.android.automation.coordinator.HelixGuiCoordinatorImpl)
+            .registerFeedbackListener(testListener)
     }
 
     @Test

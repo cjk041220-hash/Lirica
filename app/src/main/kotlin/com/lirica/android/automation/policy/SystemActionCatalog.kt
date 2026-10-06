@@ -178,7 +178,7 @@ object SystemActionCatalog {
             gateRule = SafetyRuleIds.LOW_RISK_AUTO_PASS,
             requiresUserConfirmation = false,
             autoPass = true,
-            note = "前台应用拉起；若目标为金融/支付包名，仍由包名闸门二次拦截"
+            note = "前台应用拉起；金融/支付包名本身可拉起，进入后的自动化交互由 UI 闸门 (RULE_BANK_APP_PAYMENT_FUSE) 与采集中断 (PRIVACY_BLACKOUT) 双重物理熔断兜底"
         ),
 
         SafeActionDescriptor(
