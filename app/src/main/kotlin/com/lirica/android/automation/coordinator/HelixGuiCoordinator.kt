@@ -4,6 +4,12 @@ import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityNodeInfo
 import com.lirica.android.automation.backend.ExecutionBackend
 import com.lirica.android.automation.capture.ScreenCaptureManager
+import com.lirica.android.automation.feedback.ActionFeedbackHub
+import com.lirica.android.automation.feedback.ActionVisualFeedback
+import com.lirica.android.automation.feedback.ActionVisualFeedbackListener
+import com.lirica.android.automation.feedback.EmbodiedState
+import com.lirica.android.automation.feedback.NoOpActionVisualFeedbackListener
+import com.lirica.android.automation.feedback.TouchKind
 import com.lirica.android.automation.gatekeeper.FinancialGatekeeper
 import com.lirica.android.automation.gatekeeper.GatekeeperDecision
 import com.lirica.android.automation.gatekeeper.ProposedAction
@@ -30,6 +36,12 @@ import com.lirica.android.automation.healing.SelfHealingWatchdogImpl
 import com.lirica.android.automation.healing.WatchdogVerdict
 import com.lirica.android.automation.intent.DispatchResult
 import com.lirica.android.automation.intent.IntentActionDispatcher
+import com.lirica.android.automation.policy.ActionExecutionMode
+import com.lirica.android.automation.policy.SafetyDecision
+import com.lirica.android.automation.policy.SafetyGrant
+import com.lirica.android.automation.policy.SafetyPolicyEngine
+import com.lirica.android.automation.policy.SafetyRequest
+import com.lirica.android.automation.policy.SystemActionCatalog
 import com.lirica.android.perception.AccessibilityServiceHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -48,6 +60,25 @@ interface HelixGuiCoordinator {
         actions: List<CoordinatorAction>,
         maxSteps: Int = MAX_STEPS
     ): TaskExecutionResult
+
+    /**
+     * M5.2 单步动态 ReAct 闭环入口（主方案5.0 §5.1）。
+     *
+     * 与 [executeTask] 的关系：后者执行**已知的**动作序列（聊天层已规划好），
+     * 前者每步重新观测并决策，用于"用户只说目标、步骤由她自己摸索"的场景。
+     * 两条路径共用同一个原子动作落地通道（[AtomicActionExecutor]），
+     * 不存在第二套执行引擎（P1-1 双决策引擎风险的封堵方式）。
+     */
+    suspend fun executeAutonomousTask(request: AutonomousTaskRequest): TaskExecutionResult
+
+    /** 当前双态模式（共享 / 漫游只读） */
+    fun currentMode(): ActionExecutionMode
+
+    /** 切换双态模式（UI 开关或对话决策控制） */
+    fun setMode(mode: ActionExecutionMode)
+
+    /** 漫游模式下经用户对话协商后临时提升单次任务作用域（§八 自主风险交互） */
+    fun elevateRoamingScope(taskId: String): String
 
     fun confirmPendingAction(token: String): Boolean
     fun cancelCurrentTask()
@@ -78,17 +109,71 @@ class HelixGuiCoordinatorImpl(
     private val screenCaptureManager: ScreenCaptureManager? = null,
     private val executionBackend: ExecutionBackend? = null,
     private val confirmationTimeoutMs: Long = 300_000L,
-    private val honestNarrator: HonestNarrator = HonestNarratorImpl()
-) : HelixGuiCoordinator {
+    private val honestNarrator: HonestNarrator = HonestNarratorImpl(),
+    /**
+     * 统一安全裁决引擎（M5.1 P0-1 / 复审 R7）。
+     *
+     * 为 null 时退化为"仅 FinancialGatekeeper"的历史行为，以保证既有单测零改动；
+     * 生产装配（LiricaApplication）必须注入真实引擎，并由 ApplicationWiringTest
+     * 断言，杜绝"忘了注入"变成静默降权。
+     */
+    private val safetyPolicy: SafetyPolicyEngine? = null,
+    /** 具身视觉反馈监听（M5.1 具身方案A：接口先行，悬浮窗后续接入） */
+    private val feedbackListener: ActionVisualFeedbackListener = NoOpActionVisualFeedbackListener,
+    /** 单步动态闭环（未装配时 executeAutonomousTask 明确失败，绝不静默假装成功） */
+    private val autonomousLoop: AutonomousActionLoop? = null,
+    /**
+     * 共享取消信号。
+     *
+     * 由装配层创建并同时交给协调器与动态闭环：用户在对话/悬浮窗喊停时，
+     * 闭环必须**立刻停止派发**，而不是只把状态显示改成"已取消"却继续把手势打完。
+     */
+    private val cancelSignal: java.util.concurrent.atomic.AtomicBoolean? = null,
+    /**
+     * 无障碍可用性前置探测（§7.1 第 2 条：任务分发前快速检测无障碍状态）。
+     *
+     * 默认 true 以保持既有单测零改动；生产装配注入真实探测（见 LiricaApplication）。
+     */
+    private val accessibilityReadyProvider: () -> Boolean = { true },
+    /** 视觉重通道闸门（§7.3：温度/电量熔断时禁止截屏与云端 VLM） */
+    private val visionAllowedProvider: () -> Boolean = { true }
+) : HelixGuiCoordinator, AtomicActionExecutor {
 
     private val _state = MutableStateFlow<TaskExecutionState>(TaskExecutionState.Idle)
     override val state: StateFlow<TaskExecutionState> = _state.asStateFlow()
 
-    private val isCancelled = AtomicBoolean(false)
+    private val feedbackHub = ActionFeedbackHub(listOf(feedbackListener))
+
+    private val isCancelled: AtomicBoolean = cancelSignal ?: AtomicBoolean(false)
 
     companion object {
         /** 文本注入前活节点树扫描上限，防止巨型 UI 树拖垮注入时延 */
         private const val MAX_LIVE_NODE_SCAN = 1000
+    }
+
+    // =====================================================================
+    // 双态模式（M5.1 §八）
+    // =====================================================================
+
+    override fun currentMode(): ActionExecutionMode =
+        safetyPolicy?.mode?.value ?: ActionExecutionMode.SHARED
+
+    override fun setMode(mode: ActionExecutionMode) {
+        val engine = safetyPolicy
+            ?: throw IllegalStateException("未装配 SafetyPolicyEngine，无法切换双态模式")
+        engine.setMode(mode)
+        emit(
+            ActionVisualFeedback.BubbleState(
+                state = EmbodiedState.IDLE,
+                speech = if (mode == ActionExecutionMode.ROAMING) "我只看看，不动手" else "好，交给我"
+            )
+        )
+    }
+
+    override fun elevateRoamingScope(taskId: String): String {
+        val engine = safetyPolicy
+            ?: throw IllegalStateException("未装配 SafetyPolicyEngine，无法提升漫游作用域")
+        return engine.elevateScopeForTask(taskId)
     }
 
     override suspend fun executeTask(
@@ -106,6 +191,17 @@ class HelixGuiCoordinatorImpl(
             return TaskExecutionResult.Success("无待执行动作", 0)
         }
 
+        // §7.1：需要无障碍的动作在派发前先探测服务可用性。
+        // 纯 Intent 动作（闹钟/日历/手电筒）不依赖无障碍，不应被这条门禁误伤——
+        // "无障碍被系统关了就连闹钟都设不了"是过度耦合。
+        if (actions.any { it.requiresAccessibility() } && !accessibilityReadyProvider()) {
+            val reason = "无障碍服务当前不可用（可能被系统或省电策略关闭）"
+            val narrative = "我的无障碍服务好像被系统关掉了，现在碰不到屏幕。" +
+                "你到「设置 - 无障碍」里帮我重新打开一下，我马上就能继续。"
+            _state.value = TaskExecutionState.Failed(reason, 0, narrative)
+            return TaskExecutionResult.Failure(reason, 0, narrative)
+        }
+
         // L0 极速通道：单步标准 Intent 预检直达 (≤15ms)
         if (actions.size == 1 && actions[0] is CoordinatorAction.Intent) {
             val intentAction = (actions[0] as CoordinatorAction.Intent).action
@@ -113,6 +209,27 @@ class HelixGuiCoordinatorImpl(
                 is DispatchResult.Success -> {
                     _state.value = TaskExecutionState.Completed("系统原生意图直达成功", 1)
                     TaskExecutionResult.Success("系统原生意图直达成功", 1)
+                }
+                // P0 缺陷修复：中危 Intent（短信/邮件/分享文本）与缺权限动作在极速通道里
+                // 也必须能走完"二次确认 / 引导授权"闭环。早期实现只认 Success，
+                // 会把 SendSms 的确认请求吞成一句"意图分发失败"——闸门装好了，人却过不去，
+                // 用户既看不到确认卡片，也不知道究竟差在哪。
+                is DispatchResult.ConfirmationRequired, is DispatchResult.PermissionRequired -> {
+                    when (val outcome = dispatchIntentWithGate(intentAction, 1)) {
+                        is AtomicExecutionOutcome.Succeeded -> {
+                            _state.value = TaskExecutionState.Completed("系统原生意图直达成功", 1)
+                            TaskExecutionResult.Success("系统原生意图直达成功", 1)
+                        }
+                        is AtomicExecutionOutcome.Completed ->
+                            TaskExecutionResult.Success(outcome.summary, 1)
+                        is AtomicExecutionOutcome.Blocked ->
+                            TaskExecutionResult.Failure(outcome.reason, 1, outcome.honestNarrative)
+                        is AtomicExecutionOutcome.Failed ->
+                            TaskExecutionResult.Failure(outcome.reason, 1, outcome.honestNarrative)
+                        is AtomicExecutionOutcome.ConfirmationDeclined ->
+                            TaskExecutionResult.Failure(outcome.reason, 1)
+                        AtomicExecutionOutcome.Cancelled -> TaskExecutionResult.Cancelled
+                    }
                 }
                 else -> {
                     _state.value = TaskExecutionState.Failed("系统意图分发失败: $dispatchResult", 1)
@@ -151,77 +268,45 @@ class HelixGuiCoordinatorImpl(
                 isRecovering = false
             )
 
-            when (action) {
-                is CoordinatorAction.Finish -> {
-                    _state.value = TaskExecutionState.Completed(action.summary, stepIndex)
-                    return TaskExecutionResult.Success(action.summary, stepIndex)
+            when (val outcome = dispatchSingleAction(action, stepIndex, actions.size)) {
+                is AtomicExecutionOutcome.Succeeded -> Unit
+
+                is AtomicExecutionOutcome.Completed -> {
+                    _state.value = TaskExecutionState.Completed(outcome.summary, stepIndex)
+                    return TaskExecutionResult.Success(outcome.summary, stepIndex)
                 }
 
-                is CoordinatorAction.Intent -> {
-                    val result = intentDispatcher.dispatch(action.action)
-                    if (result !is DispatchResult.Success) {
-                        _state.value = TaskExecutionState.Failed("意图分发失败: $result", stepIndex)
-                        return TaskExecutionResult.Failure("意图分发失败: $result", stepIndex)
+                is AtomicExecutionOutcome.Blocked -> {
+                    // 单步分派失败时已把**更精确**的 errorReason 与自愈叙述落到 _state
+                    // （例如"零信任高危护栏物理熔断: xxx (RULE_xxx)"）。这里必须优先沿用，
+                    // 否则会把精确原因覆盖成笼统结论，用户话术与回归断言同时退化。
+                    val failedState = _state.value as? TaskExecutionState.Failed
+                    val reason = failedState?.errorReason ?: outcome.reason
+                    val narrative = failedState?.honestNarrative ?: outcome.honestNarrative
+                    if (failedState == null) {
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex, narrative)
                     }
+                    return TaskExecutionResult.Failure(reason, stepIndex, narrative)
                 }
 
-                is CoordinatorAction.Backtrack -> {
-                    serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                is AtomicExecutionOutcome.Failed -> {
+                    val failedState = _state.value as? TaskExecutionState.Failed
+                    val reason = failedState?.errorReason ?: outcome.reason
+                    val narrative = failedState?.honestNarrative ?: outcome.honestNarrative
+                    if (failedState == null) {
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex, narrative)
+                    }
+                    return TaskExecutionResult.Failure(reason, stepIndex, narrative)
                 }
 
-                is CoordinatorAction.PressKey -> {
-                    val ok = if (executionBackend != null && executionBackend.isAvailable()) {
-                        executionBackend.sendKeycode(action.keyCode)
-                    } else {
-                        val globalAction = com.lirica.android.automation.backend.KeycodeMapper.toAccessibilityGlobalAction(action.keyCode)
-                        if (globalAction != null) {
-                            serviceHolder.get()?.performGlobalAction(globalAction) == true
-                        } else {
-                            false
-                        }
-                    }
-                    if (!ok) {
-                        val failReason = "按键事件模拟失败: ${action.keyName} (keyCode=${action.keyCode})"
-                        _state.value = TaskExecutionState.Failed(failReason, stepIndex)
-                        return TaskExecutionResult.Failure(failReason, stepIndex)
-                    }
+                is AtomicExecutionOutcome.ConfirmationDeclined -> {
+                    _state.value = TaskExecutionState.Failed(outcome.reason, stepIndex)
+                    return TaskExecutionResult.Failure(outcome.reason, stepIndex)
                 }
 
-                is CoordinatorAction.Delay -> {
-                    kotlinx.coroutines.delay(action.delayMs.coerceAtLeast(0L))
-                }
-
-                is CoordinatorAction.Swipe -> {
-                    val w = screenWidthProvider().toFloat()
-                    val h = screenHeightProvider().toFloat()
-                    val (startX, startY, endX, endY) = when (action.direction) {
-                        SwipeDirection.UP -> listOf(w / 2f, h * 0.8f, w / 2f, h * 0.2f)
-                        SwipeDirection.DOWN -> listOf(w / 2f, h * 0.2f, w / 2f, h * 0.8f)
-                        SwipeDirection.LEFT -> listOf(w * 0.8f, h / 2f, w * 0.2f, h / 2f)
-                        SwipeDirection.RIGHT -> listOf(w * 0.2f, h / 2f, w * 0.8f, h / 2f)
-                    }
-                    if (executionBackend != null && executionBackend.isAvailable()) {
-                        executionBackend.swipe(startX, startY, endX, endY, 300L)
-                    } else {
-                        gestureExecutor.execute(
-                            GestureSpec.Swipe(startX, startY, endX, endY, humanoidCurve = action.humanoid)
-                        )
-                    }
-                }
-
-                is CoordinatorAction.Click, is CoordinatorAction.Type -> {
-                    val query = if (action is CoordinatorAction.Click) action.query else (action as CoordinatorAction.Type).query
-                    val executionSuccess = executeUiElementAction(action, query, stepIndex, actions.size)
-                    if (!executionSuccess) {
-                        val failedState = _state.value as? TaskExecutionState.Failed
-                        val reason = failedState?.errorReason ?: "执行 UI 动作失败"
-                        val narrative = failedState?.honestNarrative
-                        return TaskExecutionResult.Failure(
-                            reason = reason,
-                            stepIndex = stepIndex,
-                            honestNarrative = narrative
-                        )
-                    }
+                AtomicExecutionOutcome.Cancelled -> {
+                    _state.value = TaskExecutionState.Idle
+                    return TaskExecutionResult.Cancelled
                 }
             }
         }
@@ -231,12 +316,298 @@ class HelixGuiCoordinatorImpl(
         return TaskExecutionResult.Success(completedMsg, stepIndex)
     }
 
+    // =====================================================================
+    // 原子动作分派（静态序列与动态闭环共用同一通道）
+    // =====================================================================
+
+    /**
+     * 原子动作执行入口（[AtomicActionExecutor] 契约实现）。
+     *
+     * 动态闭环的每一步都经此落地，因此**安全闸门、自愈、具身反馈与静态序列
+     * 完全同源**——不存在"动态路径绕过闸门"的结构性缺口。
+     */
+    override suspend fun executeAtomic(
+        action: CoordinatorAction,
+        stepIndex: Int,
+        totalSteps: Int
+    ): AtomicExecutionOutcome {
+        _state.value = TaskExecutionState.ExecutingStep(
+            stepIndex = stepIndex,
+            totalStepsEstimate = totalSteps,
+            actionDescription = actionDescription(action),
+            isRecovering = false
+        )
+        return dispatchSingleAction(action, stepIndex, totalSteps)
+    }
+
+    private suspend fun dispatchSingleAction(
+        action: CoordinatorAction,
+        stepIndex: Int,
+        totalSteps: Int
+    ): AtomicExecutionOutcome = when (action) {
+        is CoordinatorAction.Finish -> AtomicExecutionOutcome.Completed(action.summary)
+
+        is CoordinatorAction.Intent -> dispatchIntentWithGate(action.action, stepIndex)
+
+        is CoordinatorAction.Backtrack -> {
+            serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            AtomicExecutionOutcome.Succeeded(action.description)
+        }
+
+        is CoordinatorAction.PressKey -> {
+            val ok = if (executionBackend != null && executionBackend.isAvailable()) {
+                executionBackend.sendKeycode(action.keyCode)
+            } else {
+                val globalAction = com.lirica.android.automation.backend.KeycodeMapper.toAccessibilityGlobalAction(action.keyCode)
+                if (globalAction != null) {
+                    serviceHolder.get()?.performGlobalAction(globalAction) == true
+                } else {
+                    false
+                }
+            }
+            if (ok) {
+                AtomicExecutionOutcome.Succeeded(action.description)
+            } else {
+                AtomicExecutionOutcome.Failed("按键事件模拟失败: " + action.keyName + " (keyCode=" + action.keyCode + ")")
+            }
+        }
+
+        is CoordinatorAction.Delay -> {
+            kotlinx.coroutines.delay(action.delayMs.coerceAtLeast(0L))
+            AtomicExecutionOutcome.Succeeded(action.description)
+        }
+
+        is CoordinatorAction.Swipe -> {
+            val w = screenWidthProvider().toFloat()
+            val h = screenHeightProvider().toFloat()
+            val (startX, startY, endX, endY) = when (action.direction) {
+                SwipeDirection.UP -> listOf(w / 2f, h * 0.8f, w / 2f, h * 0.2f)
+                SwipeDirection.DOWN -> listOf(w / 2f, h * 0.2f, w / 2f, h * 0.8f)
+                SwipeDirection.LEFT -> listOf(w * 0.8f, h / 2f, w * 0.2f, h / 2f)
+                SwipeDirection.RIGHT -> listOf(w * 0.2f, h / 2f, w * 0.8f, h / 2f)
+            }
+            emitTouch(startX, startY, endX, endY, 300L, TouchKind.SWIPE)
+            if (executionBackend != null && executionBackend.isAvailable()) {
+                executionBackend.swipe(startX, startY, endX, endY, 300L)
+            } else {
+                gestureExecutor.execute(
+                    GestureSpec.Swipe(startX, startY, endX, endY, humanoidCurve = action.humanoid)
+                )
+            }
+            AtomicExecutionOutcome.Succeeded(action.description)
+        }
+
+        is CoordinatorAction.Click, is CoordinatorAction.Type -> {
+            val query = if (action is CoordinatorAction.Click) action.query else (action as CoordinatorAction.Type).query
+            executeUiElementAction(action, query, stepIndex, totalSteps)
+        }
+    }
+
+    /**
+     * Intent 通道分派 + 二次确认闭环（P0-1 收口的最后一环）。
+     *
+     * 即使 L0 极速通道也走本方法，因此没有"绕过闸门"的捷径：
+     * 非幂等外部通信（预填草稿类）在 dispatch 返回 ConfirmationRequired 时，
+     * 复用既有 [TaskExecutionState.AwaitingUserConfirmation] 状态流发起原生卡片确认，
+     * 用户过目正文后才以动作绑定凭证二次派发。
+     */
+    private suspend fun dispatchIntentWithGate(
+        intentAction: com.lirica.android.automation.intent.IntentAction,
+        stepIndex: Int
+    ): AtomicExecutionOutcome {
+        val first = intentDispatcher.dispatch(intentAction)
+        return when (first) {
+            is DispatchResult.Success -> AtomicExecutionOutcome.Succeeded("系统意图已派发")
+
+            is DispatchResult.ConfirmationRequired -> {
+                val approved = awaitConfirmation(token = first.token, prompt = first.promptMessage)
+                if (!approved) {
+                    return AtomicExecutionOutcome.ConfirmationDeclined("用户取消或高危操作未获确认")
+                }
+                val actionId = SystemActionCatalog.describe(intentAction)?.actionId
+                val second = intentDispatcher.dispatch(
+                    intentAction,
+                    grant = actionId?.let { SafetyGrant(first.token, it) }
+                )
+                when (second) {
+                    is DispatchResult.Success -> AtomicExecutionOutcome.Succeeded("系统意图已确认派发")
+                    else -> AtomicExecutionOutcome.Failed("意图分发失败: " + second)
+                }
+            }
+
+            is DispatchResult.PermissionRequired -> {
+                val reason = "缺少权限 " + first.permissionName + "：" + first.reason
+                val narrative = honestNarrator.narrate(
+                    FailureContext(
+                        rule = "RULE_PERMISSION_REQUIRED",
+                        technicalReason = reason,
+                        targetPackage = currentPackageProvider(),
+                        actionType = "INTENT"
+                    )
+                )
+                _state.value = TaskExecutionState.Failed(reason, stepIndex, narrative)
+                AtomicExecutionOutcome.Failed(reason, narrative)
+            }
+
+            else -> {
+                _state.value = TaskExecutionState.Failed("意图分发失败: " + first, stepIndex)
+                AtomicExecutionOutcome.Failed("意图分发失败: " + first)
+            }
+        }
+    }
+
+    /** 复用既有二次确认状态机（原生卡片 / 悬浮胶囊） */
+    private suspend fun awaitConfirmation(token: String, prompt: String): Boolean {
+        val confirmation = CompletableDeferred<Boolean>()
+        _state.value = TaskExecutionState.AwaitingUserConfirmation(
+            token = token,
+            riskDetails = prompt,
+            draftContent = null,
+            draftTitle = null,
+            onConfirmed = {
+                approveToken(token)
+                confirmation.complete(true)
+            },
+            onCancelled = { confirmation.complete(false) }
+        )
+        return try {
+            withTimeout(confirmationTimeoutMs) { confirmation.await() }
+        } catch (e: TimeoutCancellationException) {
+            _state.value = TaskExecutionState.Failed("用户确认超时 (" + confirmationTimeoutMs + " ms)", 0)
+            false
+        } catch (e: CancellationException) {
+            _state.value = TaskExecutionState.Idle
+            throw e
+        }
+    }
+
+    /** 令牌批准：统一走裁决引擎；引擎缺席时才直接落 Gatekeeper（历史兼容路径） */
+    private fun approveToken(token: String) {
+        val engine = safetyPolicy
+        if (engine != null) {
+            engine.confirm(token)
+        } else {
+            gatekeeper.confirmAction(token)
+        }
+    }
+
+    /**
+     * UI 通道安全裁决入口。
+     *
+     * 装配了 [SafetyPolicyEngine] 时走统一引擎（其内部仍委托既有
+     * FinancialGatekeeper，并叠加漫游只读拦截）；未装配时保持历史行为。
+     * 生产装配由 ApplicationWiringTest 断言引擎必须注入。
+     */
+    private fun evaluateUiGate(proposed: ProposedAction): GatekeeperDecision {
+        val engine = safetyPolicy ?: return gatekeeper.evaluate(proposed)
+        val decision = engine.evaluate(
+            SafetyRequest.UiInteraction(
+                actionType = proposed.actionType,
+                targetText = proposed.targetText,
+                targetResourceId = proposed.targetResourceId,
+                isPasswordTarget = proposed.isPasswordTarget,
+                currentPackage = proposed.currentPackage
+            )
+        )
+        return when (decision) {
+            is SafetyDecision.Allowed -> GatekeeperDecision.Allowed(decision.riskLevel)
+            is SafetyDecision.RequireConfirmation -> GatekeeperDecision.RequireUserConfirmation(
+                token = decision.token,
+                promptMessage = decision.promptMessage,
+                details = decision.details
+            )
+            is SafetyDecision.Blocked -> GatekeeperDecision.PhysicalBlocked(
+                reason = decision.reason,
+                rule = decision.rule,
+                honestReason = decision.honestReason
+            )
+        }
+    }
+
+    // =====================================================================
+    // 动态闭环委派（M5.2）
+    // =====================================================================
+
+    override suspend fun executeAutonomousTask(request: AutonomousTaskRequest): TaskExecutionResult {
+        val loop = autonomousLoop
+            ?: return TaskExecutionResult.Failure("单步动态闭环未装配（AutonomousActionLoop 缺失）", 0)
+        isCancelled.set(false)
+        // §7.1：动态闭环全程依赖语义树，无障碍不可用时直接坦白，不进入无意义的自愈循环
+        if (!accessibilityReadyProvider()) {
+            val reason = "无障碍服务当前不可用，无法进行界面代行"
+            val narrative = "我的无障碍服务现在没在工作，碰不到屏幕。" +
+                "你到「设置 - 无障碍」里帮我重新打开一下，我就能替你去办。"
+            _state.value = TaskExecutionState.Failed(reason, 0, narrative)
+            return TaskExecutionResult.Failure(reason, 0, narrative)
+        }
+        _state.value = TaskExecutionState.Planning(request.goal)
+        emit(ActionVisualFeedback.BubbleState(EmbodiedState.THINKING, "我看看怎么弄"))
+
+        return when (val result = loop.run(request)) {
+            is AutonomousTaskResult.Success -> {
+                _state.value = TaskExecutionState.Completed(result.message, result.steps)
+                TaskExecutionResult.Success(result.message, result.steps)
+            }
+            is AutonomousTaskResult.Failure -> {
+                _state.value = TaskExecutionState.Failed(result.reason, result.stepIndex, result.honestNarrative)
+                TaskExecutionResult.Failure(result.reason, result.stepIndex, result.honestNarrative)
+            }
+            is AutonomousTaskResult.PolicyBlocked -> {
+                // 漫游协商场景：这里给的是"征询"而不是"失败播报"
+                val narrative = result.negotiationHint ?: result.honestReason
+                _state.value = TaskExecutionState.Failed(result.reason, 0, narrative)
+                TaskExecutionResult.Failure(result.reason, 0, narrative)
+            }
+            is AutonomousTaskResult.UserInterrupted -> {
+                _state.value = TaskExecutionState.Failed(result.reason, result.stepIndex, result.reason)
+                TaskExecutionResult.Failure(result.reason, result.stepIndex, result.reason)
+            }
+            AutonomousTaskResult.Cancelled -> {
+                _state.value = TaskExecutionState.Idle
+                TaskExecutionResult.Cancelled
+            }
+        }
+    }
+
+    // =====================================================================
+    // 具身反馈（M5.1 方案A：接口先行，UI 解耦）
+    // =====================================================================
+
+    /** 注册额外反馈监听（悬浮窗接入用；订阅者异常由 Hub 隔离，绝不击穿执行链路） */
+    fun registerFeedbackListener(listener: ActionVisualFeedbackListener) {
+        feedbackHub.register(listener)
+    }
+
+    private fun emit(event: ActionVisualFeedback) {
+        feedbackHub.onFeedback(event)
+    }
+
+    private fun emitTouch(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long,
+        kind: TouchKind
+    ) {
+        emit(
+            ActionVisualFeedback.TouchTrace(
+                startX = startX,
+                startY = startY,
+                endX = endX,
+                endY = endY,
+                durationMs = durationMs,
+                kind = kind
+            )
+        )
+    }
+
     private suspend fun executeUiElementAction(
         action: CoordinatorAction,
         query: com.lirica.android.automation.grounding.GroundingQuery,
         stepIndex: Int,
         totalSteps: Int
-    ): Boolean {
+    ): AtomicExecutionOutcome {
         // 1. 抓取执行态高保真树
         var dump = treeExtractor.dumpTree(
             rootNode = rootNodeProvider(),
@@ -262,7 +633,11 @@ class HelixGuiCoordinatorImpl(
                     lastStepIndex = stepIndex,
                     honestNarrative = narrative
                 )
-                return false
+                return AtomicExecutionOutcome.Blocked(
+                    rule = rule,
+                    reason = "目标应用命中银行/支付安全熔断黑名单: " + dump.message,
+                    honestNarrative = narrative
+                )
             }
 
             // 评估 watchdog：树抓取为空时以包名哈希作指纹（同包连续抓取失败同样构成"卡住"语义）
@@ -278,7 +653,7 @@ class HelixGuiCoordinatorImpl(
                     lastStepIndex = stepIndex,
                     honestNarrative = verdict.honestNarrative
                 )
-                return false
+                return AtomicExecutionOutcome.Failed(verdict.reason, verdict.honestNarrative)
             }
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
@@ -290,7 +665,7 @@ class HelixGuiCoordinatorImpl(
 
         if (dump !is TreeDumpResult.Ok) {
             _state.value = TaskExecutionState.Failed("界面树抓取失败", stepIndex)
-            return false
+            return AtomicExecutionOutcome.Failed("界面树抓取失败")
         }
 
         // 2. 元素接地 (HybridGrounding)
@@ -311,7 +686,7 @@ class HelixGuiCoordinatorImpl(
                     lastStepIndex = stepIndex,
                     honestNarrative = verdict.honestNarrative
                 )
-                return false
+                return AtomicExecutionOutcome.Failed(verdict.reason, verdict.honestNarrative)
             }
             if (verdict is WatchdogVerdict.Recoverable) {
                 _state.value = TaskExecutionState.ExecutingStep(stepIndex, totalSteps, "自愈中: ${verdict.anomaly}", isRecovering = true)
@@ -343,7 +718,7 @@ class HelixGuiCoordinatorImpl(
                     lastStepIndex = stepIndex,
                     honestNarrative = narrative
                 )
-                false
+                AtomicExecutionOutcome.Failed("未找到目标元素: " + query, narrative)
             }
             is GroundingResult.Ambiguous -> {
                 val narrative = honestNarrator.narrate(
@@ -359,7 +734,7 @@ class HelixGuiCoordinatorImpl(
                     lastStepIndex = stepIndex,
                     honestNarrative = narrative
                 )
-                false
+                AtomicExecutionOutcome.Failed("目标元素存在歧义 (" + locateResult.candidates.size + " 个候选)", narrative)
             }
             is GroundingResult.Found -> {
                 val targetPoint = locateResult.targetPoint
@@ -386,7 +761,7 @@ class HelixGuiCoordinatorImpl(
                     currentPackage = currentPackageProvider() ?: ""
                 )
 
-                val decision = gatekeeper.evaluate(proposed)
+                val decision = evaluateUiGate(proposed)
                 var effectiveText = if (action is CoordinatorAction.Type) action.text else ""
 
                 when (decision) {
@@ -405,7 +780,7 @@ class HelixGuiCoordinatorImpl(
                             lastStepIndex = stepIndex,
                             honestNarrative = narrative
                         )
-                        return false
+                        return AtomicExecutionOutcome.Blocked(decision.rule, decision.reason, narrative)
                     }
                     is GatekeeperDecision.RequireUserConfirmation -> {
                         val confirmation = CompletableDeferred<Boolean>()
@@ -418,7 +793,7 @@ class HelixGuiCoordinatorImpl(
                             draftContent = initialDraft,
                             draftTitle = draftTitle,
                             onConfirmed = {
-                                gatekeeper.confirmAction(decision.token)
+                                approveToken(decision.token)
                                 confirmation.complete(true)
                             },
                             onCancelled = {
@@ -426,7 +801,7 @@ class HelixGuiCoordinatorImpl(
                             },
                             onConfirmedWithDraft = { edited ->
                                 effectiveText = edited
-                                gatekeeper.confirmAction(decision.token)
+                                approveToken(decision.token)
                                 confirmation.complete(true)
                             }
                         )
@@ -437,11 +812,11 @@ class HelixGuiCoordinatorImpl(
                             val approved = withTimeout(confirmationTimeoutMs) { confirmation.await() }
                             if (!approved || !gatekeeper.consumeApproval(decision.token)) {
                                 _state.value = TaskExecutionState.Failed("用户取消或高危操作未获确认", stepIndex)
-                                return false
+                                return AtomicExecutionOutcome.ConfirmationDeclined("用户取消或高危操作未获确认")
                             }
                         } catch (e: TimeoutCancellationException) {
                             _state.value = TaskExecutionState.Failed("用户确认超时 ($confirmationTimeoutMs ms)", stepIndex)
-                            return false
+                            return AtomicExecutionOutcome.ConfirmationDeclined("用户确认超时")
                         } catch (e: CancellationException) {
                             // 外层协程被取消（调用方作用域销毁等）：状态归位 Idle 再上抛，
                             // 避免 _state 残留 AwaitingUserConfirmation 影响下一次任务
@@ -485,10 +860,10 @@ class HelixGuiCoordinatorImpl(
                                     lastStepIndex = stepIndex,
                                     honestNarrative = narrative
                                 )
-                                return false
+                                return AtomicExecutionOutcome.Blocked(rule, gestureResult.reason, narrative)
                             }
                         }
-                        true
+                        AtomicExecutionOutcome.Succeeded("点击 " + (text ?: resourceId ?: "元素"), bounds)
                     }
                     is CoordinatorAction.Type -> {
                         val textToInject = if (effectiveText.isNotBlank()) effectiveText else action.text
@@ -524,11 +899,15 @@ class HelixGuiCoordinatorImpl(
                                 lastStepIndex = stepIndex,
                                 honestNarrative = narrative
                             )
-                            return false
+                            return if (honest != null) {
+                                AtomicExecutionOutcome.Blocked(rule, honest, narrative)
+                            } else {
+                                AtomicExecutionOutcome.Failed(failMsg, narrative)
+                            }
                         }
-                        true
+                        AtomicExecutionOutcome.Succeeded("输入文本", bounds)
                     }
-                    else -> true
+                    else -> AtomicExecutionOutcome.Succeeded(actionDescription(action), bounds)
                 }
             }
         }
@@ -623,8 +1002,10 @@ class HelixGuiCoordinatorImpl(
             screenHeight = screenHeightProvider()
         )
 
-        // 若无障碍树未找到且具备截屏能力，触发 L1 视觉/OCR 接地
-        if (locateResult is GroundingResult.NotFound && screenCaptureManager != null) {
+        // 若无障碍树未找到且具备截屏能力，触发 L1 视觉/OCR 接地。
+        // §7.3：温度/电量熔断期间禁止截屏——视觉重通道是功耗与发热的主要来源，
+        // 熔断只拦"看"，不拦轻量 API 动作（方案原文的电量梯度限流口径）。
+        if (locateResult is GroundingResult.NotFound && screenCaptureManager != null && visionAllowedProvider()) {
             val screenshot = screenCaptureManager.captureScreen()?.bytes
             if (screenshot != null) {
                 locateResult = groundingEngine.locate(
@@ -665,6 +1046,8 @@ class HelixGuiCoordinatorImpl(
         if (currentState is TaskExecutionState.AwaitingUserConfirmation) {
             currentState.onCancelled()
         }
+        // 撤销全部待确认/已确认凭证：任务取消后凭证不得残留（防"确认了但没派发"的悬挂授权）
+        safetyPolicy?.revokeAll()
         _state.value = TaskExecutionState.Idle
     }
 }

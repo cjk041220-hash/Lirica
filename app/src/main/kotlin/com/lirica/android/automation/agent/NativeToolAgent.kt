@@ -528,11 +528,39 @@ class NativeToolAgent(
             "execute_macro" -> {
                 val actionsArray = args["actions"]?.jsonArray
                 if (actionsArray.isNullOrEmpty()) {
-                    ToolExecutionResult(
-                        toolCallId = call.id,
-                        isSuccess = false,
-                        output = "宏动作执行失败: actions 动作列表为空"
-                    )
+                    // M5.2（P1-1 落地）：未给出显式动作序列时，本工具自动升级为
+                    // 单步动态 ReAct 闭环——只给目标，由她逐步观测、决策、核销、自愈。
+                    // 关键：**工具数量与名称保持不变**（仍是 8 个），聊天层契约零改动，
+                    // 模型不需要知道执行模式换了，只是"她变聪明了"。
+                    val dynamicGoal = args["description"]?.jsonPrimitive?.content?.trim().orEmpty()
+                    if (dynamicGoal.isEmpty()) {
+                        ToolExecutionResult(
+                            toolCallId = call.id,
+                            isSuccess = false,
+                            output = "宏动作执行失败: actions 动作列表为空，且未提供 description 目标描述"
+                        )
+                    } else {
+                        when (val result = coordinator.executeAutonomousTask(
+                            com.lirica.android.automation.coordinator.AutonomousTaskRequest(goal = dynamicGoal)
+                        )) {
+                            is TaskExecutionResult.Success -> ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = true,
+                                output = "动态闭环执行成功 (共 " + result.stepsTaken + " 步): " + result.message
+                            )
+                            is TaskExecutionResult.Failure -> ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = false,
+                                output = result.honestNarrative?.takeIf { it.isNotBlank() }
+                                    ?: "动态闭环在第 " + result.stepIndex + " 步失败: " + result.reason
+                            )
+                            TaskExecutionResult.Cancelled -> ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = false,
+                                output = "动态闭环执行被取消"
+                            )
+                        }
+                    }
                 } else {
                     val coordinatorActions = mutableListOf<CoordinatorAction>()
                     var parseError: String? = null

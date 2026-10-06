@@ -110,6 +110,15 @@ fun SettingsScreen(
     var testResult by remember { mutableStateOf<ConnectivityResult?>(null) }
     val connectivityTester = remember { LlmConnectivityTester() }
 
+    // M5.1 §八：双态模式状态（初值取 Application 已恢复的模式，避免 UI 与底层不一致）
+    var actionMode by remember {
+        mutableStateOf(
+            (context.applicationContext as? com.lirica.android.LiricaApplication)
+                ?.safetyPolicyEngine?.mode?.value
+                ?: com.lirica.android.automation.policy.ActionExecutionMode.SHARED
+        )
+    }
+
     // 权限体检列表状态（在 ON_RESUME 时自动刷新）
     var permissionsState by remember {
         mutableStateOf(PermissionManager.checkAll(context))
@@ -374,6 +383,51 @@ fun SettingsScreen(
                                 context.startActivity(intent)
                             }
                         )
+                    }
+                }
+            }
+
+            // 模块 2.4：双态行动模式（M5.1 §八 共享 vs 漫游只读）
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("🎛️ 行动模式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "共享模式：允许 Lirica 完整代行点击、输入与复合任务。\n" +
+                            "漫游模式：只读放行滑动翻页与检索；遇到会在应用里留下痕迹的互动" +
+                            "（关注 / 点赞 / 播放 / 购买 / 支付等）会先来问过你，你点头才做。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    val app = context.applicationContext as? com.lirica.android.LiricaApplication
+                    for (mode in com.lirica.android.automation.policy.ActionExecutionMode.entries) {
+                        val selected = actionMode == mode
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    app?.setActionMode(mode)
+                                    actionMode = mode
+                                }
+                        ) {
+                            Text(
+                                text = (if (selected) "✓ " else "") + if (mode == com.lirica.android.automation.policy.ActionExecutionMode.SHARED) {
+                                    "共享模式（可代行操控）"
+                                } else {
+                                    "漫游模式（只读，留痕互动先征询）"
+                                },
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
             }

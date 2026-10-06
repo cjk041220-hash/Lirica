@@ -32,6 +32,22 @@
     <!-- Shizuku 提权通道与 ADB 穿透控制权限 -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!--
+      M5.1 原生动作通道所需的**唯一**两项权限（主方案5.0 §4.1 三元组表 · 复审 R6）。
+
+      铁律：这里绝不出现 android.permission.CAMERA。
+      手电筒走 CameraManager.setTorchMode，自 API 23 起免权限（复审 R1）；
+      照抄旧文档加 CAMERA 会触发运行时弹窗、被系统判定为占用相机，
+      并污染权限体检项。回归防线见 ManifestComponentsTest。
+
+      WRITE_SETTINGS 属特殊权限：Manifest 声明是 ACTION_MANAGE_WRITE_SETTINGS
+      引导与 Settings.System.canWrite 判定成立的前提，用户需在系统设置页手动授予。
+    -->
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Android 11+ 包可见性白名单声明（用于 open_app 动态解析与标签索引） -->
     <queries>
         <intent>

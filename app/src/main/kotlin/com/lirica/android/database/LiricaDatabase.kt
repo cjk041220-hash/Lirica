@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.lirica.android.database.dao.ActionMacroDao
 import com.lirica.android.database.dao.ChatDialogueDao
 import com.lirica.android.database.dao.EpisodicSensingSliceDao
 import com.lirica.android.database.dao.OpenLoopDao
@@ -14,6 +15,7 @@ import com.lirica.android.database.dao.SelfExperienceDao
 import com.lirica.android.database.dao.UnspokenThoughtDao
 import com.lirica.android.database.dao.UserMemoryDao
 import com.lirica.android.database.dao.WorldviewDao
+import com.lirica.android.database.entity.ActionMacroEntity
 import com.lirica.android.database.entity.ChatDialogueEntity
 import com.lirica.android.database.entity.EpisodicSensingSliceEntity
 import com.lirica.android.database.entity.OpenLoopEntity
@@ -38,6 +40,7 @@ import com.lirica.android.database.memory.MemoryEmbeddingEntity
  * 7. memory_embeddings (双轨记忆端侧向量索引表)
  * 8. episodic_sensing_slices (情境感知驻留切片缓存表 - v4 新增)
  * 9. open_loops (开环记忆未决事务生命周期表 - v4 新增)
+ * 10. action_macros (机型自适应经验轨迹表 - v6 新增，M5.3)
  */
 @Database(
     entities = [
@@ -49,9 +52,10 @@ import com.lirica.android.database.memory.MemoryEmbeddingEntity
         ScheduledAlarmEntity::class,
         MemoryEmbeddingEntity::class,
         EpisodicSensingSliceEntity::class,
-        OpenLoopEntity::class
+        OpenLoopEntity::class,
+        ActionMacroEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class LiricaDatabase : RoomDatabase() {
@@ -65,6 +69,7 @@ abstract class LiricaDatabase : RoomDatabase() {
     abstract fun memoryEmbeddingDao(): MemoryEmbeddingDao
     abstract fun episodicSensingSliceDao(): EpisodicSensingSliceDao
     abstract fun openLoopDao(): OpenLoopDao
+    abstract fun actionMacroDao(): ActionMacroDao
 
     companion object {
         const val DATABASE_NAME = "lirica_aether.db"
@@ -179,6 +184,47 @@ abstract class LiricaDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6：机型自适应经验轨迹表（M5.3 §5.2）。
+         *
+         * 建表语句必须与 [ActionMacroEntity] 的 Room 生成 schema 逐字段一致，
+         * 否则 Room 的 schema 校验会在真机升级时抛 IllegalStateException
+         * （单测覆盖见 Migration5To6Test / RoomMigrationTest）。
+         * 三个索引与实体注解中的索引一一对应。
+         */
+        @JvmField
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `action_macros` (
+                        `macro_id` TEXT NOT NULL,
+                        `intent_signature` TEXT NOT NULL,
+                        `app_package` TEXT NOT NULL,
+                        `target_app_version_code` INTEGER NOT NULL,
+                        `start_page_fingerprint` INTEGER NOT NULL,
+                        `steps_json` TEXT NOT NULL,
+                        `explicit_slot_keys` TEXT NOT NULL,
+                        `success_count` INTEGER NOT NULL,
+                        `failure_count` INTEGER NOT NULL,
+                        `consecutive_failures` INTEGER NOT NULL,
+                        `is_deprecated` INTEGER NOT NULL,
+                        `created_at_ms` INTEGER NOT NULL,
+                        `last_used_at_ms` INTEGER NOT NULL,
+                        PRIMARY KEY(`macro_id`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_macro_lookup` ON `action_macros` (`intent_signature`, `app_package`, `target_app_version_code`)
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_macro_last_used` ON `action_macros` (`last_used_at_ms`)
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS `idx_macro_deprecated` ON `action_macros` (`is_deprecated`)
+                """.trimIndent())
+            }
+        }
+
         @Volatile
         private var INSTANCE: LiricaDatabase? = null
 
@@ -194,7 +240,7 @@ abstract class LiricaDatabase : RoomDatabase() {
                 LiricaDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
         }

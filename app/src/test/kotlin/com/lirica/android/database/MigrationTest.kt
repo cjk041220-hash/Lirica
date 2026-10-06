@@ -142,7 +142,9 @@ class MigrationTest {
                 LiricaDatabase.MIGRATION_1_2,
                 LiricaDatabase.MIGRATION_2_3,
                 LiricaDatabase.MIGRATION_3_4,
-                LiricaDatabase.MIGRATION_4_5
+                LiricaDatabase.MIGRATION_4_5,
+                // DB v6（M5.3）：行动经验轨迹表；漏加会让 1->6 迁移链断裂并抛 IllegalStateException
+                LiricaDatabase.MIGRATION_5_6
             )
             .build()
         try {

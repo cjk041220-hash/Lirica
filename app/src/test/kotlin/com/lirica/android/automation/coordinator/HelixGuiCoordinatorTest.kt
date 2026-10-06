@@ -41,6 +41,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -761,4 +762,131 @@ class HelixGuiCoordinatorTest {
         assertTrue(state is TaskExecutionState.Failed)
         assertEquals("卡在这里过不去啦，交由你来处理吧。（正式话术库待俊凯过目定稿）", (state as TaskExecutionState.Failed).honestNarrative)
     }
+
+    // =================================================================
+    // M5.1/M5.2 缺陷回归（2026-10-06 自查修复）
+    // =================================================================
+
+    @Test
+    fun testIntentFastPath_confirmationIsNotSwallowed() = runTest {
+        // 缺陷：极速通道早期只认 Success，把中危 Intent 的确认请求吞成"意图分发失败"。
+        // 闸门装好了人却过不去 —— 本用例锁死"确认卡片必须真的弹出来"。
+        val action = CoordinatorAction.Intent(IntentAction.SendSms("10086", "晚点回家"))
+        every { intentDispatcher.dispatch(action.action, any()) } answers {
+            val grant = secondArg<com.lirica.android.automation.policy.SafetyGrant?>()
+            if (grant == null) {
+                DispatchResult.ConfirmationRequired("token-sms", "要把这条短信草稿填进短信应用吗？内容：晚点回家")
+            } else {
+                DispatchResult.Success(Intent())
+            }
+        }
+
+        val deferred = async { coordinator.executeTask("发条短信", listOf(action)) }
+        var waited = 0
+        while (coordinator.state.value !is TaskExecutionState.AwaitingUserConfirmation && waited < 2_000) {
+            delay(10)
+            waited += 10
+        }
+
+        val pending = coordinator.state.value
+        assertTrue("必须进入二次确认状态而不是直接失败", pending is TaskExecutionState.AwaitingUserConfirmation)
+        pending as TaskExecutionState.AwaitingUserConfirmation
+        assertTrue("确认卡片必须展示待发正文", pending.riskDetails.contains("晚点回家"))
+
+        assertTrue(coordinator.confirmPendingAction(pending.token))
+        val result = deferred.await()
+        assertTrue("确认后应真正派发成功", result is TaskExecutionResult.Success)
+    }
+
+    @Test
+    fun testAccessibilityPrecheck_blocksUiActionsWithGuidance() = runTest {
+        val gated = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            serviceHolder = serviceHolder,
+            rootNodeProvider = { mockk(relaxed = true) },
+            currentPackageProvider = { "com.example.app" },
+            screenWidthProvider = { 1080 },
+            screenHeightProvider = { 2400 },
+            accessibilityReadyProvider = { false }
+        )
+
+        val result = gated.executeTask(
+            goal = "点一下搜索",
+            actions = listOf(CoordinatorAction.Click(GroundingQuery(text = "搜索"), "点击搜索"))
+        )
+        assertTrue(result is TaskExecutionResult.Failure)
+        assertTrue((result as TaskExecutionResult.Failure).honestNarrative!!.contains("无障碍"))
+        // 一次手势都不该被派发
+        coVerify(exactly = 0) { gestureExecutor.execute(any(), any()) }
+    }
+
+    @Test
+    fun testAccessibilityPrecheck_doesNotBlockPureIntentActions() = runTest {
+        // 纯 Intent 动作不依赖无障碍：无障碍被关掉时闹钟仍要能设，
+        // 否则用户会以为"她彻底坏了"
+        val gated = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            serviceHolder = serviceHolder,
+            rootNodeProvider = { mockk(relaxed = true) },
+            currentPackageProvider = { "com.example.app" },
+            screenWidthProvider = { 1080 },
+            screenHeightProvider = { 2400 },
+            accessibilityReadyProvider = { false }
+        )
+        val action = CoordinatorAction.Intent(IntentAction.SetAlarm(7, 30))
+        every { intentDispatcher.dispatch(action.action, any()) } returns DispatchResult.Success(Intent())
+
+        val result = gated.executeTask("定个闹钟", listOf(action))
+        assertTrue(result is TaskExecutionResult.Success)
+    }
+
+    @Test
+    fun testShareCancelSignal_stopsStaticLoop() = runTest {
+        val signal = java.util.concurrent.atomic.AtomicBoolean(false)
+        val shared = HelixGuiCoordinatorImpl(
+            intentDispatcher = intentDispatcher,
+            treeExtractor = treeExtractor,
+            groundingEngine = groundingEngine,
+            gatekeeper = gatekeeper,
+            gestureExecutor = gestureExecutor,
+            textInputExecutor = textInputExecutor,
+            watchdog = watchdog,
+            serviceHolder = serviceHolder,
+            rootNodeProvider = { mockk(relaxed = true) },
+            currentPackageProvider = { "com.example.app" },
+            screenWidthProvider = { 1080 },
+            screenHeightProvider = { 2400 },
+            cancelSignal = signal
+        )
+        val deferred = async {
+            shared.executeTask(
+                goal = "多步任务",
+                actions = listOf(
+                    CoordinatorAction.Delay(1_000L, "等待"),
+                    CoordinatorAction.Delay(1_000L, "等待")
+                )
+            )
+        }
+        var waited = 0
+        while (shared.state.value !is TaskExecutionState.ExecutingStep && waited < 1_000) {
+            delay(10)
+            waited += 10
+        }
+        shared.cancelCurrentTask()
+        assertTrue("取消必须写入共享信号（闭环据此停止派发）", signal.get())
+        assertEquals(TaskExecutionResult.Cancelled, deferred.await())
+    }
 }
+

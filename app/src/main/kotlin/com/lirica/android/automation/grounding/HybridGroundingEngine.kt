@@ -68,12 +68,14 @@ class HybridGroundingEngineImpl(
             }
         }
 
-        // Multiple exact matches -> Ambiguous
+        // Multiple exact matches -> 先用归一化锚点消歧，仍无法判定才报歧义
         if (exactMatches.size > 1) {
             val candidates = exactMatches.map { node ->
                 val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
                 GroundingResult.Found(normRect.toScreenPoint(safeW, safeH), normRect, GroundingSource.ACCESSIBILITY_EXACT, 0.95f, node)
             }
+            val disambiguated = disambiguateByAnchor(candidates, query)
+            if (disambiguated != null) return disambiguated
             return GroundingResult.Ambiguous(candidates, "Found ${exactMatches.size} identical exact matches in accessibility tree")
         }
 
@@ -144,15 +146,68 @@ class HybridGroundingEngineImpl(
                 val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
                 GroundingResult.Found(normRect.toScreenPoint(safeW, safeH), normRect, GroundingSource.ACCESSIBILITY_FUZZY, 0.75f, node)
             }
+            val disambiguated = disambiguateByAnchor(candidates, query)
+            if (disambiguated != null) return disambiguated
             return GroundingResult.Ambiguous(candidates, "Found ${fuzzyMatches.size} fuzzy matches in accessibility tree")
         }
 
+        // 语义完全失配时，同轮观测锚点是最后一道本地兜底（先于任何视觉/云端路径）
+        if (query.hasNormalizedAnchor) {
+            return anchorGrounding(query, safeW, safeH)
+        }
+
         return GroundingResult.NotFound("Target could not be located in accessibility tree or visual observation")
+    }
+
+    /**
+     * 归一化锚点消歧：在多个语义候选中挑出离锚点最近的一个。
+     *
+     * 容差 [ANCHOR_TOLERANCE] 定义在归一化空间（0..1000）内：超出容差说明
+     * 锚点与所有候选都不沾边，此时**宁可报歧义也不猜**——猜错会把动作打到
+     * 错误的控件上，在金融/通信场景是不可接受的失败模式。
+     */
+    private fun disambiguateByAnchor(
+        candidates: List<GroundingResult.Found>,
+        query: GroundingQuery
+    ): GroundingResult.Found? {
+        if (!query.hasNormalizedAnchor) return null
+        val anchorX = query.normalizedAnchorX!!.toFloat()
+        val anchorY = query.normalizedAnchorY!!.toFloat()
+        val nearest = candidates.minByOrNull { candidate ->
+            val dx = candidate.bounds.centerX() - anchorX
+            val dy = candidate.bounds.centerY() - anchorY
+            dx * dx + dy * dy
+        } ?: return null
+        val dx = nearest.bounds.centerX() - anchorX
+        val dy = nearest.bounds.centerY() - anchorY
+        if (sqrt(dx * dx + dy * dy) > ANCHOR_TOLERANCE) return null
+        return nearest
+    }
+
+    /** 纯坐标兜底落地：按归一化锚点换算物理落点 */
+    private fun anchorGrounding(query: GroundingQuery, safeW: Int, safeH: Int): GroundingResult.Found {
+        val anchorX = query.normalizedAnchorX!!.toFloat()
+        val anchorY = query.normalizedAnchorY!!.toFloat()
+        val rect = NormalizedRect(anchorX, anchorY, anchorX, anchorY)
+        return GroundingResult.Found(
+            targetPoint = rect.toScreenPoint(safeW, safeH),
+            bounds = rect,
+            source = GroundingSource.NORMALIZED_ANCHOR,
+            confidence = ANCHOR_CONFIDENCE
+        )
     }
 
     private fun distance(x1: Float, y1: Float, x2: Float, y2: Float): Float {
         val dx = x1 - x2
         val dy = y1 - y2
         return sqrt(dx * dx + dy * dy)
+    }
+
+    companion object {
+        /** 锚点消歧容差（归一化空间距离，约屏幕短边的 12%） */
+        const val ANCHOR_TOLERANCE = 120f
+
+        /** 纯坐标兜底置信度：无任何语义背书，刻意低于所有语义来源 */
+        const val ANCHOR_CONFIDENCE = 0.60f
     }
 }

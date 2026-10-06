@@ -50,6 +50,49 @@ class LiricaAccessibilityService : AccessibilityService() {
         var isServiceConnected: Boolean = false
             internal set
 
+        /**
+         * 服务心跳时刻（M5.2 §7.1 国产 ROM 墓碑保活）。
+         *
+         * 国产 ROM（MIUI/HyperOS、ColorOS、OriginOS）会在后台闲置超时或激进省电时
+         * **静默注销**无障碍服务：进程还在、开关还亮着，但 onAccessibilityEvent 再也不来。
+         * 仅靠 isServiceConnected（句柄存在性）无法识别这种"僵尸连接"，
+         * 必须叠加"最近一次事件时间"才能判定。
+         */
+        @Volatile
+        var lastHeartbeatMs: Long = 0L
+            internal set
+
+        /**
+         * 物理触控事件流（M5.2 §6.2 用户抢占熔断的主通道）。
+         *
+         * 复审 R4 的诚实披露：TYPE_TOUCH_INTERACTION_START 对无障碍服务的分发条件
+         * 与国产 ROM 可达性**均未经验证**，因此本通道按"锦上添花"设计——
+         * UserInterruptionDetector 还有前台接管突变与手势回调异常两条降级通道，
+         * 即使这里一条事件都收不到，抢占熔断依然成立。
+         */
+        private val _physicalTouchEvents = MutableSharedFlow<Long>(
+            replay = 0,
+            extraBufferCapacity = 32,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+        val physicalTouchEvents: SharedFlow<Long> = _physicalTouchEvents.asSharedFlow()
+
+        /** 服务断开事件流（保活报警联动 KeepAliveService） */
+        private val _serviceDisconnectEvents = MutableSharedFlow<String>(
+            replay = 0,
+            extraBufferCapacity = 4,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+        val serviceDisconnectEvents: SharedFlow<String> = _serviceDisconnectEvents.asSharedFlow()
+
+        fun markHeartbeat(nowMs: Long = System.currentTimeMillis()) {
+            lastHeartbeatMs = nowMs
+        }
+
+        fun notifyDisconnected(reason: String) {
+            _serviceDisconnectEvents.tryEmit(reason)
+        }
+
         private val _latestPageContent = MutableStateFlow<PageContentSnapshot?>(null)
         val latestPageContent: StateFlow<PageContentSnapshot?> = _latestPageContent.asStateFlow()
 
@@ -106,12 +149,14 @@ class LiricaAccessibilityService : AccessibilityService() {
     public override fun onServiceConnected() {
         super.onServiceConnected()
         isServiceConnected = true
+        markHeartbeat()
         AccessibilityServiceHolder.register(this)
         startWorker()
     }
 
     internal fun onServiceConnectedForTest() {
         isServiceConnected = true
+        markHeartbeat()
         AccessibilityServiceHolder.register(this)
         startWorker()
     }
@@ -119,6 +164,7 @@ class LiricaAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         isServiceConnected = false
         AccessibilityServiceHolder.unregister()
+        notifyDisconnected("onDestroy")
         serviceJob.cancel()
         super.onDestroy()
     }
@@ -126,6 +172,7 @@ class LiricaAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         isServiceConnected = false
         AccessibilityServiceHolder.unregister()
+        notifyDisconnected("onUnbind")
         return super.onUnbind(intent)
     }
 
@@ -138,6 +185,14 @@ class LiricaAccessibilityService : AccessibilityService() {
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+
+        // 心跳：任何事件都代表服务仍然活着（保活探针的另一半，见 lastHeartbeatMs 说明）
+        markHeartbeat(event.eventTime.takeIf { it > 0L } ?: System.currentTimeMillis())
+
+        // 物理触控抢占信号：先于一切处理发出，保证"用户一碰屏幕"零延迟可见
+        if (event.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
+            _physicalTouchEvents.tryEmit(System.currentTimeMillis())
+        }
 
         val pkg = event.packageName?.toString().orEmpty()
         if (pkg.isEmpty()) return

@@ -35,7 +35,14 @@ class IntentActionDispatcherTest {
         packageManager = mockk(relaxed = true)
         every { context.packageManager } returns packageManager
         every { context.packageName } returns "com.lirica.android"
-        dispatcher = IntentActionDispatcherImpl(context)
+        // M5.1 P0-1：派发入口强制挂安全裁决引擎（生产装配同源），
+        // 既有用例因此顺带覆盖"低危动作穿过闸门"这条主路径。
+        dispatcher = IntentActionDispatcherImpl(
+            context = context,
+            safetyPolicy = com.lirica.android.automation.policy.SafetyPolicyEngineImpl(
+                permissionProvider = com.lirica.android.automation.policy.AutomationPermissionProvider.ALL_GRANTED
+            )
+        )
     }
 
     @Test
