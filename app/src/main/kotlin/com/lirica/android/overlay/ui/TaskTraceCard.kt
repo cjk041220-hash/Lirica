@@ -46,7 +46,9 @@ fun TaskTraceCard(
     totalSteps: Int,
     steps: List<ExecutionStepItem>,
     modifier: Modifier = Modifier,
-    onCancelClick: () -> Unit = {}
+    onCancelClick: () -> Unit = {},
+    onDragDelta: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    onDragEnd: () -> Unit = {}
 ) {
     AnimatedVisibility(
         visible = isVisible,

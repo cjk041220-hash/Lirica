@@ -8,6 +8,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,7 +62,9 @@ fun OverlayExpandPanel(
     onSendMessage: (String) -> Unit = {},
     onCloseClick: () -> Unit = {},
     onOpenFullAppClick: () -> Unit = {},
-    onFocusChanged: (Boolean) -> Unit = {}
+    onFocusChanged: (Boolean) -> Unit = {},
+    onDragDelta: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    onDragEnd: () -> Unit = {}
 ) {
     val (colorA, colorB, microExpression) = getMoodVisualTokens(mood)
 
@@ -91,11 +95,47 @@ fun OverlayExpandPanel(
                 .padding(14.dp)
         ) {
             Column {
-                // 顶部状态栏：头像微表情、当前心情、全屏按钮与关闭
+                // 顶部柔和拖拽手柄条（支持按住拖移整个浮窗面板）
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    onDragDelta(dragAmount.x, dragAmount.y)
+                                },
+                                onDragEnd = { onDragEnd() },
+                                onDragCancel = { onDragEnd() }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.25f))
+                    )
+                }
+
+                // 顶部状态栏：头像微表情、当前心情、全屏按钮与关闭（整行亦支持拖拽）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    onDragDelta(dragAmount.x, dragAmount.y)
+                                },
+                                onDragEnd = { onDragEnd() },
+                                onDragCancel = { onDragEnd() }
+                            )
+                        }
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically
@@ -151,19 +191,19 @@ fun OverlayExpandPanel(
 
                         Spacer(modifier = Modifier.width(6.dp))
 
-                        // 关闭面板
+                        // 关闭面板 (增大点击区域至 32dp，更易触控退出)
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
+                                .background(Color.White.copy(alpha = 0.12f))
                                 .clickable { onCloseClick() },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "✕",
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 13.sp,
+                                color = Color.White.copy(alpha = 0.95f),
                                 fontWeight = FontWeight.Bold
                             )
                         }

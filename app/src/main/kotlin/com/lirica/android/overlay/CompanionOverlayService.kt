@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.view.MotionEvent
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
@@ -218,6 +219,20 @@ class CompanionOverlayService : LifecycleService() {
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
 
+            // 外部触摸监听：当用户轻触悬浮窗卡片外部的屏幕空白区域时，自动收起展开面板并释放输入法焦点
+            setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                    if (expandViewModel?.uiState?.value?.isExpanded == true) {
+                        expandViewModel?.setExpanded(false)
+                        setWindowFocusable(false)
+                    }
+                    expandViewModel?.dismissCurrentIcebreaker()
+                    false
+                } else {
+                    false
+                }
+            }
+
             // 【WindowManager 挂载 Compose 铁律】注入 Owners
             setViewTreeLifecycleOwner(this@CompanionOverlayService)
 
@@ -272,7 +287,9 @@ class CompanionOverlayService : LifecycleService() {
                             onCancel = {
                                 confirmState.onCancelled()
                                 setWindowFocusable(false)
-                            }
+                            },
+                            onDragDelta = { dx, dy -> updatePosition(dx, dy) },
+                            onDragEnd = { snapToEdge() }
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                     }
@@ -341,7 +358,9 @@ class CompanionOverlayService : LifecycleService() {
                         },
                         onFocusChanged = { isFocused ->
                             setWindowFocusable(isFocused)
-                        }
+                        },
+                        onDragDelta = { dx, dy -> updatePosition(dx, dy) },
+                        onDragEnd = { snapToEdge() }
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -381,10 +400,15 @@ class CompanionOverlayService : LifecycleService() {
         val view = overlayComposeView ?: return
         val params = layoutParams ?: return
 
+        // 核心防御：无论是否聚焦，始终保留 FLAG_NOT_TOUCH_MODAL 与 FLAG_WATCH_OUTSIDE_TOUCH，
+        // 绝不将悬浮窗提升为全屏模态窗口（Modal Window），保证窗口外所有点击正常穿透到下层应用
+        val baseFlags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+
         val targetFlags = if (focusable) {
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            (params.flags or baseFlags) and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
-            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            params.flags or baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
 
         if (params.flags != targetFlags) {
@@ -406,8 +430,10 @@ class CompanionOverlayService : LifecycleService() {
         params.y = (params.y + deltaY.toInt())
 
         val displayMetrics = resources.displayMetrics
-        val effectiveWidth = if (params.width > 0) params.width else (72 * displayMetrics.density).toInt()
-        val effectiveHeight = if (params.height > 0) params.height else (72 * displayMetrics.density).toInt()
+        // 优先使用当前 View 的真实测量尺寸（精准感知展开面板宽度），避免被写死为小球 72dp 导致越界剪裁
+        val fallbackSize = (72 * displayMetrics.density).toInt()
+        val effectiveWidth = if (view.width > 0) view.width else fallbackSize
+        val effectiveHeight = if (view.height > 0) view.height else fallbackSize
 
         val clamped = OverlayPositionCalculator.clampToBounds(
             x = params.x,
@@ -435,7 +461,8 @@ class CompanionOverlayService : LifecycleService() {
         val params = layoutParams ?: return
 
         val displayMetrics = resources.displayMetrics
-        val effectiveWidth = if (params.width > 0) params.width else (72 * displayMetrics.density).toInt()
+        val fallbackSize = (72 * displayMetrics.density).toInt()
+        val effectiveWidth = if (view.width > 0) view.width else fallbackSize
 
         val targetX = OverlayPositionCalculator.calculateSnapTargetX(
             currentX = params.x,
@@ -472,6 +499,15 @@ class CompanionOverlayService : LifecycleService() {
         const val NOTIFICATION_CHANNEL_TASK_EXECUTION = "lirica_task_execution"
         const val NOTIFICATION_ID_TASK_EXECUTION = 1002
 
+        /**
+         * 基础非模态悬浮窗 Flags：
+         * 1. FLAG_NOT_TOUCH_MODAL：必须声明！允许悬浮窗外的触摸事件自由穿透到下层其它应用；
+         * 2. FLAG_WATCH_OUTSIDE_TOUCH：允许接收 ACTION_OUTSIDE 外部触摸事件，实现点击外部自动收起；
+         * 3. 严格禁用 FLAG_LAYOUT_NO_LIMITS，避免华为鸿蒙等 ROM 错误计算 TouchRegion 导致全屏触摸锁死。
+         */
+        const val BASE_OVERLAY_FLAGS = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+
         fun createDefaultLayoutParams(
             initialX: Int,
             initialY: Int,
@@ -482,8 +518,7 @@ class CompanionOverlayService : LifecycleService() {
                 width,
                 height,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or BASE_OVERLAY_FLAGS,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START

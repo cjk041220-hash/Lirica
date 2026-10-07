@@ -99,16 +99,16 @@ fun IcebreakerBubble(
 
                             Box(
                                 modifier = Modifier
-                                    .size(16.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White.copy(alpha = 0.1f))
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color.White.copy(alpha = 0.12f))
                                     .clickable { onDismissClick(thought) },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "✕",
-                                    fontSize = 9.sp,
-                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 12.sp,
+                                    color = Color.White.copy(alpha = 0.9f),
                                     fontWeight = FontWeight.Bold
                                 )
                             }

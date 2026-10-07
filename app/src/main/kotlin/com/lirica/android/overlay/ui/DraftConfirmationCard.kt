@@ -3,7 +3,11 @@ package com.lirica.android.overlay.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,7 +53,9 @@ fun DraftConfirmationCard(
     modifier: Modifier = Modifier,
     confirmButtonText: String = "立即发送",
     onConfirm: (editedDraft: String) -> Unit = {},
-    onCancel: () -> Unit = {}
+    onCancel: () -> Unit = {},
+    onDragDelta: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    onDragEnd: () -> Unit = {}
 ) {
     var draftText by remember(initialDraftContent) { mutableStateOf(initialDraftContent) }
 
@@ -70,9 +76,47 @@ fun DraftConfirmationCard(
             Column(
                 modifier = Modifier.padding(18.dp)
             ) {
-                // 顶部标题
+                // 顶部居中拖拽把手（可挪开卡片看清被遮挡内容）
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    onDragDelta(dragAmount.x, dragAmount.y)
+                                },
+                                onDragEnd = { onDragEnd() },
+                                onDragCancel = { onDragEnd() }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .padding(bottom = 4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.25f))
+                            .padding(horizontal = 18.dp, vertical = 2.dp)
+                    )
+                }
+
+                // 顶部标题（支持拖拽移位）
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    onDragDelta(dragAmount.x, dragAmount.y)
+                                },
+                                onDragEnd = { onDragEnd() },
+                                onDragCancel = { onDragEnd() }
+                            )
+                        }
                 ) {
                     Text(
                         text = "📝",

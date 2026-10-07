@@ -161,6 +161,14 @@ class OverlayExpandViewModel(
     }
 
     /**
+     * 用户轻触屏幕空白处，收起当前展示的破冰气泡
+     */
+    fun dismissCurrentIcebreaker() {
+        val current = _uiState.value.icebreakerThought ?: return
+        dismissIcebreaker(current)
+    }
+
+    /**
      * 用户关闭/忽略破冰气泡，标记为已废弃并回传负向反馈增加退避惩罚
      */
     fun dismissIcebreaker(thought: UnspokenThoughtEntity, nowMs: Long = System.currentTimeMillis()) {
