@@ -149,7 +149,16 @@ fun SettingsScreen(
                     Text(
                         text = "‹ 返回",
                         modifier = Modifier
-                            .clickable { onBack() }
+                            .clickable {
+                                // 离开前自动同步保存当前配置，杜绝返回后未持久化被重置
+                                if (apiKeyInput.isNotBlank()) {
+                                    byokRepository.saveCustomApiKey(apiKeyInput.trim())
+                                    byokRepository.saveCustomBaseUrl(baseUrlInput.trim())
+                                    byokRepository.saveCustomModel(modelInput.trim())
+                                    byokRepository.saveCustomProvider(selectedProvider)
+                                }
+                                onBack()
+                            }
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.primary,
                         fontSize = 16.sp,
@@ -298,13 +307,22 @@ fun SettingsScreen(
                                 testResult = null
                                 coroutineScope.launch {
                                     val testConfig = LlmConfig(
-                                        apiKey = apiKeyInput,
+                                        apiKey = apiKeyInput.trim(),
                                         provider = selectedProvider,
-                                        baseUrl = baseUrlInput,
-                                        model = modelInput
+                                        baseUrl = baseUrlInput.trim(),
+                                        model = modelInput.trim()
                                     )
-                                    testResult = connectivityTester.testConnection(testConfig)
+                                    val result = connectivityTester.testConnection(testConfig)
+                                    testResult = result
                                     isTestingConnection = false
+                                    if (result is ConnectivityResult.Success) {
+                                        // 握手成功：自动为用户安全落盘保存，避免手动点击保存被遗忘
+                                        byokRepository.saveCustomApiKey(apiKeyInput.trim())
+                                        byokRepository.saveCustomBaseUrl(baseUrlInput.trim())
+                                        byokRepository.saveCustomModel(modelInput.trim())
+                                        byokRepository.saveCustomProvider(selectedProvider)
+                                        Toast.makeText(context, "连通成功，已自动为您安全保存配置", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             },
                             enabled = !isTestingConnection && apiKeyInput.isNotBlank(),

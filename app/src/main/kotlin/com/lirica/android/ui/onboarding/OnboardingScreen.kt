@@ -1,6 +1,7 @@
 package com.lirica.android.ui.onboarding
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -67,6 +68,9 @@ fun OnboardingScreen(
     var permissionsState by remember { mutableStateOf(PermissionManager.checkAll(context)) }
 
     var apiKeyInput by remember { mutableStateOf("") }
+    var baseUrlInput by remember { mutableStateOf(ByokSettingsRepository.DEFAULT_BASE_URL) }
+    var modelInput by remember { mutableStateOf(ByokSettingsRepository.DEFAULT_MODEL) }
+    var showAdvancedSettings by remember { mutableStateOf(false) }
     var isTestingConnection by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<ConnectivityResult?>(null) }
     val connectivityTester = remember { LlmConnectivityTester() }
@@ -159,23 +163,93 @@ fun OnboardingScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "第二步：配置大模型 API Key",
+                            text = "第二步：配置大模型 API 来源与密钥",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "默认支持 DeepSeek 官方或硅基流动/OpenAI API，密钥将使用硬件级 AES-GCM 安全加密存储。",
+                            text = "支持 DeepSeek 官方、硅基流动或任意第三方 OpenAI 兼容中转站。密钥将使用硬件级 AES-GCM 安全加密存储。",
                             style = MaterialTheme.typography.bodySmall
                         )
 
+                        // 常用提供商快速选择
+                        Text(
+                            text = "常用提供商预设：",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    baseUrlInput = "https://api.deepseek.com/v1"
+                                    modelInput = "deepseek-chat"
+                                    showAdvancedSettings = false
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("DeepSeek 官方", fontSize = 11.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    baseUrlInput = "https://api.siliconflow.cn/v1"
+                                    modelInput = "deepseek-ai/DeepSeek-V3"
+                                    showAdvancedSettings = true
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("硅基流动", fontSize = 11.sp)
+                            }
+                        }
+
+                        // API Key 输入
                         OutlinedTextField(
                             value = apiKeyInput,
                             onValueChange = { apiKeyInput = it },
-                            label = { Text("DeepSeek / OpenAI API Key") },
+                            label = { Text("API Key (sk-...)") },
                             placeholder = { Text("sk-xxxx...") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
+
+                        // 展开/收起自定义 Base URL 和 Model
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = if (showAdvancedSettings) "▼ 自定义 API 来源与模型 (第三方中转站)" else "▶ 自定义 API 来源与模型 (第三方中转站)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .padding(vertical = 4.dp)
+                                    .clickable { showAdvancedSettings = !showAdvancedSettings }
+                            )
+                        }
+
+                        if (showAdvancedSettings) {
+                            OutlinedTextField(
+                                value = baseUrlInput,
+                                onValueChange = { baseUrlInput = it },
+                                label = { Text("API Base URL (接口地址)") },
+                                placeholder = { Text("https://api.xxx.com/v1") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                supportingText = { Text("第三方中转站请务必填写真实中转 Base URL", fontSize = 10.sp) }
+                            )
+
+                            OutlinedTextField(
+                                value = modelInput,
+                                onValueChange = { modelInput = it },
+                                label = { Text("模型名称 (Model)") },
+                                placeholder = { Text("deepseek-chat / deepseek-ai/DeepSeek-V3") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -186,7 +260,11 @@ fun OnboardingScreen(
                                     isTestingConnection = true
                                     testResult = null
                                     coroutineScope.launch {
-                                        val cfg = LlmConfig(apiKey = apiKeyInput)
+                                        val cfg = LlmConfig(
+                                            apiKey = apiKeyInput.trim(),
+                                            baseUrl = baseUrlInput.trim(),
+                                            model = modelInput.trim()
+                                        )
                                         testResult = connectivityTester.testConnection(cfg)
                                         isTestingConnection = false
                                     }
@@ -240,7 +318,9 @@ fun OnboardingScreen(
                     Button(
                         onClick = {
                             if (apiKeyInput.isNotBlank()) {
-                                byokRepository.saveCustomApiKey(apiKeyInput)
+                                byokRepository.saveCustomApiKey(apiKeyInput.trim())
+                                byokRepository.saveCustomBaseUrl(baseUrlInput.trim())
+                                byokRepository.saveCustomModel(modelInput.trim())
                             }
                             onFinish()
                         },
