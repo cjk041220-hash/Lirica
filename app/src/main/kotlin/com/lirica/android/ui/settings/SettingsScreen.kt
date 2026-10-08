@@ -89,17 +89,25 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val settingsState by byokRepository.settings.collectAsState()
 
-    var apiKeyInput by remember(settingsState.customApiKey) {
+    // 用户在输入框中编辑时，必须以本地状态为准，绝不让外部 StateFlow 刷新重置用户未保存的输入
+    var apiKeyInput by remember {
         mutableStateOf(settingsState.customApiKey ?: "")
     }
-    var baseUrlInput by remember(settingsState.customBaseUrl) {
+    var baseUrlInput by remember {
         mutableStateOf(settingsState.customBaseUrl ?: ByokSettingsRepository.DEFAULT_BASE_URL)
     }
-    var modelInput by remember(settingsState.customModel) {
+    var modelInput by remember {
         mutableStateOf(settingsState.customModel ?: ByokSettingsRepository.DEFAULT_MODEL)
     }
-    var selectedProvider by remember(settingsState.customProvider) {
+    var selectedProvider by remember {
         mutableStateOf(settingsState.customProvider ?: LlmProvider.DEEPSEEK)
+    }
+
+    // 仅当首次进入且输入框为空、但底层配置异步恢复出 Key 时，才做一次初值回填
+    androidx.compose.runtime.LaunchedEffect(settingsState.customApiKey) {
+        if (apiKeyInput.isEmpty() && !settingsState.customApiKey.isNullOrEmpty()) {
+            apiKeyInput = settingsState.customApiKey!!
+        }
     }
 
     var isPasswordVisible by remember { mutableStateOf(false) }

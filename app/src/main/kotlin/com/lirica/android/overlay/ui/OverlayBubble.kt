@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -80,28 +81,24 @@ fun OverlayBubble(
     val animatedColorA by animateColorAsState(targetValue = primaryHaloColor, label = "ColorA")
     val animatedColorB by animateColorAsState(targetValue = secondaryHaloColor, label = "ColorB")
 
-    var dragDistance by remember { mutableFloatStateOf(0f) }
-
     Box(
         modifier = modifier
             .size(72.dp)
             .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = {
+                        onClick()
+                    }
+                )
+            }
+            .pointerInput(Unit) {
                 detectDragGestures(
-                    onDragStart = {
-                        dragDistance = 0f
-                    },
                     onDrag = { change, dragAmount ->
-                        dragDistance += kotlin.math.hypot(dragAmount.x, dragAmount.y)
                         change.consume()
                         onDragDelta(dragAmount.x, dragAmount.y)
                     },
                     onDragEnd = {
-                        // 阈值判定：累计拖拽小于 12px 视为轻击 (Tap)，松手即展开/收起；大于 12px 视为拖拽贴边
-                        if (dragDistance < 12f) {
-                            onClick()
-                        } else {
-                            onDragEnd()
-                        }
+                        onDragEnd()
                     },
                     onDragCancel = {
                         onDragEnd()

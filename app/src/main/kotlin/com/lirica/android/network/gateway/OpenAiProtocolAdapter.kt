@@ -23,6 +23,7 @@ class OpenAiProtocolAdapter(
             ignoreUnknownKeys = true
             isLenient = true
             encodeDefaults = true
+            explicitNulls = false
         }
     }
 
