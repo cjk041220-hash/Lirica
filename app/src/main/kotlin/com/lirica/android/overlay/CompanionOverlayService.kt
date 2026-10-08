@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.graphics.PixelFormat
 import android.os.Build
@@ -76,6 +77,7 @@ class CompanionOverlayService : LifecycleService() {
         setupOverlayView()
         observePerception()
         observeCoordinatorTaskState()
+        observeOverlayUiState()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -116,6 +118,52 @@ class CompanionOverlayService : LifecycleService() {
                     else -> {}
                 }
             }
+        }
+    }
+
+    /**
+     * 监听悬浮窗面板展开状态：
+     * 1. 展开时：切换为可聚焦（允许软键盘输入法弹出）、并自动修正 X 坐标防止卡片向右侧溢出屏幕；
+     * 2. 折叠时：释放软键盘焦点并将小球自动贴边停靠。
+     */
+    private fun observeOverlayUiState() {
+        val vm = expandViewModel ?: return
+        lifecycleScope.launch {
+            var wasExpanded = false
+            vm.uiState.collect { state ->
+                if (state.isExpanded != wasExpanded) {
+                    wasExpanded = state.isExpanded
+                    if (state.isExpanded) {
+                        setWindowFocusable(true)
+                        adjustPositionForExpandedPanel()
+                    } else {
+                        setWindowFocusable(false)
+                        snapToEdge()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun adjustPositionForExpandedPanel() {
+        val wm = windowManager ?: return
+        val view = overlayComposeView ?: return
+        val params = layoutParams ?: return
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+        val panelWidth = (320 * displayMetrics.density).toInt()
+        if (params.x + panelWidth > screenWidth - 16) {
+            params.x = (screenWidth - panelWidth - 16).coerceAtLeast(16)
+        }
+        val panelHeight = (420 * displayMetrics.density).toInt()
+        if (params.y + panelHeight > screenHeight - 64) {
+            params.y = (screenHeight - panelHeight - 64).coerceAtLeast(64)
+        }
+        try {
+            wm.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            LiricaLog.e(TAG, "Failed to adjust position for expanded panel", e)
         }
     }
 
@@ -218,6 +266,37 @@ class CompanionOverlayService : LifecycleService() {
 
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            isFocusable = true
+            isFocusableInTouchMode = true
+
+            // 拦截硬件或系统返回键：当面板处于展开状态时，按下返回键优雅收起面板
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                    if (expandViewModel?.uiState?.value?.isExpanded == true) {
+                        expandViewModel?.setExpanded(false)
+                        setWindowFocusable(false)
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+
+            // 动态边界自适应：当 Compose 展开/折叠重测尺寸时，确保右下边界永不溢出物理屏幕
+            addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+                val w = right - left
+                val h = bottom - top
+                if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
+                val currentParams = this@CompanionOverlayService.layoutParams ?: return@addOnLayoutChangeListener
+                val displayMetrics = resources.displayMetrics
+                if (currentParams.x + w > displayMetrics.widthPixels - 16) {
+                    currentParams.x = (displayMetrics.widthPixels - w - 16).coerceAtLeast(16)
+                    try {
+                        windowManager?.updateViewLayout(this, currentParams)
+                    } catch (e: Exception) {
+                        // 忽略瞬态布局更新
+                    }
+                }
+            }
 
             // 外部触摸监听：当用户轻触悬浮窗卡片外部的屏幕空白区域时，自动收起展开面板并释放输入法焦点
             setOnTouchListener { _, event ->
@@ -524,6 +603,7 @@ class CompanionOverlayService : LifecycleService() {
                 gravity = Gravity.TOP or Gravity.START
                 x = initialX
                 y = initialY
+                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             }
         }
     }

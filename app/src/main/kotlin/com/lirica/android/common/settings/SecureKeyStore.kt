@@ -216,7 +216,7 @@ class DefaultSecureKeyStore(
         val iv: ByteArray = try {
             cipher.init(Cipher.ENCRYPT_MODE, key)
             cipher.iv ?: throw IllegalStateException("Cipher 未能生成有效 IV")
-        } catch (e: InvalidAlgorithmParameterException) {
+        } catch (e: Exception) {
             val fallbackIv = ByteArray(GCM_IV_LENGTH_BYTES).apply { secureRandom.nextBytes(this) }
             cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, fallbackIv))
             fallbackIv

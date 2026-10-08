@@ -37,6 +37,10 @@ class OpenAiProtocolAdapterTest {
             "https://api.openai.com/v1/chat/completions",
             adapter.resolveEndpoint("https://api.openai.com/v1/")
         )
+        assertEquals(
+            "https://discovery-api.intern-ai.org.cn/v1/chat/completions",
+            adapter.resolveEndpoint("discovery-api.intern-ai.org.cn/v1")
+        )
     }
 
     @Test

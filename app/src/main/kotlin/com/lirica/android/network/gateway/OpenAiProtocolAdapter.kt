@@ -30,8 +30,14 @@ class OpenAiProtocolAdapter(
     override val protocol: LlmProtocol = LlmProtocol.OPENAI
 
     override fun resolveEndpoint(baseUrl: String): String {
-        val normalized = baseUrl.trim().removeSuffix("/")
-        return if (normalized.endsWith("/chat/completions")) {
+        val trimmed = baseUrl.trim()
+        val withScheme = if (!trimmed.startsWith("http://", ignoreCase = true) && !trimmed.startsWith("https://", ignoreCase = true)) {
+            "https://$trimmed"
+        } else {
+            trimmed
+        }
+        val normalized = withScheme.removeSuffix("/")
+        return if (normalized.endsWith("/chat/completions", ignoreCase = true)) {
             normalized
         } else {
             "$normalized/chat/completions"

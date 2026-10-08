@@ -265,8 +265,14 @@ fun OnboardingScreen(
                                             baseUrl = baseUrlInput.trim(),
                                             model = modelInput.trim()
                                         )
-                                        testResult = connectivityTester.testConnection(cfg)
+                                        val result = connectivityTester.testConnection(cfg)
+                                        testResult = result
                                         isTestingConnection = false
+                                        if (result is ConnectivityResult.Success) {
+                                            byokRepository.saveCustomApiKey(apiKeyInput.trim())
+                                            byokRepository.saveCustomBaseUrl(baseUrlInput.trim())
+                                            byokRepository.saveCustomModel(modelInput.trim())
+                                        }
                                     }
                                 },
                                 enabled = !isTestingConnection && apiKeyInput.isNotBlank(),
