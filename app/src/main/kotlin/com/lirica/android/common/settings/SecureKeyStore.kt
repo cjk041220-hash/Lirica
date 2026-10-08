@@ -6,6 +6,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.lirica.android.common.logging.LiricaLog
+import java.security.InvalidAlgorithmParameterException
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.Base64
@@ -206,10 +207,20 @@ class DefaultSecureKeyStore(
 
     override fun encrypt(plainText: String): String {
         val key = secretKey // 解析失败会直接抛出，不可继续
-        val iv = ByteArray(GCM_IV_LENGTH_BYTES).apply { secureRandom.nextBytes(this) }
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv)
-        cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec)
+        // 关键真机修复（华为 Mate 50 / Android 12+ KeyStore 2.0 兼容）：
+        // 当使用硬件 AndroidKeyStore 时，系统强制要求随机加密，并严禁调用方提供自定义 IV（否则报
+        // InvalidAlgorithmParameterException: Caller-provided IV not permitted）。
+        // 因此先以无参数方式执行 cipher.init(Cipher.ENCRYPT_MODE, key)，让底层硬件安全单元自动生成随机 IV，
+        // 再从 cipher.iv 读取；若遇到某些非 AndroidKeyStore 极端环境拒绝无参 init，则回退为带参初始化。
+        val iv: ByteArray = try {
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            cipher.iv ?: throw IllegalStateException("Cipher 未能生成有效 IV")
+        } catch (e: InvalidAlgorithmParameterException) {
+            val fallbackIv = ByteArray(GCM_IV_LENGTH_BYTES).apply { secureRandom.nextBytes(this) }
+            cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH_BITS, fallbackIv))
+            fallbackIv
+        }
         val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
 
         // 拼装：[12 字节 IV] + [密文 + Tag]

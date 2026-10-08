@@ -10,8 +10,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -85,25 +86,42 @@ fun OverlayBubble(
         modifier = modifier
             .size(72.dp)
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = {
-                        onClick()
+                // 单手势状态机：精准区分点击（Tap）与拖拽（Drag），彻底消除多 pointerInput 之间的事件吞噬
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var isDragStarted = false
+                    val touchSlop = viewConfiguration.touchSlop
+                    var totalDragDistance = 0f
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            // 手指抬起！
+                            if (isDragStarted) {
+                                onDragEnd()
+                            } else if (totalDragDistance < touchSlop) {
+                                // 未突破滑动容差，确认为轻触点击秒开
+                                onClick()
+                            }
+                            break
+                        } else {
+                            val changeOffset = change.positionChange()
+                            val deltaX = changeOffset.x
+                            val deltaY = changeOffset.y
+                            totalDragDistance += kotlin.math.hypot(deltaX, deltaY)
+
+                            if (!isDragStarted && totalDragDistance >= touchSlop) {
+                                isDragStarted = true
+                            }
+
+                            if (isDragStarted) {
+                                change.consume()
+                                onDragDelta(deltaX, deltaY)
+                            }
+                        }
                     }
-                )
-            }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        onDragDelta(dragAmount.x, dragAmount.y)
-                    },
-                    onDragEnd = {
-                        onDragEnd()
-                    },
-                    onDragCancel = {
-                        onDragEnd()
-                    }
-                )
+                }
             },
         contentAlignment = Alignment.Center
     ) {
