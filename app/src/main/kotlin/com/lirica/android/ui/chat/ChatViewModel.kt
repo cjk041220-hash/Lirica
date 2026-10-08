@@ -17,6 +17,7 @@ import com.lirica.android.automation.agent.NativeToolAgent
 import com.lirica.android.life.CareEvent
 import com.lirica.android.life.CareHintDetector
 import com.lirica.android.network.ToolCallAssembler
+import com.lirica.android.network.ToolCallParser
 import com.lirica.android.network.LiricaLlmClient
 import com.lirica.android.network.model.ChatMessage
 import com.lirica.android.network.model.LlmConfig
@@ -353,10 +354,11 @@ class ChatViewModel(
                         when (event) {
                             is LlmStreamEvent.Token -> {
                                 accumulated.append(event.text)
+                                val cleanSnippet = ToolCallParser.cleanDisplayText(accumulated.toString())
                                 val currentText = if (priorRoundsText.isNotEmpty()) {
-                                    "${priorRoundsText}\n${accumulated}"
+                                    if (cleanSnippet.isNotBlank()) "${priorRoundsText}\n${cleanSnippet}" else priorRoundsText.toString()
                                 } else {
-                                    accumulated.toString()
+                                    cleanSnippet
                                 }
                                 _uiState.update { state ->
                                     val list = state.messages
@@ -384,9 +386,13 @@ class ChatViewModel(
                         }
                     }
 
-                    val completedCalls = toolAssembler.getCompletedToolCalls()
+                    val openAiCalls = toolAssembler.getCompletedToolCalls()
+                    val rawRoundContent = accumulated.toString()
+                    val (cleanedRoundContent, embeddedCalls) = ToolCallParser.extract(rawRoundContent)
+                    val completedCalls = if (openAiCalls.isNotEmpty()) openAiCalls else embeddedCalls
+
                     if (completedCalls.isNotEmpty() && toolAgent != null) {
-                        val roundContent = accumulated.toString()
+                        val roundContent = cleanedRoundContent
                         if (roundContent.isNotBlank()) {
                             if (priorRoundsText.isNotEmpty()) priorRoundsText.append("\n")
                             priorRoundsText.append(roundContent)
@@ -403,7 +409,7 @@ class ChatViewModel(
 
                         conversationMessages = conversationMessages + assistantToolMessage + toolMessages
                     } else {
-                        currentRoundText = accumulated.toString()
+                        currentRoundText = cleanedRoundContent
                         break
                     }
                 }

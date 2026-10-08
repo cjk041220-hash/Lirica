@@ -15,6 +15,7 @@ import com.lirica.android.emotion.EmotionEngine
 import com.lirica.android.emotion.model.EmotionVector
 import com.lirica.android.emotion.model.MoodState
 import com.lirica.android.network.ToolCallAssembler
+import com.lirica.android.network.ToolCallParser
 import com.lirica.android.network.LiricaLlmClient
 import com.lirica.android.network.model.ChatMessage
 import com.lirica.android.network.model.LlmConfig
@@ -314,7 +315,12 @@ class OverlayExpandViewModel(
                         when (event) {
                             is LlmStreamEvent.Token -> {
                                 accumulated.append(event.text)
-                                val cur = if (priorRoundsText.isNotEmpty()) "$priorRoundsText\n$accumulated" else accumulated.toString()
+                                val cleanSnippet = ToolCallParser.cleanDisplayText(accumulated.toString())
+                                val cur = if (priorRoundsText.isNotEmpty()) {
+                                    if (cleanSnippet.isNotBlank()) "$priorRoundsText\n$cleanSnippet" else priorRoundsText.toString()
+                                } else {
+                                    cleanSnippet
+                                }
                                 _uiState.update { it.copy(streamingReply = cur) }
                             }
                             is LlmStreamEvent.ToolCallChunk -> {
@@ -327,9 +333,13 @@ class OverlayExpandViewModel(
                         }
                     }
 
-                    val completedCalls = toolAssembler.getCompletedToolCalls()
+                    val openAiCalls = toolAssembler.getCompletedToolCalls()
+                    val rawRoundContent = accumulated.toString()
+                    val (cleanedRoundContent, embeddedCalls) = ToolCallParser.extract(rawRoundContent)
+                    val completedCalls = if (openAiCalls.isNotEmpty()) openAiCalls else embeddedCalls
+
                     if (completedCalls.isNotEmpty() && toolAgent != null) {
-                        val roundContent = accumulated.toString()
+                        val roundContent = cleanedRoundContent
                         if (roundContent.isNotBlank()) {
                             if (priorRoundsText.isNotEmpty()) priorRoundsText.append("\n")
                             priorRoundsText.append(roundContent)
@@ -346,9 +356,9 @@ class OverlayExpandViewModel(
                         conversationMessages = conversationMessages + assistantMsg + toolMessages
                     } else {
                         finalText = if (priorRoundsText.isNotEmpty()) {
-                            if (accumulated.isNotEmpty()) "$priorRoundsText\n$accumulated" else priorRoundsText.toString()
+                            if (cleanedRoundContent.isNotEmpty()) "$priorRoundsText\n$cleanedRoundContent" else priorRoundsText.toString()
                         } else {
-                            accumulated.toString()
+                            cleanedRoundContent
                         }
                         break
                     }
