@@ -701,6 +701,24 @@ class HelixGuiCoordinatorImpl(
             }
         }
 
+        // 3. 智能滚屏搜寻（Scroll-and-Search，对齐 Mobile-Agent 核心机制）：
+        // 当目标元素未在当前首屏可视区（如设置页底部的'系统和更新'或长列表中未展示的聊天），
+        // 自动向上滑动半屏展开下游视野并二次接地，杜绝首屏缺失直接报死。
+        if (locateResult is GroundingResult.NotFound && !query.text.isNullOrBlank()) {
+            val sw = screenWidthProvider().toFloat()
+            val sh = screenHeightProvider().toFloat()
+            if (sw > 0 && sh > 0) {
+                gestureExecutor.execute(
+                    GestureSpec.Swipe(sw / 2f, sh * 0.72f, sw / 2f, sh * 0.32f, humanoidCurve = true)
+                )
+                kotlinx.coroutines.delay(600L)
+                val scrolledDump = treeExtractor.dumpTree(rootNodeProvider(), screenWidthProvider(), screenHeightProvider(), currentPackageProvider())
+                if (scrolledDump is TreeDumpResult.Ok) {
+                    locateResult = locateWithVisualFallback(query, scrolledDump.nodes)
+                }
+            }
+        }
+
         return when (locateResult) {
             is GroundingResult.NotFound -> {
                 val elementText = query.text ?: query.semanticDescription ?: query.resourceId

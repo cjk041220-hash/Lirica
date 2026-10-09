@@ -25,6 +25,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -97,6 +98,10 @@ class NativeToolAgent(
                     parameters = buildJsonObject {
                         put("type", "object")
                         putJsonObject("properties") {
+                            putJsonObject("index") {
+                                put("type", "integer")
+                                put("description", "目标元素序号（可选，前序屏幕观察返回的 [1]、[2] 编号，优选使用以保证 100% 精准点击）")
+                            }
                             putJsonObject("text") {
                                 put("type", "string")
                                 put("description", "屏幕上要点击的按钮或元素文本")
@@ -124,6 +129,10 @@ class NativeToolAgent(
                             putJsonObject("text") {
                                 put("type", "string")
                                 put("description", "要在输入框中键入的文本内容")
+                            }
+                            putJsonObject("index") {
+                                put("type", "integer")
+                                put("description", "目标输入框序号（可选，对应前序屏幕观察返回的编号）")
                             }
                             putJsonObject("target_text") {
                                 put("type", "string")
@@ -356,12 +365,28 @@ class NativeToolAgent(
             }
 
             "click_element" -> {
-                val text = args["text"]?.jsonPrimitive?.content
+                val index = args["index"]?.jsonPrimitive?.intOrNull
+                val rawText = args["text"]?.jsonPrimitive?.content
                 val resourceId = args["resource_id"]?.jsonPrimitive?.content
-                val desc = args["description"]?.jsonPrimitive?.content ?: "点击元素 $text"
+
+                val indexed = if (index != null && index in 1..lastIndexedElements.size) {
+                    lastIndexedElements[index - 1]
+                } else null
+
+                val targetText = indexed?.label ?: rawText
+                val targetRes = indexed?.resourceId ?: resourceId
+                val targetAnchorX = indexed?.normalizedCenterX
+                val targetAnchorY = indexed?.normalizedCenterY
+
+                val desc = args["description"]?.jsonPrimitive?.content ?: "点击元素 ${targetText ?: targetRes ?: "index $index"}"
 
                 val action = CoordinatorAction.Click(
-                    query = GroundingQuery(text = text, resourceId = resourceId),
+                    query = GroundingQuery(
+                        text = targetText,
+                        resourceId = targetRes,
+                        normalizedAnchorX = targetAnchorX,
+                        normalizedAnchorY = targetAnchorY
+                    ),
                     description = desc
                 )
 
@@ -396,11 +421,24 @@ class NativeToolAgent(
 
             "input_text" -> {
                 val text = args["text"]?.jsonPrimitive?.content ?: ""
-                val targetText = args["target_text"]?.jsonPrimitive?.content
-                val targetResourceId = args["target_resource_id"]?.jsonPrimitive?.content
+                val index = args["index"]?.jsonPrimitive?.intOrNull
+
+                val indexed = if (index != null && index in 1..lastIndexedElements.size) {
+                    lastIndexedElements[index - 1]
+                } else null
+
+                val targetText = indexed?.label ?: args["target_text"]?.jsonPrimitive?.content
+                val targetResourceId = indexed?.resourceId ?: args["target_resource_id"]?.jsonPrimitive?.content
+                val targetAnchorX = indexed?.normalizedCenterX
+                val targetAnchorY = indexed?.normalizedCenterY
 
                 val action = CoordinatorAction.Type(
-                    query = GroundingQuery(text = targetText, resourceId = targetResourceId),
+                    query = GroundingQuery(
+                        text = targetText,
+                        resourceId = targetResourceId,
+                        normalizedAnchorX = targetAnchorX,
+                        normalizedAnchorY = targetAnchorY
+                    ),
                     text = text,
                     description = "键入文本 $text"
                 )
@@ -692,33 +730,65 @@ class NativeToolAgent(
         return calls.map { executeToolCall(it) }
     }
 
+    private data class IndexedScreenElement(
+        val index: Int,
+        val label: String,
+        val tag: String,
+        val resourceId: String?,
+        val normalizedCenterX: Int?,
+        val normalizedCenterY: Int?
+    )
+
+    private var lastIndexedElements = listOf<IndexedScreenElement>()
+
     private fun captureScreenSummary(): String {
         val service = AccessibilityServiceHolder.get() ?: return ""
         val root = service.rootInActiveWindow ?: return ""
         val pkg = root.packageName?.toString().orEmpty()
-        val elements = mutableListOf<String>()
+        val rawElements = mutableListOf<IndexedScreenElement>()
+        val tempRect = android.graphics.Rect()
+        val dm = service.resources.displayMetrics
+        val sw = kotlin.math.max(1, dm.widthPixels)
+        val sh = kotlin.math.max(1, dm.heightPixels)
 
         fun walk(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > 8 || elements.size >= 25) return
+            if (node == null || depth > 8 || rawElements.size >= 30) return
             val text = node.text?.toString()?.trim()
             val desc = node.contentDescription?.toString()?.trim()
             val label = if (!text.isNullOrBlank()) text else desc
             if (!label.isNullOrBlank()) {
+                node.getBoundsInScreen(tempRect)
+                val cx = if (tempRect.width() > 0) ((tempRect.centerX().toFloat() / sw) * 1000).toInt() else null
+                val cy = if (tempRect.height() > 0) ((tempRect.centerY().toFloat() / sh) * 1000).toInt() else null
                 val tag = when {
                     node.isEditable -> "输入框"
                     node.isClickable -> "按钮"
                     else -> "文字"
                 }
-                elements.add("[$tag] \"$label\"")
+                rawElements.add(
+                    IndexedScreenElement(
+                        index = rawElements.size + 1,
+                        label = label,
+                        tag = tag,
+                        resourceId = node.viewIdResourceName,
+                        normalizedCenterX = cx,
+                        normalizedCenterY = cy
+                    )
+                )
             }
             for (i in 0 until node.childCount) {
                 walk(node.getChild(i), depth + 1)
             }
         }
         walk(root, 0)
-        val distinctElements = elements.distinct()
-        if (distinctElements.isEmpty()) return if (pkg.isNotBlank()) "\n【当前前台: $pkg】" else ""
-        return "\n【当前前台: $pkg，屏幕可见元素】\n" + distinctElements.take(15).joinToString("\n") { "• $it" }
+        // 按标签去重保留唯一项并赋予自增编号 1..N
+        val uniqueElements = rawElements.distinctBy { it.label }
+            .take(15)
+            .mapIndexed { idx, elem -> elem.copy(index = idx + 1) }
+
+        lastIndexedElements = uniqueElements
+        if (uniqueElements.isEmpty()) return if (pkg.isNotBlank()) "\n【当前前台: $pkg】" else ""
+        return "\n【当前前台: $pkg，屏幕可见元素】\n" + uniqueElements.joinToString("\n") { "• [${it.index}] [${it.tag}] \"${it.label}\"" }
     }
 
     companion object {
