@@ -1,7 +1,10 @@
 package com.lirica.android.automation.agent
 
 import android.view.KeyEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.lirica.android.automation.backend.KeycodeMapper
+import com.lirica.android.perception.AccessibilityServiceHolder
+import kotlinx.coroutines.delay
 import com.lirica.android.automation.capture.ScreenCaptureManager
 import com.lirica.android.automation.coordinator.CoordinatorAction
 import com.lirica.android.automation.coordinator.HelixGuiCoordinator
@@ -268,14 +271,14 @@ class NativeToolAgent(
                         }
                     }
                 )
-            )
+            ),
         ) + (if (screenCaptureManager != null) {
             listOf(
                 ToolDefinition(
                     type = "function",
                     function = ToolFunction(
                         name = "read_screen",
-                        description = "捕获当前手机屏幕并通过端侧 OCR 识别其上所有可见文字内容与布局（适用于无障碍树无法读取的自绘界面、小程序、游戏或需要核对画面文字时）",
+                        description = "捕获并读取当前手机屏幕上所有可见元素、文本与输入框（建议在打开应用后、跳转页面后或需要核对界面状态时调用）",
                         parameters = buildJsonObject {
                             put("type", "object")
                             putJsonObject("properties") {
@@ -333,10 +336,12 @@ class NativeToolAgent(
                     val action = IntentAction.LaunchApp(packageName = resolvedPackage)
                     when (val result = intentDispatcher.dispatch(action)) {
                         is DispatchResult.Success -> {
+                            delay(500L)
+                            val screenInfo = captureScreenSummary()
                             ToolExecutionResult(
                                 toolCallId = call.id,
                                 isSuccess = true,
-                                output = "应用 [$appName] 已成功打开并置于前台"
+                                output = "应用 [$appName] 已成功打开并置于前台。$screenInfo"
                             )
                         }
                         else -> {
@@ -362,10 +367,12 @@ class NativeToolAgent(
 
                 when (val result = coordinator.executeTask("点击元素", listOf(action))) {
                     is TaskExecutionResult.Success -> {
+                        delay(400L)
+                        val screenInfo = captureScreenSummary()
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = true,
-                            output = "点击操作完成: ${result.message}"
+                            output = "点击操作完成: ${result.message}。$screenInfo"
                         )
                     }
                     is TaskExecutionResult.Failure -> {
@@ -400,10 +407,12 @@ class NativeToolAgent(
 
                 when (val result = coordinator.executeTask("输入文本", listOf(action))) {
                     is TaskExecutionResult.Success -> {
+                        delay(300L)
+                        val screenInfo = captureScreenSummary()
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = true,
-                            output = "输入操作完成: ${result.message}"
+                            output = "输入操作完成: ${result.message}。$screenInfo"
                         )
                     }
                     is TaskExecutionResult.Failure -> {
@@ -436,10 +445,12 @@ class NativeToolAgent(
 
                 when (val result = coordinator.executeTask("滑动操作", listOf(action))) {
                     is TaskExecutionResult.Success -> {
+                        delay(400L)
+                        val screenInfo = captureScreenSummary()
                         ToolExecutionResult(
                             toolCallId = call.id,
                             isSuccess = true,
-                            output = "滑动操作完成"
+                            output = "滑动操作完成。$screenInfo"
                         )
                     }
                     is TaskExecutionResult.Failure -> {
@@ -492,10 +503,11 @@ class NativeToolAgent(
 
             "read_screen" -> {
                 if (screenCaptureManager == null) {
+                    val accessibilitySummary = captureScreenSummary()
                     ToolExecutionResult(
                         toolCallId = call.id,
-                        isSuccess = false,
-                        output = "屏幕读取不可用：未挂载截屏管理器或当前系统无障碍未就绪"
+                        isSuccess = accessibilitySummary.isNotBlank(),
+                        output = if (accessibilitySummary.isNotBlank()) "屏幕读取完成。$accessibilitySummary" else "屏幕读取不可用：未挂载截屏管理器或当前系统无障碍未就绪"
                     )
                 } else {
                     val frame = screenCaptureManager.captureScreen()
@@ -507,20 +519,19 @@ class NativeToolAgent(
                         )
                     } else {
                         val detections = visualDetector?.detectAll(frame.bytes) ?: emptyList()
-                        if (detections.isEmpty()) {
-                            ToolExecutionResult(
-                                toolCallId = call.id,
-                                isSuccess = true,
-                                output = "屏幕捕获成功，但未识别到任何可见文字（可能为纯图像或画布空白）"
-                            )
+                        val accessibilitySummary = captureScreenSummary()
+                        val ocrText = if (detections.isEmpty()) {
+                            "屏幕捕获成功，但未识别到任何可见文字（可能为纯图像或画布空白）"
                         } else {
                             val formatted = detections.joinToString("\n") { "- 「${it.text}」" }
-                            ToolExecutionResult(
-                                toolCallId = call.id,
-                                isSuccess = true,
-                                output = "屏幕 OCR 识别到 ${detections.size} 项文本：\n$formatted"
-                            )
+                            "屏幕 OCR 识别到 ${detections.size} 项文本：\n$formatted"
                         }
+                        val combined = if (accessibilitySummary.isNotBlank()) "$ocrText\n$accessibilitySummary" else ocrText
+                        ToolExecutionResult(
+                            toolCallId = call.id,
+                            isSuccess = true,
+                            output = combined
+                        )
                     }
                 }
             }
@@ -679,6 +690,35 @@ class NativeToolAgent(
 
     suspend fun executeToolCalls(calls: List<ToolCall>): List<ToolExecutionResult> {
         return calls.map { executeToolCall(it) }
+    }
+
+    private fun captureScreenSummary(): String {
+        val service = AccessibilityServiceHolder.get() ?: return ""
+        val root = service.rootInActiveWindow ?: return ""
+        val pkg = root.packageName?.toString().orEmpty()
+        val elements = mutableListOf<String>()
+
+        fun walk(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 8 || elements.size >= 25) return
+            val text = node.text?.toString()?.trim()
+            val desc = node.contentDescription?.toString()?.trim()
+            val label = if (!text.isNullOrBlank()) text else desc
+            if (!label.isNullOrBlank()) {
+                val tag = when {
+                    node.isEditable -> "输入框"
+                    node.isClickable -> "按钮"
+                    else -> "文字"
+                }
+                elements.add("[$tag] \"$label\"")
+            }
+            for (i in 0 until node.childCount) {
+                walk(node.getChild(i), depth + 1)
+            }
+        }
+        walk(root, 0)
+        val distinctElements = elements.distinct()
+        if (distinctElements.isEmpty()) return if (pkg.isNotBlank()) "\n【当前前台: $pkg】" else ""
+        return "\n【当前前台: $pkg，屏幕可见元素】\n" + distinctElements.take(15).joinToString("\n") { "• $it" }
     }
 
     companion object {

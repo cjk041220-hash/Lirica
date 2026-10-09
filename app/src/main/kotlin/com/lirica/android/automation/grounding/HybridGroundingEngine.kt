@@ -34,10 +34,12 @@ class HybridGroundingEngineImpl(
         val safeW = screenWidth
         val safeH = screenHeight
 
-        val visibleNodes = tree?.filter { it.isVisibleToUser } ?: emptyList()
+        val visibleNodes = tree?.filter { it.isVisibleToUser || (it.bounds.width > 0 && it.bounds.height > 0) } ?: emptyList()
 
         val exactMatches = mutableListOf<UiElementNode>()
         val fuzzyMatches = mutableListOf<UiElementNode>()
+
+        val isGenericInputQuery = !query.text.isNullOrBlank() && query.text.trim().lowercase() in listOf("输入框", "输入", "搜索框", "编辑框", "文本框", "input", "edittext")
 
         for (node in visibleNodes) {
             // Check exact resource ID
@@ -48,6 +50,13 @@ class HybridGroundingEngineImpl(
 
             val nodeText = node.text ?: ""
             val nodeDesc = node.contentDescription ?: ""
+            val nodeRes = node.resourceId ?: ""
+
+            // 通用输入框语义容错：当模型指定点击/键入"输入框"时，自动匹配当前界面上的可编辑文本框
+            if (isGenericInputQuery && (node.isEditable || node.className?.contains("EditText", ignoreCase = true) == true)) {
+                fuzzyMatches.add(node)
+                continue
+            }
 
             // Check exact text/description match
             if (!query.text.isNullOrBlank()) {
@@ -55,6 +64,9 @@ class HybridGroundingEngineImpl(
                     exactMatches.add(node)
                     continue
                 } else if (nodeText.contains(query.text, ignoreCase = true) || nodeDesc.contains(query.text, ignoreCase = true)) {
+                    fuzzyMatches.add(node)
+                    continue
+                } else if (query.text.contains("搜索") && (nodeRes.contains("search", ignoreCase = true) || nodeDesc.contains("search", ignoreCase = true))) {
                     fuzzyMatches.add(node)
                     continue
                 }

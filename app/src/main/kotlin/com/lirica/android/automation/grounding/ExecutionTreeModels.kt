@@ -68,6 +68,7 @@ fun List<ExecutionNode>.toUiElementNodes(): List<UiElementNode> {
                 className = node.className,
                 bounds = node.bounds,
                 isClickable = node.isClickable,
+                isEditable = node.isEditable,
                 isVisibleToUser = node.isVisibleToUser
             )
         }

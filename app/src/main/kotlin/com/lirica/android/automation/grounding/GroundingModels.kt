@@ -24,6 +24,7 @@ data class UiElementNode(
     val className: String? = null,
     val bounds: ElementBounds,
     val isClickable: Boolean = true,
+    val isEditable: Boolean = false,
     val isVisibleToUser: Boolean = true
 )
 
