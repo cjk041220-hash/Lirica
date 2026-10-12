@@ -220,4 +220,39 @@ class HybridMemoryRetrieverTest {
         retriever.recomputeAllVectors()
         assertEquals(2, vectorStore.size())
     }
+
+    @Test
+    fun testHybridRetrieval_recallsCoreStatusMemories_andSparseMatches() = runBlocking {
+        val coreMemory = UserMemoryEntity(
+            id = "core_1",
+            content = "核心人设事实：程序员且喜爱古典纯音乐",
+            status = UserMemoryEntity.STATUS_CORE,
+            createdAt = 1000L
+        )
+
+        val keywordMemory = UserMemoryEntity(
+            id = "kw_1",
+            content = "用户周三要交开题报告论文",
+            status = UserMemoryEntity.STATUS_ACTIVE,
+            createdAt = 2000L
+        )
+
+        userMemoryDao.insert(coreMemory)
+        userMemoryDao.insert(keywordMemory)
+
+        // 仅把无关记忆加入向量库，模拟关键词记忆未入向量 top-K
+        val dummyMemory = UserMemoryEntity(
+            id = "dummy_1",
+            content = "今天吃了一顿丰盛的火锅烧烤",
+            status = UserMemoryEntity.STATUS_ACTIVE,
+            createdAt = 3000L
+        )
+        userMemoryDao.insert(dummyMemory)
+        retriever.indexMemory(dummyMemory)
+
+        val results = retriever.retrieve(query = "开题报告", topK = 5)
+        assertTrue("字面 2-gram 命中开题报告的记忆必须被真混合检索召回", results.any { it.id == "kw_1" })
+        assertTrue("STATUS_CORE 核心画像记忆必须被保障性召回", results.any { it.id == "core_1" })
+    }
+
 }

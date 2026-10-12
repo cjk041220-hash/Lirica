@@ -210,4 +210,53 @@ class HybridGroundingEngineTest {
         assertEquals(200f, found.bounds.left, 0.1f)
         assertEquals(900f, found.bounds.top, 0.1f)
     }
+
+    @Test
+    fun testLocate_parentChildOverlappingExactMatches_collapsesToSingleFound() = runTest {
+        // 模拟华为设置列表项：外层 LinearLayout (isClickable=true) 与内层 TextView (isClickable=false) 同具"系统和更新"
+        val parentContainer = UiElementNode(
+            text = "系统和更新",
+            bounds = ElementBounds(0, 1000, 1080, 1200),
+            isClickable = true
+        )
+        val childTextView = UiElementNode(
+            text = "系统和更新",
+            bounds = ElementBounds(60, 1040, 400, 1160),
+            isClickable = false
+        )
+        val tree = listOf(parentContainer, childTextView)
+
+        val query = GroundingQuery(text = "系统和更新")
+        val result = engine.locate(query, tree, null, screenWidth, screenHeight)
+
+        // 应空间层叠收拢为可交互的外层容器，而非报错 Ambiguous
+        assertTrue(result is GroundingResult.Found)
+        val found = result as GroundingResult.Found
+        assertEquals(parentContainer, found.refNode)
+        assertEquals(0.95f, found.confidence, 0.01f)
+    }
+
+    @Test
+    fun testLocate_parentChildOverlappingFuzzyMatches_collapsesToSingleFound() = runTest {
+        coEvery { visualDetector.detect(any(), any()) } returns null
+        // 模拟搜索栏：外层卡片与内层图标均模糊匹配"搜索"
+        val searchCard = UiElementNode(
+            contentDescription = "搜索设置项",
+            bounds = ElementBounds(40, 100, 1040, 220),
+            isClickable = true
+        )
+        val searchIcon = UiElementNode(
+            contentDescription = "搜索图标按钮",
+            bounds = ElementBounds(60, 120, 140, 200),
+            isClickable = false
+        )
+        val tree = listOf(searchCard, searchIcon)
+
+        val query = GroundingQuery(text = "搜索")
+        val result = engine.locate(query, tree, null, screenWidth, screenHeight)
+
+        assertTrue(result is GroundingResult.Found)
+        val found = result as GroundingResult.Found
+        assertEquals(searchCard, found.refNode)
+    }
 }

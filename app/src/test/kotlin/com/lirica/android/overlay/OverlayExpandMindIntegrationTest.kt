@@ -217,4 +217,92 @@ class OverlayExpandMindIntegrationTest {
         val state = viewModel.uiState.value
         assertTrue(state.streamingReply.contains("晴天"))
     }
+
+    @Test
+    fun testOverlayQuickMessage_preservesChronologicalOrderAndUpdatesMemoryHitAndOpenLoop() = runTest {
+        val proactiveCoordinator = mockk<com.lirica.android.proactivity.ProactiveBubbleCoordinator>(relaxed = true)
+        val recalledMem = com.lirica.android.database.entity.UserMemoryEntity(
+            id = "mem_101",
+            content = "用户明天下午有科目三考试",
+            category = "计划",
+            importance = 9,
+            createdAt = 1000L
+        )
+
+        // 模拟 DAO 按正序返回前两轮对话（旧 -> 新）
+        val msg1 = ChatDialogueEntity(
+            id = 1L,
+            sessionId = OverlayExpandViewModel.OVERLAY_SESSION_ID,
+            role = ChatDialogueEntity.ROLE_USER,
+            content = "我明天下午要考科目三",
+            timestamp = 1000L
+        )
+        val msg2 = ChatDialogueEntity(
+            id = 2L,
+            sessionId = OverlayExpandViewModel.OVERLAY_SESSION_ID,
+            role = ChatDialogueEntity.ROLE_ASSISTANT,
+            content = "加油哦，放轻松一定没问题的！",
+            timestamp = 2000L
+        )
+        coEvery { chatDialogueDao.getRecentBySession(OverlayExpandViewModel.OVERLAY_SESSION_ID, any()) } returns listOf(msg1, msg2)
+        coEvery { memoryManager.retrieve(any(), any(), any(), any()) } returns listOf(recalledMem)
+        coEvery { memoryManager.assembleDynamicContext(any(), any(), any(), any(), any(), any(), any()) } returns "记忆上下文"
+
+        val historySlot = slot<List<ChatMessage>>()
+        every {
+            phiMiddleware.assemble(
+                characterCard = any(),
+                dynamicContext = any(),
+                historyMessages = capture(historySlot),
+                moodState = any(),
+                sessionId = any(),
+                charName = any(),
+                turnCount = any(),
+                includeToolPersonaContract = any()
+            )
+        } returns listOf(ChatMessage(role = "user", content = "我考完科目三啦，一把过！"))
+
+        every { llmClient.streamChat(any(), any(), any()) } returns flowOf(LlmStreamEvent.Token("太厉害了！恭喜你！"))
+        every { humannessFilter.filter(any(), any()) } returns HumannessFilter.FilterResult(
+            passed = true,
+            originalText = "太厉害了！恭喜你！",
+            filteredText = "太厉害了！恭喜你！",
+            violations = emptyList(),
+            isRewritten = false
+        )
+
+        val viewModel = OverlayExpandViewModel(
+            unspokenThoughtDao = unspokenThoughtDao,
+            emotionEngine = emotionEngine,
+            llmClient = llmClient,
+            memoryManager = memoryManager,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            proactiveCoordinator = proactiveCoordinator,
+            chatDialogueDao = chatDialogueDao,
+            toolAgent = toolAgent,
+            memoryExtractor = memoryExtractor
+        )
+
+        viewModel.sendQuickMessage("我考完科目三啦，一把过！")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // 1. 验证历史上下文严格保持从旧到新的正序排列（绝不颠倒）
+        val assembledHistory = historySlot.captured
+        assertEquals(3, assembledHistory.size)
+        assertEquals("我明天下午要考科目三", assembledHistory[0].content)
+        assertEquals("加油哦，放轻松一定没问题的！", assembledHistory[1].content)
+        assertEquals("我考完科目三啦，一把过！", assembledHistory[2].content)
+
+        // 2. 验证开环闭环核销被触发
+        coVerify(exactly = 1) {
+            proactiveCoordinator.resolveOpenLoopsMentionedIn("我考完科目三啦，一把过！")
+        }
+
+        // 3. 验证召回记忆的命中计数与使用时间被回写
+        coVerify(exactly = 1) {
+            memoryManager.recordMemoryHit("mem_101", any(), any())
+            memoryManager.markMemoryUsed("mem_101", any())
+        }
+    }
 }

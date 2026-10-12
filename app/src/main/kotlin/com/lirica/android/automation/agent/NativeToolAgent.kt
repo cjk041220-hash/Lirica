@@ -3,6 +3,7 @@ package com.lirica.android.automation.agent
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.lirica.android.automation.backend.KeycodeMapper
+import com.lirica.android.common.logging.LiricaLog
 import com.lirica.android.perception.AccessibilityServiceHolder
 import kotlinx.coroutines.delay
 import com.lirica.android.automation.capture.ScreenCaptureManager
@@ -62,6 +63,8 @@ class NativeToolAgent(
      */
     private val lifeTools: List<LifeTool> = emptyList(),
     private val timeProvider: () -> Long = { System.currentTimeMillis() },
+    private val screenWidthProvider: (() -> Int)? = null,
+    private val screenHeightProvider: (() -> Int)? = null,
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true }
 ) {
 
@@ -227,13 +230,13 @@ class NativeToolAgent(
                 type = "function",
                 function = ToolFunction(
                     name = "execute_macro",
-                    description = "连续执行一组预定义的原子动作列表（动作分块 Action Chunking），单轮指令下发多步点击、输入、滑动、按键或延迟，大幅削减交互往返时延",
+                    description = "执行多步自动化操作或启动自主动态闭环。若只需达成高阶目标（如'在应用内搜索xxx'），可直接在 description 中给出目标并不传 actions，系统将自动进入具备观察、决策、核销与自愈能力的单步动态闭环；若已知具体原子动作序列，亦可传入 actions 列表",
                     parameters = buildJsonObject {
                         put("type", "object")
                         putJsonObject("properties") {
                             putJsonObject("description") {
                                 put("type", "string")
-                                put("description", "本次宏操作的目标总结")
+                                put("description", "本次代行操作的高阶目标或总结（不传 actions 时作为动态闭环的核心目标）")
                             }
                             putJsonObject("actions") {
                                 put("type", "array")
@@ -276,7 +279,7 @@ class NativeToolAgent(
                             }
                         }
                         putJsonArray("required") {
-                            add(JsonPrimitive("actions"))
+                            add(JsonPrimitive("description"))
                         }
                     }
                 )
@@ -304,11 +307,13 @@ class NativeToolAgent(
     }
 
     suspend fun executeToolCall(call: ToolCall): ToolExecutionResult {
+        LiricaLog.i("NativeToolAgent", "开始执行工具: ${call.name}, 参数: ${call.arguments}")
         val args = runCatching {
             json.parseToJsonElement(call.arguments) as? JsonObject
         }.getOrNull()
 
         if (args == null) {
+            LiricaLog.w("NativeToolAgent", "工具参数解析失败: ${call.name}, raw=${call.arguments}")
             return ToolExecutionResult(
                 toolCallId = call.id,
                 isSuccess = false,
@@ -345,8 +350,7 @@ class NativeToolAgent(
                     val action = IntentAction.LaunchApp(packageName = resolvedPackage)
                     when (val result = intentDispatcher.dispatch(action)) {
                         is DispatchResult.Success -> {
-                            delay(500L)
-                            val screenInfo = captureScreenSummary()
+                            val screenInfo = awaitPackageSettling(resolvedPackage)
                             ToolExecutionResult(
                                 toolCallId = call.id,
                                 isSuccess = true,
@@ -366,8 +370,24 @@ class NativeToolAgent(
 
             "click_element" -> {
                 val index = args["index"]?.jsonPrimitive?.intOrNull
+                    ?: args["index"]?.jsonPrimitive?.content?.toIntOrNull()
                 val rawText = args["text"]?.jsonPrimitive?.content
+                    ?: args["target_text"]?.jsonPrimitive?.content
+                    ?: args["target"]?.jsonPrimitive?.content
+                    ?: args["name"]?.jsonPrimitive?.content
+                    ?: args["query"]?.jsonPrimitive?.content
+                    ?: args["element"]?.jsonPrimitive?.content
+                    ?: args["label"]?.jsonPrimitive?.content
+                    ?: args["content"]?.jsonPrimitive?.content
                 val resourceId = args["resource_id"]?.jsonPrimitive?.content
+                    ?: args["target_resource_id"]?.jsonPrimitive?.content
+                    ?: args["id"]?.jsonPrimitive?.content
+                    ?: args["view_id"]?.jsonPrimitive?.content
+
+                // 若指定了 index 但缓存尚未建立，立即现场捕获当前屏幕元素
+                if (index != null && lastIndexedElements.isEmpty()) {
+                    captureScreenSummary()
+                }
 
                 val indexed = if (index != null && index in 1..lastIndexedElements.size) {
                     lastIndexedElements[index - 1]
@@ -378,7 +398,17 @@ class NativeToolAgent(
                 val targetAnchorX = indexed?.normalizedCenterX
                 val targetAnchorY = indexed?.normalizedCenterY
 
-                val desc = args["description"]?.jsonPrimitive?.content ?: "点击元素 ${targetText ?: targetRes ?: "index $index"}"
+                if (targetText == null && targetRes == null && targetAnchorX == null) {
+                    val screenInfo = captureScreenSummary()
+                    return ToolExecutionResult(
+                        toolCallId = call.id,
+                        isSuccess = false,
+                        output = "点击操作失败: 未能解析目标元素（请提供有效的 index 编号或 text 文本）。$screenInfo"
+                    )
+                }
+
+                val desc = args["description"]?.jsonPrimitive?.content
+                    ?: "点击元素 ${targetText ?: targetRes ?: "index $index"}"
 
                 val action = CoordinatorAction.Click(
                     query = GroundingQuery(
@@ -420,15 +450,37 @@ class NativeToolAgent(
             }
 
             "input_text" -> {
-                val text = args["text"]?.jsonPrimitive?.content ?: ""
+                val text = args["text"]?.jsonPrimitive?.content
+                    ?: args["content"]?.jsonPrimitive?.content
+                    ?: args["input"]?.jsonPrimitive?.content
+                    ?: args["value"]?.jsonPrimitive?.content
+                    ?: ""
                 val index = args["index"]?.jsonPrimitive?.intOrNull
+                    ?: args["index"]?.jsonPrimitive?.content?.toIntOrNull()
+
+                if (index != null && lastIndexedElements.isEmpty()) {
+                    captureScreenSummary()
+                }
 
                 val indexed = if (index != null && index in 1..lastIndexedElements.size) {
                     lastIndexedElements[index - 1]
                 } else null
 
-                val targetText = indexed?.label ?: args["target_text"]?.jsonPrimitive?.content
-                val targetResourceId = indexed?.resourceId ?: args["target_resource_id"]?.jsonPrimitive?.content
+                val targetResourceId = indexed?.resourceId
+                    ?: args["target_resource_id"]?.jsonPrimitive?.content
+                    ?: args["resource_id"]?.jsonPrimitive?.content
+                    ?: args["id"]?.jsonPrimitive?.content
+
+                // 当模型只传了待输入文本 text 而未指定 target_text / index 时，
+                // 默认指向"输入框"，由 HybridGroundingEngine 自动匹配当前活动或可见 EditText，
+                // 彻底消除 GroundingQuery(text=null, ...) 报错！
+                val targetText = indexed?.label
+                    ?: args["target_text"]?.jsonPrimitive?.content
+                    ?: args["target"]?.jsonPrimitive?.content
+                    ?: args["query"]?.jsonPrimitive?.content
+                    ?: args["element"]?.jsonPrimitive?.content
+                    ?: if (indexed == null && targetResourceId == null) "输入框" else null
+
                 val targetAnchorX = indexed?.normalizedCenterX
                 val targetAnchorY = indexed?.normalizedCenterY
 
@@ -550,11 +602,20 @@ class NativeToolAgent(
                 } else {
                     val frame = screenCaptureManager.captureScreen()
                     if (frame == null) {
-                        ToolExecutionResult(
-                            toolCallId = call.id,
-                            isSuccess = false,
-                            output = "未能成功捕获屏幕（可能处于金融隐私敏感应用或无障碍截屏未授权）"
-                        )
+                        val accessibilitySummary = captureScreenSummary()
+                        if (accessibilitySummary.isNotBlank()) {
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = true,
+                                output = "屏幕读取完成（无障碍节点树扫描）：$accessibilitySummary"
+                            )
+                        } else {
+                            ToolExecutionResult(
+                                toolCallId = call.id,
+                                isSuccess = false,
+                                output = "未能成功捕获屏幕（可能处于金融隐私敏感应用或无障碍截屏未授权）"
+                            )
+                        }
                     } else {
                         val detections = visualDetector?.detectAll(frame.bytes) ?: emptyList()
                         val accessibilitySummary = captureScreenSummary()
@@ -621,16 +682,25 @@ class NativeToolAgent(
                         }
                         val type = actObj["type"]?.jsonPrimitive?.content?.lowercase() ?: ""
                         val targetText = actObj["target_text"]?.jsonPrimitive?.content
+                            ?: actObj["target"]?.jsonPrimitive?.content
+                            ?: actObj["query"]?.jsonPrimitive?.content
                         val targetResId = actObj["target_resource_id"]?.jsonPrimitive?.content
-                        val query = GroundingQuery(text = targetText, resourceId = targetResId)
+                            ?: actObj["resource_id"]?.jsonPrimitive?.content
+                            ?: actObj["id"]?.jsonPrimitive?.content
 
                         when (type) {
                             "click" -> {
-                                val desc = "点击 ${targetText ?: targetResId ?: "元素"}"
+                                val resolvedClickText = targetText ?: actObj["text"]?.jsonPrimitive?.content
+                                val query = GroundingQuery(text = resolvedClickText, resourceId = targetResId)
+                                val desc = "点击 ${resolvedClickText ?: targetResId ?: "元素"}"
                                 coordinatorActions.add(CoordinatorAction.Click(query, desc))
                             }
                             "type" -> {
-                                val text = actObj["text"]?.jsonPrimitive?.content ?: ""
+                                val text = actObj["text"]?.jsonPrimitive?.content
+                                    ?: actObj["content"]?.jsonPrimitive?.content
+                                    ?: ""
+                                val resolvedTypeTarget = targetText ?: if (targetResId == null) "输入框" else null
+                                val query = GroundingQuery(text = resolvedTypeTarget, resourceId = targetResId)
                                 coordinatorActions.add(CoordinatorAction.Type(query, text, "输入「$text」"))
                             }
                             "press_key" -> {
@@ -741,6 +811,28 @@ class NativeToolAgent(
 
     private var lastIndexedElements = listOf<IndexedScreenElement>()
 
+    /**
+     * 智能页面就绪等待：解决切屏后 500ms 盲拍白屏/桌面残留问题，
+     * 轮询等待目标包名进入前台且根节点完成初步首屏布局再捕获屏幕摘要。
+     */
+    private suspend fun awaitPackageSettling(targetPackage: String, maxWaitMs: Long = 2500L): String {
+        val start = timeProvider()
+        delay(300L)
+        while (timeProvider() - start < maxWaitMs) {
+            val service = AccessibilityServiceHolder.get() ?: break
+            val root = service.rootInActiveWindow
+            val currentPkg = root?.packageName?.toString().orEmpty()
+            if (currentPkg.isNotBlank() && (targetPackage.isBlank() || currentPkg == targetPackage)) {
+                if (root.childCount > 0) {
+                    delay(200L)
+                    break
+                }
+            }
+            delay(150L)
+        }
+        return captureScreenSummary()
+    }
+
     private fun captureScreenSummary(): String {
         val service = AccessibilityServiceHolder.get() ?: return ""
         val root = service.rootInActiveWindow ?: return ""
@@ -748,18 +840,27 @@ class NativeToolAgent(
         val rawElements = mutableListOf<IndexedScreenElement>()
         val tempRect = android.graphics.Rect()
         val dm = service.resources.displayMetrics
-        val sw = kotlin.math.max(1, dm.widthPixels)
-        val sh = kotlin.math.max(1, dm.heightPixels)
+        val sw = kotlin.math.max(1, screenWidthProvider?.invoke()?.takeIf { it > 0 } ?: dm.widthPixels)
+        val sh = kotlin.math.max(1, screenHeightProvider?.invoke()?.takeIf { it > 0 } ?: dm.heightPixels)
 
         fun walk(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > 8 || rawElements.size >= 30) return
+            if (node == null || depth > 12 || rawElements.size >= 60) return
             val text = node.text?.toString()?.trim()
             val desc = node.contentDescription?.toString()?.trim()
-            val label = if (!text.isNullOrBlank()) text else desc
+            val idName = node.viewIdResourceName?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+
+            val label = when {
+                !text.isNullOrBlank() -> text
+                !desc.isNullOrBlank() -> desc
+                node.isEditable -> "输入框"
+                node.isClickable && idName != null -> "图标($idName)"
+                else -> null
+            }
+
             if (!label.isNullOrBlank()) {
                 node.getBoundsInScreen(tempRect)
-                val cx = if (tempRect.width() > 0) ((tempRect.centerX().toFloat() / sw) * 1000).toInt() else null
-                val cy = if (tempRect.height() > 0) ((tempRect.centerY().toFloat() / sh) * 1000).toInt() else null
+                val cx = if (tempRect.width() > 0) ((tempRect.centerX().toFloat() / sw) * 1000).toInt().coerceIn(0, 1000) else null
+                val cy = if (tempRect.height() > 0) ((tempRect.centerY().toFloat() / sh) * 1000).toInt().coerceIn(0, 1000) else null
                 val tag = when {
                     node.isEditable -> "输入框"
                     node.isClickable -> "按钮"
@@ -781,14 +882,30 @@ class NativeToolAgent(
             }
         }
         walk(root, 0)
-        // 按标签去重保留唯一项并赋予自增编号 1..N
-        val uniqueElements = rawElements.distinctBy { it.label }
-            .take(15)
+
+        // 空间去重：若两项标签相同且中心坐标相近，仅保留一项；若标签相同但在不同空间位置，保留各自编号
+        val uniqueElements = mutableListOf<IndexedScreenElement>()
+        for (elem in rawElements) {
+            val isDuplicate = uniqueElements.any { u ->
+                u.label == elem.label && (
+                    elem.normalizedCenterX == null || u.normalizedCenterX == null ||
+                        elem.normalizedCenterY == null || u.normalizedCenterY == null ||
+                        (kotlin.math.abs(u.normalizedCenterX - elem.normalizedCenterX) < 60 &&
+                            kotlin.math.abs(u.normalizedCenterY - elem.normalizedCenterY) < 60)
+                    )
+            }
+            if (!isDuplicate) {
+                uniqueElements.add(elem)
+            }
+        }
+
+        val finalElements = uniqueElements
+            .take(25)
             .mapIndexed { idx, elem -> elem.copy(index = idx + 1) }
 
-        lastIndexedElements = uniqueElements
-        if (uniqueElements.isEmpty()) return if (pkg.isNotBlank()) "\n【当前前台: $pkg】" else ""
-        return "\n【当前前台: $pkg，屏幕可见元素】\n" + uniqueElements.joinToString("\n") { "• [${it.index}] [${it.tag}] \"${it.label}\"" }
+        lastIndexedElements = finalElements
+        if (finalElements.isEmpty()) return if (pkg.isNotBlank()) "\n【当前前台: $pkg】" else ""
+        return "\n【当前前台: $pkg，屏幕可见元素】\n" + finalElements.joinToString("\n") { "• [${it.index}] [${it.tag}] \"${it.label}\"" }
     }
 
     companion object {

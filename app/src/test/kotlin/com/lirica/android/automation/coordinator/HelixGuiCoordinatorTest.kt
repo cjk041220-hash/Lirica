@@ -888,5 +888,87 @@ class HelixGuiCoordinatorTest {
         assertTrue("取消必须写入共享信号（闭环据此停止派发）", signal.get())
         assertEquals(TaskExecutionResult.Cancelled, deferred.await())
     }
+
+    @Test
+    fun testClickAction_emitsTouchTraceToRegisteredFeedbackListener() = runTest {
+        val capturedEvents = mutableListOf<com.lirica.android.automation.feedback.ActionVisualFeedback>()
+        coordinator.registerFeedbackListener { event ->
+            capturedEvents.add(event)
+        }
+
+        val mockNodes = listOf(
+            createMockNode("1", "普通按钮", "android.widget.Button", ElementBounds(100, 200, 300, 400), isClickable = true)
+        )
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.example.app",
+            activityName = "MainActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 5L
+        )
+        coEvery { groundingEngine.locate(any(), any(), any(), any(), any()) } returns GroundingResult.Found(
+            targetPoint = Point2D(200f, 300f),
+            bounds = NormalizedRect(100f, 200f, 300f, 400f),
+            source = GroundingSource.ACCESSIBILITY_EXACT,
+            confidence = 1.0f,
+            refNode = UiElementNode(
+                className = "android.widget.Button",
+                text = "普通按钮",
+                bounds = ElementBounds(100, 200, 300, 400)
+            )
+        )
+        coEvery { gestureExecutor.execute(any(), any()) } returns GestureResult.Completed(50L)
+
+        val result = coordinator.executeTask(
+            "点击普通按钮",
+            listOf(CoordinatorAction.Click(GroundingQuery(text = "普通按钮"), "点一下"))
+        )
+        assertTrue(result is TaskExecutionResult.Success)
+
+        val touchTraces = capturedEvents.filterIsInstance<com.lirica.android.automation.feedback.ActionVisualFeedback.TouchTrace>()
+        assertEquals("点击动作必须抛出 TouchTrace 反馈供悬浮窗/手势层渲染", 1, touchTraces.size)
+        assertEquals(200f, touchTraces[0].startX, 0.01f)
+        assertEquals(300f, touchTraces[0].startY, 0.01f)
+        assertEquals(com.lirica.android.automation.feedback.TouchKind.TAP, touchTraces[0].kind)
+    }
+
+    @Test
+    fun testSecurityGate_detectsContentDescriptionWhenTextIsNull() = runTest {
+        val mockNodes = listOf(
+            createMockNode("1", null, "android.widget.ImageButton", ElementBounds(100, 200, 300, 400), isClickable = true)
+        )
+        coEvery { treeExtractor.dumpTree(any(), any(), any(), any(), any()) } returns TreeDumpResult.Ok(
+            packageName = "com.example.app",
+            activityName = "MainActivity",
+            nodes = mockNodes,
+            totalDiscovered = 1,
+            isTruncated = false,
+            omittedCount = 0,
+            dumpDurationMs = 5L
+        )
+        // text 为 null，仅在 contentDescription 标注"密码确认"
+        coEvery { groundingEngine.locate(any(), any(), any(), any(), any()) } returns GroundingResult.Found(
+            targetPoint = Point2D(200f, 300f),
+            bounds = NormalizedRect(100f, 200f, 300f, 400f),
+            source = GroundingSource.ACCESSIBILITY_EXACT,
+            confidence = 1.0f,
+            refNode = UiElementNode(
+                className = "android.widget.ImageButton",
+                text = null,
+                contentDescription = "支付密码输入区",
+                bounds = ElementBounds(100, 200, 300, 400)
+            )
+        )
+
+        val result = coordinator.executeTask(
+            "点击密码区",
+            listOf(CoordinatorAction.Click(GroundingQuery(semanticDescription = "支付密码输入区"), "点击"))
+        )
+
+        assertTrue("即使 text=null，contentDescription 含密码也必须触发物理熔断", result is TaskExecutionResult.Failure)
+        coVerify(exactly = 0) { gestureExecutor.execute(any(), any()) }
+    }
 }
 

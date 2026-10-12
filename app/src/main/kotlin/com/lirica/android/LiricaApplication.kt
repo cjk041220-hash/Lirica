@@ -587,6 +587,8 @@ class LiricaApplication : Application() {
             screenCaptureManager = screenCaptureManager,
             visualDetector = visualDetector,
             packageResolver = packageResolver,
+            screenWidthProvider = screenWidthProvider,
+            screenHeightProvider = screenHeightProvider,
             // 生活工具挂载：天气（Open-Meteo，免 Key）+ 日程（create_event/list_events，
             // 落 scheduled_alarms 表并注册系统闹钟）。后续搜索等按同一 LifeTool
             // 契约追加，不动 agent 主体

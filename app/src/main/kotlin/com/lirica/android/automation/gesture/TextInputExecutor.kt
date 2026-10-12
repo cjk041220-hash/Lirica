@@ -153,7 +153,10 @@ class TextInputExecutor(
                 return rejected
             }
             delay(100)
-            val pasteSuccess = node?.performAction(AccessibilityNodeInfo.ACTION_PASTE) ?: false
+            val targetPasteNode = node ?: runCatching {
+                com.lirica.android.perception.AccessibilityServiceHolder.get()?.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            }.getOrNull()
+            val pasteSuccess = targetPasteNode?.performAction(AccessibilityNodeInfo.ACTION_PASTE) ?: false
             if (pasteSuccess) {
                 TextInputResult.Success.also { lastResult = it }
             } else {

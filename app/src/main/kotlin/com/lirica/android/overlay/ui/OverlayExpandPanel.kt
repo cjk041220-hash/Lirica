@@ -42,12 +42,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lirica.android.database.entity.ChatDialogueEntity
 import com.lirica.android.emotion.model.MoodState
 
 /**
  * 悬浮伴生体半展开与快速交互面板 (Overlay Expand Panel)
  *
- * 紧凑轻量，无需离开当前 App 即可与 Lirica 快速沟通、查看即时回复并支持快捷切换到主程序。
+ * 紧凑轻量，无需离开当前 App 即可与 Lirica 快速沟通、实时同步 App 对话（展示最近两三句）并支持快捷切换到主程序。
  */
 @Composable
 fun OverlayExpandPanel(
@@ -58,6 +59,7 @@ fun OverlayExpandPanel(
     streamingReply: String,
     errorMessage: String?,
     modifier: Modifier = Modifier,
+    recentMessages: List<ChatDialogueEntity> = emptyList(),
     onInputChanged: (String) -> Unit = {},
     onSendMessage: (String) -> Unit = {},
     onCloseClick: () -> Unit = {},
@@ -212,36 +214,89 @@ fun OverlayExpandPanel(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 对话展示区 (若有流式回复或错误提示)
-                if (streamingReply.isNotBlank() || isStreaming) {
+                // 紧凑迷你同步对话流 (只展示最近两三句，面积可控极低遮挡)
+                val displayHistory = recentMessages.takeLast(3)
+                if (displayHistory.isNotEmpty() || streamingReply.isNotBlank() || isStreaming) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 140.dp)
+                            .heightIn(min = 40.dp, max = 150.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF262B3A))
-                            .padding(10.dp)
+                            .background(Color(0xFF1B1E29))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        Column {
-                            Text(
-                                text = streamingReply.ifBlank { "Lirica 正在思考..." },
-                                fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.9f),
-                                lineHeight = 17.sp
-                            )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            displayHistory.forEach { msg ->
+                                val isUser = msg.role == ChatDialogueEntity.ROLE_USER
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .widthIn(max = 240.dp)
+                                            .clip(
+                                                RoundedCornerShape(
+                                                    topStart = 10.dp,
+                                                    topEnd = 10.dp,
+                                                    bottomStart = if (isUser) 10.dp else 2.dp,
+                                                    bottomEnd = if (isUser) 2.dp else 10.dp
+                                                )
+                                            )
+                                            .background(
+                                                if (isUser) Color(0xFF313F5B) else Color(0xFF252A37)
+                                            )
+                                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = msg.content,
+                                            fontSize = 11.sp,
+                                            color = Color.White.copy(alpha = 0.95f),
+                                            lineHeight = 15.sp
+                                        )
+                                    }
+                                }
+                            }
 
-                            if (isStreaming) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    color = colorA,
-                                    strokeWidth = 1.5.dp
-                                )
+                            // 正在流式打字机生成的当前回复
+                            if (isStreaming || (streamingReply.isNotBlank() && displayHistory.none { it.content == streamingReply })) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .widthIn(max = 240.dp)
+                                            .clip(RoundedCornerShape(10.dp, 10.dp, 10.dp, 2.dp))
+                                            .background(Color(0xFF252A37))
+                                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = streamingReply.ifBlank { "Lirica 正在思考..." },
+                                                fontSize = 11.sp,
+                                                color = Color.White.copy(alpha = 0.95f),
+                                                lineHeight = 15.sp
+                                            )
+                                            if (isStreaming) {
+                                                Spacer(modifier = Modifier.height(3.dp))
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(10.dp),
+                                                    color = colorA,
+                                                    strokeWidth = 1.2.dp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 if (errorMessage != null) {

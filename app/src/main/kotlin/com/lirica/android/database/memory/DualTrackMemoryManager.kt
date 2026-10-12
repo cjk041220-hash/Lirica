@@ -72,7 +72,7 @@ class DualTrackMemoryManager(
         moodValence: Float? = null,
         nowTs: Long = System.currentTimeMillis()
     ): List<UserMemoryEntity> {
-        val allActive = userMemoryDao.getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 200)
+        val allActive = userMemoryDao.getActiveAndCoreList(limit = 200)
         if (allActive.isEmpty()) return emptyList()
 
         data class ScoredMemory(

@@ -83,6 +83,9 @@ interface HelixGuiCoordinator {
     fun confirmPendingAction(token: String): Boolean
     fun cancelCurrentTask()
 
+    /** 注册具身视觉反馈监听（悬浮窗或具身渲染层接入） */
+    fun registerFeedbackListener(listener: com.lirica.android.automation.feedback.ActionVisualFeedbackListener)
+
     companion object {
         const val MAX_STEPS = 12
     }
@@ -574,7 +577,7 @@ class HelixGuiCoordinatorImpl(
     // =====================================================================
 
     /** 注册额外反馈监听（悬浮窗接入用；订阅者异常由 Hub 隔离，绝不击穿执行链路） */
-    fun registerFeedbackListener(listener: ActionVisualFeedbackListener) {
+    override fun registerFeedbackListener(listener: ActionVisualFeedbackListener) {
         feedbackHub.register(listener)
     }
 
@@ -703,19 +706,40 @@ class HelixGuiCoordinatorImpl(
 
         // 3. 智能滚屏搜寻（Scroll-and-Search，对齐 Mobile-Agent 核心机制）：
         // 当目标元素未在当前首屏可视区（如设置页底部的'系统和更新'或长列表中未展示的聊天），
-        // 自动向上滑动半屏展开下游视野并二次接地，杜绝首屏缺失直接报死。
-        if (locateResult is GroundingResult.NotFound && !query.text.isNullOrBlank()) {
+        // 自动向上滑动半屏展开下游视野并二次接地，最多尝试 2 轮，杜绝首屏缺失直接报死。
+        val canScrollSearch = locateResult is GroundingResult.NotFound &&
+            (!query.text.isNullOrBlank() || !query.semanticDescription.isNullOrBlank() || !query.resourceId.isNullOrBlank())
+        if (canScrollSearch) {
             val sw = screenWidthProvider().toFloat()
             val sh = screenHeightProvider().toFloat()
             if (sw > 0 && sh > 0) {
-                gestureExecutor.execute(
-                    GestureSpec.Swipe(sw / 2f, sh * 0.72f, sw / 2f, sh * 0.32f, humanoidCurve = true)
-                )
-                kotlinx.coroutines.delay(600L)
-                val scrolledDump = treeExtractor.dumpTree(rootNodeProvider(), screenWidthProvider(), screenHeightProvider(), currentPackageProvider())
-                if (scrolledDump is TreeDumpResult.Ok) {
-                    locateResult = locateWithVisualFallback(query, scrolledDump.nodes)
+                var scrollRound = 0
+                while (scrollRound < 2 && locateResult is GroundingResult.NotFound) {
+                    scrollRound++
+                    gestureExecutor.execute(
+                        GestureSpec.Swipe(sw / 2f, sh * 0.72f, sw / 2f, sh * 0.32f, humanoidCurve = true)
+                    )
+                    kotlinx.coroutines.delay(600L)
+                    val scrolledDump = treeExtractor.dumpTree(rootNodeProvider(), screenWidthProvider(), screenHeightProvider(), currentPackageProvider())
+                    if (scrolledDump is TreeDumpResult.Ok) {
+                        locateResult = locateWithVisualFallback(query, scrolledDump.nodes)
+                    }
                 }
+            }
+        }
+
+        // 4. 智能歧义消解：当存在多个空间独立候选（如同名按钮或列表项）且未传锚点时，
+        // 优选可交互且符合从上至下阅读顺序的首个控件，避免因歧义直接中断用户任务。
+        if (locateResult is GroundingResult.Ambiguous) {
+            val amb = locateResult as GroundingResult.Ambiguous
+            val bestCandidate = amb.candidates
+                .sortedWith(
+                    compareByDescending<GroundingResult.Found> { it.refNode?.isClickable == true || it.refNode?.isEditable == true }
+                        .thenBy { it.targetPoint.y }
+                )
+                .firstOrNull()
+            if (bestCandidate != null) {
+                locateResult = bestCandidate
             }
         }
 
@@ -757,8 +781,8 @@ class HelixGuiCoordinatorImpl(
             is GroundingResult.Found -> {
                 val targetPoint = locateResult.targetPoint
                 val refNode = locateResult.refNode
-                val text = refNode?.text
-                val resourceId = refNode?.resourceId
+                val text = refNode?.text ?: refNode?.contentDescription ?: query.text ?: query.semanticDescription
+                val resourceId = refNode?.resourceId ?: query.resourceId
                 val bounds = refNode?.bounds ?: ElementBounds(
                     left = targetPoint.x.toInt() - 20,
                     top = targetPoint.y.toInt() - 20,
@@ -850,6 +874,7 @@ class HelixGuiCoordinatorImpl(
                 // 4. 拟人化动作分发
                 when (action) {
                     is CoordinatorAction.Click -> {
+                        emitTouch(targetPoint.x, targetPoint.y, targetPoint.x, targetPoint.y, 100L, TouchKind.TAP)
                         if (executionBackend != null && executionBackend.isAvailable()) {
                             executionBackend.click(targetPoint.x, targetPoint.y)
                         } else {
@@ -976,7 +1001,9 @@ class HelixGuiCoordinatorImpl(
                 node.getChild(i)?.let { queue.add(it) }
             }
         }
-        return editableFallback
+        return editableFallback ?: runCatching {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
+        }.getOrNull()
     }
 
     private suspend fun applyRecoveryAction(action: HealingAction, currentNodes: List<ExecutionNode>) {

@@ -192,6 +192,28 @@ class DynamicStepPlannerTest {
     }
 
     @Test
+    fun testParsePressKeyAndSearchEnterActions() {
+        val planner = LlmDynamicStepPlanner(chatInvoker = { "" })
+        val observation = snapshot(listOf(node("n0", "搜索框")))
+
+        // 1. press_key with symbol
+        val pressStep = planner.parse("""{"action":{"type":"press_key","key":"ENTER"}}""", observation)
+        assertTrue(pressStep!!.action is CoordinatorAction.PressKey)
+        val pressAction = pressStep.action as CoordinatorAction.PressKey
+        assertEquals(android.view.KeyEvent.KEYCODE_ENTER, pressAction.keyCode)
+
+        // 2. shorthand enter
+        val enterStep = planner.parse("""{"action":{"type":"enter"}}""", observation)
+        assertTrue(enterStep!!.action is CoordinatorAction.PressKey)
+        assertEquals(android.view.KeyEvent.KEYCODE_ENTER, (enterStep.action as CoordinatorAction.PressKey).keyCode)
+
+        // 3. shorthand search
+        val searchStep = planner.parse("""{"action":{"type":"search"}}""", observation)
+        assertTrue(searchStep!!.action is CoordinatorAction.PressKey)
+        assertEquals(android.view.KeyEvent.KEYCODE_SEARCH, (searchStep.action as CoordinatorAction.PressKey).keyCode)
+    }
+
+    @Test
     fun testPlanReturnsNullWhenInvokerThrows() = runTest {
         val planner = LlmDynamicStepPlanner(chatInvoker = { throw IllegalStateException("网络断了") })
         assertNull(planner.plan(context(snapshot(listOf(node("n0", "搜索"))))))

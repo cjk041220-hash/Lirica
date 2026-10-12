@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lirica.android.automation.feedback.EmbodiedState
 import com.lirica.android.emotion.model.MoodState
 
 /**
@@ -50,25 +51,36 @@ fun OverlayBubble(
     mood: MoodState,
     modifier: Modifier = Modifier,
     isExecuting: Boolean = false,
+    embodiedState: EmbodiedState = EmbodiedState.IDLE,
     onClick: () -> Unit = {},
     onDragDelta: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {}
 ) {
-    // 16 种情绪的动态光晕主色调映射；若正在代行操作，切换为蓝紫色执行脉冲 (形态一)
+    // 视觉映射：具身状态优先，若处于代行或自愈/完成等具身态，应用对应色彩、表情与呼吸速率
     val (rawPrimaryColor, rawSecondaryColor, rawExpression) = getMoodVisualTokens(mood)
-    val primaryHaloColor = if (isExecuting) Color(0xFF7C4DFF) else rawPrimaryColor
-    val secondaryHaloColor = if (isExecuting) Color(0xFF00E5FF) else rawSecondaryColor
-    val microExpression = if (isExecuting) "⚡" else rawExpression
-
-    // 呼吸律动动效：执行中采用 700ms 快速流光律动
-    val infiniteTransition = rememberInfiniteTransition(label = "BubbleBreathing")
-    val pulseDuration = if (isExecuting) 700 else when (mood) {
-        MoodState.EXCITED, MoodState.LIVELY -> 900
-        MoodState.HAPPY, MoodState.CURIOUS, MoodState.EXPECTANT -> 1400
-        MoodState.SLEEPY, MoodState.LAZY, MoodState.DAZE -> 2600
-        else -> 1800
+    val (primaryHaloColor, secondaryHaloColor, microExpression, pulseDuration) = when {
+        embodiedState == EmbodiedState.OBSERVING -> BubbleVisualTuple(Color(0xFF4CC9F0), Color(0xFF7209B7), "🔍", 1000)
+        embodiedState == EmbodiedState.THINKING -> BubbleVisualTuple(Color(0xFFB8C0FF), Color(0xFF7C4DFF), "💭", 900)
+        embodiedState == EmbodiedState.ACTING || isExecuting -> BubbleVisualTuple(Color(0xFF7C4DFF), Color(0xFF00E5FF), "⚡", 700)
+        embodiedState == EmbodiedState.REPLAYING -> BubbleVisualTuple(Color(0xFF00E5FF), Color(0xFF118AB2), "🔄", 800)
+        embodiedState == EmbodiedState.SUCCESS -> BubbleVisualTuple(Color(0xFF06D6A0), Color(0xFFA7C957), "✨", 1200)
+        embodiedState == EmbodiedState.FAILED -> BubbleVisualTuple(Color(0xFFFF6B6B), Color(0xFFFF9F1C), "⚠️", 1400)
+        embodiedState == EmbodiedState.USER_INTERRUPTED -> BubbleVisualTuple(Color(0xFFFFAA00), Color(0xFF8E9AAF), "⏸️", 1800)
+        else -> BubbleVisualTuple(
+            rawPrimaryColor,
+            rawSecondaryColor,
+            rawExpression,
+            when (mood) {
+                MoodState.EXCITED, MoodState.LIVELY -> 900
+                MoodState.HAPPY, MoodState.CURIOUS, MoodState.EXPECTANT -> 1400
+                MoodState.SLEEPY, MoodState.LAZY, MoodState.DAZE -> 2600
+                else -> 1800
+            }
+        )
     }
 
+    // 呼吸律动动效
+    val infiniteTransition = rememberInfiniteTransition(label = "BubbleBreathing")
     val scale by infiniteTransition.animateFloat(
         initialValue = 0.94f,
         targetValue = 1.05f,
@@ -188,6 +200,8 @@ fun OverlayBubble(
 /**
  * 16 种 Russell 心情状态对应的光晕色彩与微表情文本标识
  */
+private data class BubbleVisualTuple(val c1: Color, val c2: Color, val exp: String, val pulseMs: Int)
+
 internal fun getMoodVisualTokens(mood: MoodState): Triple<Color, Color, String> {
     return when (mood) {
         MoodState.HAPPY -> Triple(Color(0xFFFFD166), Color(0xFFFF9F1C), "✨")

@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
+            com.lirica.android.ui.theme.LiricaTheme {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()

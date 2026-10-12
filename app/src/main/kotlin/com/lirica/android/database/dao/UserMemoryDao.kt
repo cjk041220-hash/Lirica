@@ -39,6 +39,11 @@ interface UserMemoryDao {
         limit: Int = 100
     ): Flow<List<UserMemoryEntity>>
 
+    @Query("SELECT * FROM user_memories WHERE status IN ('active', 'core') ORDER BY last_mention_ts DESC LIMIT :limit")
+    suspend fun getActiveAndCoreList(
+        limit: Int = 200
+    ): List<UserMemoryEntity>
+
     @Query("SELECT * FROM user_memories WHERE status = :status ORDER BY last_mention_ts DESC LIMIT :limit")
     suspend fun getActiveList(
         status: String = UserMemoryEntity.STATUS_ACTIVE,

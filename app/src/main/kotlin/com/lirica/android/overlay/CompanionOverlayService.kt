@@ -44,6 +44,8 @@ import com.lirica.android.automation.coordinator.StepExecutionStatus
 import com.lirica.android.automation.coordinator.TaskExecutionState
 import com.lirica.android.database.memory.MemoryExtractor
 import com.lirica.android.emotion.model.MoodState
+import com.lirica.android.overlay.ui.ActionSpeechBubble
+import com.lirica.android.overlay.ui.CompanionStatusCapsule
 import com.lirica.android.overlay.ui.DraftConfirmationCard
 import com.lirica.android.overlay.ui.IcebreakerBubble
 import com.lirica.android.overlay.ui.OverlayBubble
@@ -103,8 +105,13 @@ class CompanionOverlayService : LifecycleService() {
 
     private fun observeCoordinatorTaskState() {
         val app = application as? LiricaApplication ?: return
+        // 注册具身视觉反馈监听器（打通气泡状态机、思考、自愈与单步进度）
+        app.helixCoordinator.registerFeedbackListener { event ->
+            expandViewModel?.onActionFeedback(event)
+        }
         lifecycleScope.launch {
             app.helixCoordinator.state.collect { state ->
+                expandViewModel?.onTaskExecutionStateChanged(state)
                 when (state) {
                     is TaskExecutionState.ExecutingStep -> {
                         promoteToForeground(state.actionDescription)
@@ -395,8 +402,33 @@ class CompanionOverlayService : LifecycleService() {
                         Spacer(modifier = Modifier.height(4.dp))
                     }
 
-                    // 1. 顶部未完成念头破冰小气泡 (当未展开且无确认门卡片时)
-                    if (!uiState.isExpanded && taskState !is TaskExecutionState.AwaitingUserConfirmation) {
+                    // 0.2 折叠态伴随自动话语弹泡 (完成时自动弹出话或卡住自愈话，满足用户"自动弹出话"伴随感)
+                    if (!uiState.isExpanded && !uiState.actionSpeechText.isNullOrBlank()) {
+                        ActionSpeechBubble(
+                            speech = uiState.actionSpeechText,
+                            onDismissClick = {
+                                vm?.dismissActionSpeech()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+
+                    // 0.3 伴随执行胶囊 (第N步/自愈卡住状态/思考状态)
+                    if (!uiState.isExpanded && uiState.isActionRunning && !uiState.actionStatusText.isNullOrBlank()) {
+                        CompanionStatusCapsule(
+                            isVisible = true,
+                            statusText = uiState.actionStatusText.orEmpty(),
+                            embodiedState = uiState.embodiedState,
+                            isRecovering = uiState.isActionRecovering,
+                            onClick = {
+                                vm?.toggleExpanded()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+
+                    // 1. 顶部未完成念头破冰小气泡 (当未展开且无确认门卡片且当前非行动代行时)
+                    if (!uiState.isExpanded && !uiState.isActionRunning && uiState.actionSpeechText.isNullOrBlank() && taskState !is TaskExecutionState.AwaitingUserConfirmation) {
                         IcebreakerBubble(
                             thought = uiState.icebreakerThought,
                             mood = currentMood,
@@ -409,7 +441,7 @@ class CompanionOverlayService : LifecycleService() {
                         )
                     }
 
-                    // 2. 半展开轻量快速交互面板
+                    // 2. 半展开轻量快速交互面板 (同步展示最近两三句对话)
                     OverlayExpandPanel(
                         isExpanded = uiState.isExpanded,
                         mood = currentMood,
@@ -417,6 +449,7 @@ class CompanionOverlayService : LifecycleService() {
                         isStreaming = uiState.isStreaming,
                         streamingReply = uiState.streamingReply,
                         errorMessage = uiState.errorMessage,
+                        recentMessages = uiState.recentMessages,
                         onInputChanged = { text ->
                             vm?.onQuickInputChanged(text)
                         },
@@ -444,10 +477,11 @@ class CompanionOverlayService : LifecycleService() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // 3. 常驻悬浮伴生体小球 (形态一：执行中触发流光脉冲)
+                    // 3. 常驻悬浮伴生体小球 (视觉映射：支持具身行动态与 Russell 情绪融合)
                     OverlayBubble(
                         mood = currentMood,
-                        isExecuting = (taskState is TaskExecutionState.ExecutingStep),
+                        isExecuting = uiState.isActionRunning || (taskState is TaskExecutionState.ExecutingStep),
+                        embodiedState = uiState.embodiedState,
                         onClick = {
                             vm?.toggleExpanded()
                         },

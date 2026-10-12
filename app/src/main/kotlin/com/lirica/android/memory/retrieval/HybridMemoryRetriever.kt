@@ -131,7 +131,7 @@ class HybridMemoryRetriever(
 
         // 1. 若 query 为空，退化为基于活跃度与基础认知打分
         if (query.isBlank()) {
-            val allActive = userMemoryDao.getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 200)
+            val allActive = userMemoryDao.getActiveAndCoreList(limit = 200)
             return allActive
                 .map { mem ->
                     val score = MemoryScorer.calculateScore(mem, "", nowTs, moodValence)
@@ -141,7 +141,7 @@ class HybridMemoryRetriever(
                 .take(topK)
         }
 
-        // 2. 向量召回 top-20
+        // 2. 真混合检索候选池构建 (Dense Vector + Sparse Keyword / Core Profile 并集)
         val queryVector = embeddingModel.embed(query)
         val vectorHits = vectorStore.search(
             queryEmbedding = queryVector,
@@ -149,19 +149,33 @@ class HybridMemoryRetriever(
             track = MemoryEmbeddingEntity.TRACK_USER
         )
 
-        val candidatePairs: List<Pair<UserMemoryEntity, Float>> = if (vectorHits.isNotEmpty()) {
-            vectorHits.mapNotNull { hit ->
-                val entity = userMemoryDao.getById(hit.memoryId)
-                if (entity != null && (entity.status == UserMemoryEntity.STATUS_ACTIVE || entity.status == UserMemoryEntity.STATUS_CORE)) {
-                    entity to hit.similarity
-                } else {
-                    null
+        val vectorSimMap = vectorHits.associate { it.memoryId to it.similarity }
+        val activeAndCoreMemories = userMemoryDao.getActiveAndCoreList(limit = 200)
+        val memoryMap = activeAndCoreMemories.associateBy { it.id }
+
+        val candidatePairsMap = LinkedHashMap<String, Pair<UserMemoryEntity, Float>>()
+        for (hit in vectorHits) {
+            val entity = memoryMap[hit.memoryId] ?: userMemoryDao.getById(hit.memoryId)
+            if (entity != null && (entity.status == UserMemoryEntity.STATUS_ACTIVE || entity.status == UserMemoryEntity.STATUS_CORE)) {
+                candidatePairsMap[entity.id] = entity to hit.similarity
+            }
+        }
+
+        for (mem in activeAndCoreMemories) {
+            if (!candidatePairsMap.containsKey(mem.id)) {
+                val hasOverlap = MemoryScorer.bigramOverlap(query, "${mem.content} ${mem.category}") > 0f
+                val isCore = mem.status == UserMemoryEntity.STATUS_CORE
+                if (hasOverlap || isCore) {
+                    val sim = vectorSimMap[mem.id] ?: 0f
+                    candidatePairsMap[mem.id] = mem to sim
                 }
             }
+        }
+
+        val candidatePairs: List<Pair<UserMemoryEntity, Float>> = if (candidatePairsMap.isNotEmpty()) {
+            candidatePairsMap.values.toList()
         } else {
-            // 向量库为空或尚未索引时的降级：取 active 记忆
-            val allActive = userMemoryDao.getActiveList(UserMemoryEntity.STATUS_ACTIVE, limit = 20)
-            allActive.map { it to 0f }
+            activeAndCoreMemories.take(20).map { it to 0f }
         }
 
         if (candidatePairs.isEmpty()) return emptyList()

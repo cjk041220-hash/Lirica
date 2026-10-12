@@ -80,20 +80,32 @@ class HybridGroundingEngineImpl(
             }
         }
 
+        // 空间层叠收拢与交互择优：
+        // 在 Android 布局中，父容器（如卡片/条目）与子 TextView 常常同时匹配同一文本。
+        // 将几何重叠/相包围的节点收拢为单一最优目标（可交互优先），消灭虚假歧义。
+        val effectiveExact = collapseOverlappingNodes(exactMatches).let { list ->
+            val interactables = list.filter { it.isClickable || it.isEditable }
+            if (interactables.isNotEmpty()) interactables else list
+        }
+        val effectiveFuzzy = collapseOverlappingNodes(fuzzyMatches).let { list ->
+            val interactables = list.filter { it.isClickable || it.isEditable }
+            if (interactables.isNotEmpty()) interactables else list
+        }
+
         // Multiple exact matches -> 先用归一化锚点消歧，仍无法判定才报歧义
-        if (exactMatches.size > 1) {
-            val candidates = exactMatches.map { node ->
+        if (effectiveExact.size > 1) {
+            val candidates = effectiveExact.map { node ->
                 val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
                 GroundingResult.Found(normRect.toScreenPoint(safeW, safeH), normRect, GroundingSource.ACCESSIBILITY_EXACT, 0.95f, node)
             }
             val disambiguated = disambiguateByAnchor(candidates, query)
             if (disambiguated != null) return disambiguated
-            return GroundingResult.Ambiguous(candidates, "Found ${exactMatches.size} identical exact matches in accessibility tree")
+            return GroundingResult.Ambiguous(candidates, "Found ${effectiveExact.size} identical exact matches in accessibility tree")
         }
 
         // Single exact match -> L0 Fast Path
-        if (exactMatches.size == 1) {
-            val node = exactMatches.first()
+        if (effectiveExact.size == 1) {
+            val node = effectiveExact.first()
             val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
             return GroundingResult.Found(
                 targetPoint = normRect.toScreenPoint(safeW, safeH),
@@ -113,8 +125,8 @@ class HybridGroundingEngineImpl(
         // Step 3: Fusion or Fallback
         if (visualRect != null) {
             // Check if aligns with any fuzzy match
-            if (fuzzyMatches.isNotEmpty()) {
-                for (fuzzy in fuzzyMatches) {
+            if (effectiveFuzzy.isNotEmpty()) {
+                for (fuzzy in effectiveFuzzy) {
                     val fuzzyNorm = NormalizedRect.fromPixelBounds(fuzzy.bounds, safeW, safeH)
                     if (visualRect.iou(fuzzyNorm) > 0.3f || distance(visualRect.centerX(), visualRect.centerY(), fuzzyNorm.centerX(), fuzzyNorm.centerY()) < 150f) {
                         return GroundingResult.Found(
@@ -143,8 +155,8 @@ class HybridGroundingEngineImpl(
         }
 
         // Single fuzzy match fallback if no visual
-        if (fuzzyMatches.size == 1) {
-            val node = fuzzyMatches.first()
+        if (effectiveFuzzy.size == 1) {
+            val node = effectiveFuzzy.first()
             val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
             return GroundingResult.Found(
                 targetPoint = normRect.toScreenPoint(safeW, safeH),
@@ -153,14 +165,14 @@ class HybridGroundingEngineImpl(
                 confidence = 0.75f,
                 refNode = node
             )
-        } else if (fuzzyMatches.size > 1) {
-            val candidates = fuzzyMatches.map { node ->
+        } else if (effectiveFuzzy.size > 1) {
+            val candidates = effectiveFuzzy.map { node ->
                 val normRect = NormalizedRect.fromPixelBounds(node.bounds, safeW, safeH)
                 GroundingResult.Found(normRect.toScreenPoint(safeW, safeH), normRect, GroundingSource.ACCESSIBILITY_FUZZY, 0.75f, node)
             }
             val disambiguated = disambiguateByAnchor(candidates, query)
             if (disambiguated != null) return disambiguated
-            return GroundingResult.Ambiguous(candidates, "Found ${fuzzyMatches.size} fuzzy matches in accessibility tree")
+            return GroundingResult.Ambiguous(candidates, "Found ${effectiveFuzzy.size} fuzzy matches in accessibility tree")
         }
 
         // 语义完全失配时，同轮观测锚点是最后一道本地兜底（先于任何视觉/云端路径）
@@ -172,11 +184,58 @@ class HybridGroundingEngineImpl(
     }
 
     /**
+     * 空间层叠收拢：解决父容器与子节点双重匹配导致虚假歧义的顽疾。
+     */
+    private fun collapseOverlappingNodes(nodes: List<UiElementNode>): List<UiElementNode> {
+        if (nodes.size <= 1) return nodes
+        val collapsed = mutableListOf<UiElementNode>()
+        for (node in nodes) {
+            val existingIdx = collapsed.indexOfFirst { existing ->
+                areNodesSpatiallyOverlapping(existing, node)
+            }
+            if (existingIdx < 0) {
+                collapsed.add(node)
+            } else {
+                val existing = collapsed[existingIdx]
+                val preferNew = when {
+                    (node.isClickable || node.isEditable) && !(existing.isClickable || existing.isEditable) -> true
+                    !(node.isClickable || node.isEditable) && (existing.isClickable || existing.isEditable) -> false
+                    node.bounds.area in 1 until existing.bounds.area -> true
+                    else -> false
+                }
+                if (preferNew) {
+                    collapsed[existingIdx] = node
+                }
+            }
+        }
+        return collapsed
+    }
+
+    private fun areNodesSpatiallyOverlapping(a: UiElementNode, b: UiElementNode): Boolean {
+        val aContainsB = a.bounds.left <= b.bounds.left && a.bounds.top <= b.bounds.top &&
+            a.bounds.right >= b.bounds.right && a.bounds.bottom >= b.bounds.bottom
+        val bContainsA = b.bounds.left <= a.bounds.left && b.bounds.top <= a.bounds.top &&
+            b.bounds.right >= a.bounds.right && b.bounds.bottom >= a.bounds.bottom
+        if (aContainsB || bContainsA) return true
+
+        val dx = a.bounds.centerX - b.bounds.centerX
+        val dy = a.bounds.centerY - b.bounds.centerY
+        if (dx * dx + dy * dy < 80 * 80) return true
+
+        val interLeft = kotlin.math.max(a.bounds.left, b.bounds.left)
+        val interTop = kotlin.math.max(a.bounds.top, b.bounds.top)
+        val interRight = kotlin.math.min(a.bounds.right, b.bounds.right)
+        val interBottom = kotlin.math.min(a.bounds.bottom, b.bounds.bottom)
+        if (interLeft < interRight && interTop < interBottom) {
+            val interArea = (interRight - interLeft) * (interBottom - interTop)
+            val unionArea = a.bounds.area + b.bounds.area - interArea
+            if (unionArea > 0 && interArea.toFloat() / unionArea > 0.35f) return true
+        }
+        return false
+    }
+
+    /**
      * 归一化锚点消歧：在多个语义候选中挑出离锚点最近的一个。
-     *
-     * 容差 [ANCHOR_TOLERANCE] 定义在归一化空间（0..1000）内：超出容差说明
-     * 锚点与所有候选都不沾边，此时**宁可报歧义也不猜**——猜错会把动作打到
-     * 错误的控件上，在金融/通信场景是不可接受的失败模式。
      */
     private fun disambiguateByAnchor(
         candidates: List<GroundingResult.Found>,

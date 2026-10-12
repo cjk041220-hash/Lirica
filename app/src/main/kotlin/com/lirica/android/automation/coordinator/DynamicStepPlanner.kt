@@ -1,5 +1,7 @@
 package com.lirica.android.automation.coordinator
 
+import android.view.KeyEvent
+import com.lirica.android.automation.backend.KeycodeMapper
 import com.lirica.android.automation.grounding.GroundingQuery
 import com.lirica.android.automation.observe.ObservationSnapshot
 import com.lirica.android.automation.policy.ActionExecutionMode
@@ -158,6 +160,25 @@ class LlmDynamicStepPlanner(
                     narration = think
                 )
             }
+            "press_key", "key" -> {
+                val keyStr = action.firstString("key", "name") ?: "ENTER"
+                val keyCode = KeycodeMapper.resolveKeyCode(keyStr) ?: KeyEvent.KEYCODE_ENTER
+                PlannedStep.act(
+                    action = CoordinatorAction.PressKey(keyCode = keyCode, keyName = keyStr, description = "按键 " + keyStr),
+                    expectation = expect,
+                    narration = think
+                )
+            }
+            "enter" -> PlannedStep.act(
+                action = CoordinatorAction.PressKey(keyCode = KeyEvent.KEYCODE_ENTER, keyName = "ENTER", description = "按回车键"),
+                expectation = expect,
+                narration = think
+            )
+            "search" -> PlannedStep.act(
+                action = CoordinatorAction.PressKey(keyCode = KeyEvent.KEYCODE_SEARCH, keyName = "SEARCH", description = "按搜索键"),
+                expectation = expect,
+                narration = think
+            )
             "back" -> PlannedStep.act(action = CoordinatorAction.Backtrack(), expectation = expect, narration = think)
             "wait" -> {
                 val delayMs = action.firstString("delay_ms", "delayMs", "ms")?.toLongOrNull() ?: DEFAULT_WAIT_MS

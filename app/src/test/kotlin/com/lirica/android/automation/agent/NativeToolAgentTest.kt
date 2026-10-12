@@ -455,4 +455,48 @@ class NativeToolAgentTest {
         assertFalse(result.isSuccess)
         assertEquals("宏动作中途卡壳了，请等我一下", result.output)
     }
+
+    @Test
+    fun testExecute_inputText_withoutTargetText_defaultsToInputBox() = runTest {
+        val call = ToolCall(
+            id = "call_input_notarget",
+            function = ToolCallFunction(
+                name = "input_text",
+                arguments = """{"text":"邹林伟"}"""
+            )
+        )
+
+        coEvery {
+            coordinator.executeTask(any(), any(), any())
+        } returns TaskExecutionResult.Success("输入成功", 1)
+
+        val result = agent.executeToolCall(call)
+
+        assertTrue(result.isSuccess)
+        coVerify(exactly = 1) {
+            coordinator.executeTask(
+                goal = any(),
+                actions = match { actions ->
+                    actions.size == 1 && actions[0] is CoordinatorAction.Type &&
+                        (actions[0] as CoordinatorAction.Type).query.text == "输入框"
+                },
+                maxSteps = any()
+            )
+        }
+    }
+
+    @Test
+    fun testExecute_clickElement_withoutTarget_returnsGracefulFailure() = runTest {
+        val call = ToolCall(
+            id = "call_click_empty",
+            function = ToolCallFunction(
+                name = "click_element",
+                arguments = """{}"""
+            )
+        )
+
+        val result = agent.executeToolCall(call)
+        assertFalse(result.isSuccess)
+        assertTrue(result.output.contains("未能解析目标元素") || result.output.contains("未指定目标元素"))
+    }
 }

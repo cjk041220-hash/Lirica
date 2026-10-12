@@ -381,4 +381,86 @@ class ChatViewModelTest {
         val combinedSystemText = systemMessages.joinToString("\n") { it.content ?: "" }
         assertTrue("应包含具身耳机叙事", combinedSystemText.contains("戴着耳机听音乐"))
     }
+
+    @Test
+    fun testInterruptGeneration_cancelsStreamingAndAddsComplainingMessage() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flow {
+            emit(LlmStreamEvent.Token("正在说很多很多话，但永远流不完..."))
+            kotlinx.coroutines.delay(10000L) // 模拟卡住
+            emit(LlmStreamEvent.Token("后续话语"))
+        }
+
+        viewModel.sendMessage("随便说点什么")
+        testScheduler.advanceTimeBy(500L)
+
+        assertTrue(viewModel.uiState.value.isStreaming)
+
+        // 用户触发打断！
+        viewModel.interruptGeneration("用户嫌卡住了")
+        testScheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse("打断后必须重置 isStreaming 为 false", state.isStreaming)
+        assertTrue("打断后必须保留至少2条消息（用户+抱怨回复）", state.messages.size >= 2)
+        val lastMsg = state.messages.last()
+        assertEquals(MessageSender.ASSISTANT, lastMsg.sender)
+        assertTrue(
+            "打断回复必须包含抱怨或疑惑语气词",
+            lastMsg.text.contains("欸") || lastMsg.text.contains("拉住") ||
+                lastMsg.text.contains("按停") || lastMsg.text.contains("停下") ||
+                lastMsg.text.contains("按住") || lastMsg.text.contains("收声")
+        )
+    }
+
+
+    @Test
+    fun testDialoguePersistence_savesAndRestoresMemoryBadgeMetadata() = runTest(testDispatcher) {
+        testScheduler.advanceUntilIdle()
+
+        val insertedEntities = mutableListOf<ChatDialogueEntity>()
+        coEvery { mockChatDialogueDao.insert(capture(insertedEntities)) } returns 1L
+
+        val mockUserMemory = UserMemoryEntity(
+            id = "mem_thesis",
+            content = "用户周三要交开题报告",
+            category = "计划",
+            createdAt = 1696250000000L
+        )
+        coEvery { mockMemoryManager.retrieve(any(), any(), any(), any()) } returns listOf(mockUserMemory)
+
+        every { mockLlmClient.streamChat(any(), any(), any()) } returns flow {
+            emit(LlmStreamEvent.Token("开题报告加油哦"))
+            emit(LlmStreamEvent.Done("stop"))
+        }
+
+        viewModel.sendMessage("开题报告")
+        testScheduler.advanceUntilIdle()
+
+        val assistantEntity = insertedEntities.firstOrNull { it.role == ChatDialogueEntity.ROLE_ASSISTANT }
+        assertNotNull("必须持久化助手回复", assistantEntity)
+        assertNotNull("必须将记忆溯源保存至 metadataJson", assistantEntity!!.metadataJson)
+        assertTrue("metadataJson 必须包含原记忆内容", assistantEntity.metadataJson!!.contains("用户周三要交开题报告"))
+
+        // 测试重启后从 DAO 恢复 memoryBadge
+        coEvery { mockChatDialogueDao.getRecentBySession(any(), any()) } returns listOf(assistantEntity)
+        val restoredVm = ChatViewModel(
+            llmClient = mockLlmClient,
+            memoryManager = mockMemoryManager,
+            emotionEngine = emotionEngine,
+            phiMiddleware = phiMiddleware,
+            humannessFilter = humannessFilter,
+            chatDialogueDao = mockChatDialogueDao
+        )
+        testScheduler.advanceUntilIdle()
+
+        val restoredMsg = restoredVm.uiState.value.messages.firstOrNull()
+        assertNotNull("重启后必须恢复历史消息", restoredMsg)
+        assertNotNull("重启后必须成功还原 memoryBadge", restoredMsg!!.memoryBadge)
+        assertEquals("必须还原记忆条数", 1, restoredMsg.memoryBadge!!.userMemories.size)
+        assertEquals("用户周三要交开题报告", restoredMsg.memoryBadge!!.userMemories[0])
+        assertEquals(1696250000000L, restoredMsg.memoryBadge!!.memoryDetails[0].createdAt)
+    }
+
 }

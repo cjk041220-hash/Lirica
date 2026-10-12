@@ -75,6 +75,7 @@ class ChatViewModel(
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+    private var activeGenerationJob: kotlinx.coroutines.Job? = null
 
     init {
         if (byokRepository != null) {
@@ -103,7 +104,8 @@ class ChatViewModel(
                             id = entity.id.toString(),
                             sender = if (entity.role == ChatDialogueEntity.ROLE_USER) MessageSender.USER else MessageSender.ASSISTANT,
                             text = entity.content,
-                            timestamp = entity.timestamp
+                            timestamp = entity.timestamp,
+                            memoryBadge = deserializeMemoryBadge(entity.metadataJson)
                         )
                     }
                     _uiState.update { it.copy(messages = items) }
@@ -205,7 +207,15 @@ class ChatViewModel(
                 val badgeInfo = MemoryBadgeInfo(
                     userMemories = userMemories.map { it.content },
                     selfExperiences = selfExps.map { it.content },
-                    thoughts = thoughts.map { it.thought }
+                    thoughts = thoughts.map { it.thought },
+                    memoryDetails = userMemories.map {
+                        MemoryTraceDetail(
+                            id = it.id,
+                            content = it.content,
+                            category = it.category,
+                            createdAt = it.createdAt
+                        )
+                    }
                 )
 
                 // 捕获即时情境感知快照（前台应用、停留时长、屏幕状态、通知与硬件环境）
@@ -458,13 +468,14 @@ class ChatViewModel(
                     state.copy(messages = updated, isStreaming = false)
                 }
 
-                // 7. 持久化助手消息
+                // 7. 持久化助手消息（连同本轮召回的记忆印记序列化至 metadataJson，保障重启后时光回响不丢失）
                 chatDialogueDao?.insert(
                     ChatDialogueEntity(
                         sessionId = sessionId,
                         role = ChatDialogueEntity.ROLE_ASSISTANT,
                         content = finalText,
-                        timestamp = System.currentTimeMillis()
+                        timestamp = System.currentTimeMillis(),
+                        metadataJson = if (badgeInfo.isEmpty) null else serializeMemoryBadge(badgeInfo)
                     )
                 )
 
@@ -545,4 +556,77 @@ class ChatViewModel(
             )
         }.getOrNull()
     }
+
+    /**
+     * 用户主动打断当前正在生成的回复（防止网络/模型挂起卡死）
+     * 打断后 Lirica 会以年上性格发出拟人化的疑惑或微抱怨，并恢复可输入状态
+     */
+    fun interruptGeneration(reason: String = "用户主动打断") {
+        if (!_uiState.value.isStreaming && activeGenerationJob?.isActive != true) return
+        activeGenerationJob?.cancel()
+        activeGenerationJob = null
+
+        val interruptReplies = listOf(
+            "……欸？话说一半突然把我按住了，是嫌我慢了，还是你有什么急事想说？",
+            "怎么突然拉住我呀……明明刚才正要说到重点呢。好吧，那你先说。",
+            "被你一把按停了……吓我一跳，怎么啦，发生什么事了？",
+            "……好吧，既然你不想听这段，那我就先收声。你现在在想什么？"
+        )
+        val complainText = interruptReplies.random()
+        val complainId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        _uiState.update { state ->
+            val list = state.messages
+            val lastIdx = list.lastIndex
+            val updated = if (lastIdx >= 0 && list[lastIdx].sender == MessageSender.ASSISTANT && list[lastIdx].text.isBlank()) {
+                val mutable = list.toMutableList()
+                mutable[lastIdx] = list[lastIdx].copy(text = complainText)
+                mutable
+            } else {
+                list + ChatMessageItem(
+                    id = complainId,
+                    sender = MessageSender.ASSISTANT,
+                    text = complainText,
+                    timestamp = now,
+                    mood = state.currentMood
+                )
+            }
+            state.copy(messages = updated, isStreaming = false)
+        }
+
+        chatDialogueDao?.let { dao ->
+            viewModelScope.launch {
+                dao.insert(
+                    ChatDialogueEntity(
+                        sessionId = sessionId,
+                        role = ChatDialogueEntity.ROLE_ASSISTANT,
+                        content = complainText,
+                        timestamp = now
+                    )
+                )
+            }
+        }
+    }
+
+
+    private val badgeJson = kotlinx.serialization.json.Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    private fun serializeMemoryBadge(badge: MemoryBadgeInfo): String? {
+        return runCatching {
+            badgeJson.encodeToString(MemoryBadgeInfo.serializer(), badge)
+        }.getOrNull()
+    }
+
+    private fun deserializeMemoryBadge(metadataJson: String?): MemoryBadgeInfo? {
+        if (metadataJson.isNullOrBlank()) return null
+        return runCatching {
+            val badge = badgeJson.decodeFromString(MemoryBadgeInfo.serializer(), metadataJson)
+            if (badge.isEmpty) null else badge
+        }.getOrNull()
+    }
+
 }

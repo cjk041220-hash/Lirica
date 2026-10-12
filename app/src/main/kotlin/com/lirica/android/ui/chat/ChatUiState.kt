@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.lirica.android.emotion.model.EmotionVector
 import com.lirica.android.emotion.model.MoodState
 import com.lirica.android.persona.model.CharacterCard
+import kotlinx.serialization.Serializable
 
 enum class MessageSender {
     USER,
@@ -11,10 +12,21 @@ enum class MessageSender {
 }
 
 @Immutable
+@Serializable
+data class MemoryTraceDetail(
+    val id: String = "",
+    val content: String,
+    val category: String = "其他",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Immutable
+@Serializable
 data class MemoryBadgeInfo(
     val userMemories: List<String> = emptyList(),
     val selfExperiences: List<String> = emptyList(),
-    val thoughts: List<String> = emptyList()
+    val thoughts: List<String> = emptyList(),
+    val memoryDetails: List<MemoryTraceDetail> = emptyList()
 ) {
     val totalCount: Int get() = userMemories.size + selfExperiences.size + thoughts.size
     val isEmpty: Boolean get() = totalCount == 0
