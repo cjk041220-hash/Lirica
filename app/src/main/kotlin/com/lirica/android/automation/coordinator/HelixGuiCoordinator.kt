@@ -12,6 +12,7 @@ import com.lirica.android.automation.feedback.NoOpActionVisualFeedbackListener
 import com.lirica.android.automation.feedback.TouchKind
 import com.lirica.android.automation.gatekeeper.FinancialGatekeeper
 import com.lirica.android.automation.gatekeeper.GatekeeperDecision
+import com.lirica.android.automation.gatekeeper.ProhibitedZones
 import com.lirica.android.automation.gatekeeper.ProposedAction
 import com.lirica.android.automation.gesture.GestureExecutor
 import com.lirica.android.automation.gesture.GestureResult
@@ -41,7 +42,9 @@ import com.lirica.android.automation.policy.SafetyDecision
 import com.lirica.android.automation.policy.SafetyGrant
 import com.lirica.android.automation.policy.SafetyPolicyEngine
 import com.lirica.android.automation.policy.SafetyRequest
+import com.lirica.android.automation.policy.SafetyRuleIds
 import com.lirica.android.automation.policy.SystemActionCatalog
+import com.lirica.android.common.logging.LiricaLog
 import com.lirica.android.perception.AccessibilityServiceHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -49,6 +52,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -139,7 +143,15 @@ class HelixGuiCoordinatorImpl(
      */
     private val accessibilityReadyProvider: () -> Boolean = { true },
     /** 视觉重通道闸门（§7.3：温度/电量熔断时禁止截屏与云端 VLM） */
-    private val visionAllowedProvider: () -> Boolean = { true }
+    private val visionAllowedProvider: () -> Boolean = { true },
+    /**
+     * 用户抢占熔断器（M6.0 P1-2 接线：自触发抑制 + 前台突变豁免）。
+     *
+     * 历史缺陷：该检测器的抑制登记 API 生产端零调用——闭环每派发一个手势，
+     * 都会把引擎自己的手势判成用户抢机，awaitClearance(60s) 超时后任务自断。
+     * 本协调器在所有派发点接线登记；null = 不接线（既有单测零改动）。
+     */
+    private val userInterruptionDetector: com.lirica.android.automation.verify.UserInterruptionDetector? = null
 ) : HelixGuiCoordinator, AtomicActionExecutor {
 
     private val _state = MutableStateFlow<TaskExecutionState>(TaskExecutionState.Idle)
@@ -149,9 +161,36 @@ class HelixGuiCoordinatorImpl(
 
     private val isCancelled: AtomicBoolean = cancelSignal ?: AtomicBoolean(false)
 
+    /**
+     * 任务级互斥（M6.0 B2 收口）。
+     *
+     * 历史缺陷：executeTask 与 executeAutonomousTask 两条入口共享同一个
+     * `_state`/isCancelled/watchdog 且入口处都会 `set(false)`——后到任务会清掉
+     * 前一个任务的取消请求，状态机与自愈步历史交错。目前靠"聊天层工具调用
+     * 是顺序的"这一隐式约定保证安全，但悬浮窗与对话两条链路理论上可并发
+     * 触发。互斥后并发发起的第二个任务会在第一个终止前排队的语义下串行执行，
+     * 取消信号与状态机不再串扰。
+     */
+    private val taskMutex = kotlinx.coroutines.sync.Mutex()
+
     companion object {
+        private const val TAG = "HelixGuiCoordinator"
+
         /** 文本注入前活节点树扫描上限，防止巨型 UI 树拖垮注入时延 */
         private const val MAX_LIVE_NODE_SCAN = 1000
+
+        /** 闸门裁决用的键事件动作类型（映射 SystemActionCatalog.ID_UI_KEY_EVENT） */
+        private const val ACTION_TYPE_KEY_EVENT = "KEY_EVENT"
+
+        /**
+         * 确认类按键集合：这些键会激活当前焦点元素（按钮/复选框），
+         * 是"盲按回车点到支付确认默认按钮"风险的载体，需要叠加专项裁定。
+         */
+        private val CONFIRMATION_KEY_CODES = setOf(
+            android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER,
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER
+        )
     }
 
     // =====================================================================
@@ -180,6 +219,14 @@ class HelixGuiCoordinatorImpl(
     }
 
     override suspend fun executeTask(
+        goal: String,
+        actions: List<CoordinatorAction>,
+        maxSteps: Int
+    ): TaskExecutionResult = taskMutex.withLock {
+        executeTaskLocked(goal, actions, maxSteps)
+    }
+
+    private suspend fun executeTaskLocked(
         goal: String,
         actions: List<CoordinatorAction>,
         maxSteps: Int
@@ -347,7 +394,12 @@ class HelixGuiCoordinatorImpl(
         action: CoordinatorAction,
         stepIndex: Int,
         totalSteps: Int
-    ): AtomicExecutionOutcome = when (action) {
+    ): AtomicExecutionOutcome {
+        // M6.0 P1-2：登记前台突变豁免窗口——我方派发的任何动作都可能合法切换前台
+        // （LaunchApp、点击跨应用链接、HOME 键、系统权限对话框弹出）。豁免期内的
+        // 包名突变只刷新基线不判接管，否则跨应用任务必被 FOREGROUND_TAKEOVER 误杀。
+        userInterruptionDetector?.onAutomationForegroundChangeExpected()
+        return when (action) {
         is CoordinatorAction.Finish -> AtomicExecutionOutcome.Completed(action.summary)
 
         is CoordinatorAction.Intent -> dispatchIntentWithGate(action.action, stepIndex)
@@ -357,23 +409,7 @@ class HelixGuiCoordinatorImpl(
             AtomicExecutionOutcome.Succeeded(action.description)
         }
 
-        is CoordinatorAction.PressKey -> {
-            val ok = if (executionBackend != null && executionBackend.isAvailable()) {
-                executionBackend.sendKeycode(action.keyCode)
-            } else {
-                val globalAction = com.lirica.android.automation.backend.KeycodeMapper.toAccessibilityGlobalAction(action.keyCode)
-                if (globalAction != null) {
-                    serviceHolder.get()?.performGlobalAction(globalAction) == true
-                } else {
-                    false
-                }
-            }
-            if (ok) {
-                AtomicExecutionOutcome.Succeeded(action.description)
-            } else {
-                AtomicExecutionOutcome.Failed("按键事件模拟失败: " + action.keyName + " (keyCode=" + action.keyCode + ")")
-            }
-        }
+        is CoordinatorAction.PressKey -> dispatchPressKeyWithGate(action, stepIndex)
 
         is CoordinatorAction.Delay -> {
             kotlinx.coroutines.delay(action.delayMs.coerceAtLeast(0L))
@@ -390,12 +426,59 @@ class HelixGuiCoordinatorImpl(
                 SwipeDirection.RIGHT -> listOf(w * 0.2f, h / 2f, w * 0.8f, h / 2f)
             }
             emitTouch(startX, startY, endX, endY, 300L, TouchKind.SWIPE)
+            // M6.0 P1-2：触控抑制窗口——本手势产生的触控事件是自产，不算用户抢机
+            userInterruptionDetector?.onAutomationGestureDispatched(300L)
+            // M6.0 P3-3：backend 返回值纳入 outcome——静默失败的 input swipe 不能谎报成功
             if (executionBackend != null && executionBackend.isAvailable()) {
-                executionBackend.swipe(startX, startY, endX, endY, 300L)
+                val backendOk = executionBackend.swipe(startX, startY, endX, endY, 300L)
+                if (!backendOk) {
+                    val reason = "滑动派发失败（执行通道返回失败）"
+                    _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                    return AtomicExecutionOutcome.Failed(reason)
+                }
             } else {
-                gestureExecutor.execute(
+                when (val gestureResult = gestureExecutor.execute(
                     GestureSpec.Swipe(startX, startY, endX, endY, humanoidCurve = action.humanoid)
-                )
+                )) {
+                    is GestureResult.Completed -> Unit
+                    is GestureResult.Cancelled -> {
+                        if (gestureResult.reason.contains("受限") || gestureResult.reason.contains("blocked")) {
+                            val narrative = honestNarrator.narrate(
+                                FailureContext(
+                                    rule = "RULE_GESTURE_PHYSICAL_BLOCKED",
+                                    technicalReason = gestureResult.reason,
+                                    targetPackage = currentPackageProvider(),
+                                    actionType = "SWIPE",
+                                    targetElement = null
+                                )
+                            )
+                            _state.value = TaskExecutionState.Failed(
+                                errorReason = "零信任高危护栏物理熔断: ${gestureResult.reason}",
+                                lastStepIndex = stepIndex,
+                                honestNarrative = narrative
+                            )
+                            return AtomicExecutionOutcome.Blocked("RULE_GESTURE_PHYSICAL_BLOCKED", gestureResult.reason, narrative)
+                        }
+                        val reason = "滑动手势被系统取消: ${gestureResult.reason}"
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                        return AtomicExecutionOutcome.Failed(reason)
+                    }
+                    is GestureResult.TimedOut -> {
+                        val reason = "滑动手势派发超时 (${gestureResult.timeoutMs}ms)"
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                        return AtomicExecutionOutcome.Failed(reason)
+                    }
+                    is GestureResult.Error -> {
+                        val reason = "滑动手势派发异常: ${gestureResult.throwable.message}"
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                        return AtomicExecutionOutcome.Failed(reason)
+                    }
+                    GestureResult.ServiceUnavailable -> {
+                        val reason = "无障碍服务不可用，无法派发滑动手势"
+                        _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                        return AtomicExecutionOutcome.Failed(reason)
+                    }
+                }
             }
             AtomicExecutionOutcome.Succeeded(action.description)
         }
@@ -404,6 +487,186 @@ class HelixGuiCoordinatorImpl(
             val query = if (action is CoordinatorAction.Click) action.query else (action as CoordinatorAction.Type).query
             executeUiElementAction(action, query, stepIndex, totalSteps)
         }
+        }
+    }
+
+    /**
+     * 键事件通道安全裁决（M6.0 / 体检报告 P0-1 收口）。
+     *
+     * 按键是唯一没有目标节点可供文本级审查的通道：ENTER/DPAD_CENTER 会激活
+     * 当前焦点默认按钮——支付确认弹窗的默认按钮往往正是它，[com.lirica.android.automation.gatekeeper.ProhibitedZones]
+     * 的文本级支付关键词规则因此被整体绕过。收口分四层，全部 fail-closed：
+     * 1. **统一引擎包名级裁定**：金融/密码/敏感包对键事件同样全量熔断；
+     * 2. **通信应用代发熔断**：确认类按键在微信/QQ 内视同自动发送消息
+     *    （经 extraInfo.isTextInput 复用 gatekeeper 的 D8 Tier 0 规则）；
+     * 3. **活窗口危险扫描**：确认类按键前扫描无障碍树——存在密码框、
+     *    支付/系统提权关键词一律物理熔断；高危确认词（提交订单/清空等）
+     *    同样熔断——键事件没有可视目标，弹确认卡片反而让用户困惑"确认什么"；
+     * 4. **漫游只读**：无作用域提升时确认类按键整体熔断。
+     *
+     * 树不可读时跳过第 3 层（包名级裁定仍生效），残余风险由核销层兜底并写入
+     * trace——比"树不可读就放行一切"诚实，比"不可读即熔断"可用。
+     */
+    private suspend fun dispatchPressKeyWithGate(
+        action: CoordinatorAction.PressKey,
+        stepIndex: Int
+    ): AtomicExecutionOutcome {
+        val pkg = currentPackageProvider() ?: ""
+        val isConfirmationKey = action.keyCode in CONFIRMATION_KEY_CODES
+
+        // 1) 统一引擎包名级裁定（金融/敏感包全量熔断对键事件同样生效）
+        val proposed = ProposedAction(
+            actionType = ACTION_TYPE_KEY_EVENT,
+            targetText = null,
+            targetResourceId = null,
+            isPasswordTarget = false,
+            currentPackage = pkg,
+            // 确认类按键在通信应用内 = 自动发送消息：经 extraInfo 复用 D8 Tier 0 规则
+            extraInfo = if (isConfirmationKey) mapOf("isTextInput" to "true") else emptyMap()
+        )
+        when (val decision = evaluateUiGate(proposed)) {
+            is GatekeeperDecision.PhysicalBlocked ->
+                return blockedKeyOutcome(action, decision.rule, decision.reason, decision.honestReason, stepIndex)
+            // 键事件无目标文本，现有规则不会产出确认令牌；万一未来规则产出，fail-closed
+            is GatekeeperDecision.RequireUserConfirmation ->
+                return blockedKeyOutcome(
+                    action,
+                    rule = SafetyRuleIds.KEY_EVENT_CONFIRMATION_GATE,
+                    reason = "键事件命中需确认规则: " + decision.promptMessage,
+                    honestReason = "这个按键会触发敏感操作，我不盲按",
+                    stepIndex = stepIndex
+                )
+            is GatekeeperDecision.Allowed -> Unit
+        }
+
+        if (isConfirmationKey) {
+            // 3) 活窗口危险扫描（焦点密码框 / 支付与系统提权关键词 / 高危确认词）
+            when (val danger = scanConfirmationKeyWindowDanger()) {
+                is ConfirmationWindowDanger.PasswordFocused ->
+                    return blockedKeyOutcome(
+                        action,
+                        rule = "RULE_ZERO_TOLERANCE_PASSWORD",
+                        reason = "确认类按键被焦点/可见密码框熔断",
+                        honestReason = ProhibitedZones.DEFAULT_HONEST_REASON,
+                        stepIndex = stepIndex,
+                        scenario = FailureScenario.PASSWORD_INPUT
+                    )
+                is ConfirmationWindowDanger.CriticalKeyword ->
+                    return blockedKeyOutcome(
+                        action,
+                        rule = if (danger.system) "RULE_SYSTEM_PRIVILEGE_FUSE" else "RULE_CRITICAL_PAYMENT_FUSE",
+                        reason = "确认类按键命中屏幕关键词「${danger.keyword}」",
+                        honestReason = ProhibitedZones.DEFAULT_HONEST_REASON,
+                        stepIndex = stepIndex,
+                        scenario = if (danger.system) FailureScenario.SYSTEM_PRIVILEGE else FailureScenario.FINANCIAL_PROHIBITED
+                    )
+                is ConfirmationWindowDanger.HighRiskKeyword ->
+                    return blockedKeyOutcome(
+                        action,
+                        rule = SafetyRuleIds.KEY_EVENT_CONFIRMATION_GATE,
+                        reason = "确认类按键命中高危确认词「${danger.keyword}」",
+                        honestReason = "屏幕上有「${danger.keyword}」这类按钮，回车没有长眼睛，" +
+                            "我不想替你盲按——你点一下它，或者明确告诉我继续",
+                        stepIndex = stepIndex
+                    )
+                null -> Unit
+            }
+
+            // 4) 漫游只读：无作用域提升时确认类按键整体熔断
+            if (currentMode() == ActionExecutionMode.ROAMING && safetyPolicy?.activeElevationTaskId() == null) {
+                return blockedKeyOutcome(
+                    action,
+                    rule = SafetyRuleIds.ROAMING_READ_ONLY_BLOCKED,
+                    reason = "漫游只读模式下禁止确认类按键（ENTER/DPAD_CENTER 可触发目标应用动作）",
+                    honestReason = "漫游模式我只看看不动手；要动的话你在对话里跟我说一声",
+                    stepIndex = stepIndex
+                )
+            }
+        }
+
+        // 5) 通过全部闸门后按原逻辑落地
+        val ok = if (executionBackend != null && executionBackend.isAvailable()) {
+            executionBackend.sendKeycode(action.keyCode)
+        } else {
+            val globalAction = com.lirica.android.automation.backend.KeycodeMapper.toAccessibilityGlobalAction(action.keyCode)
+            if (globalAction != null) {
+                serviceHolder.get()?.performGlobalAction(globalAction) == true
+            } else {
+                false
+            }
+        }
+        return if (ok) {
+            AtomicExecutionOutcome.Succeeded(action.description)
+        } else {
+            AtomicExecutionOutcome.Failed("按键事件模拟失败: " + action.keyName + " (keyCode=" + action.keyCode + ")")
+        }
+    }
+
+    /** 键事件熔断的统一出口：人设化坦白 + 状态落库 + Blocked 结果 */
+    private fun blockedKeyOutcome(
+        action: CoordinatorAction.PressKey,
+        rule: String,
+        reason: String,
+        honestReason: String,
+        stepIndex: Int,
+        scenario: FailureScenario = FailureScenario.GENERIC_FALLBACK
+    ): AtomicExecutionOutcome.Blocked {
+        val narrative = honestNarrator.narrate(
+            FailureContext(
+                rule = rule,
+                technicalReason = reason,
+                targetPackage = currentPackageProvider(),
+                actionType = ACTION_TYPE_KEY_EVENT,
+                targetElement = "按键 ${action.keyName}",
+                scenario = scenario
+            )
+        )
+        _state.value = TaskExecutionState.Failed(
+            errorReason = "按键通道熔断: $reason ($rule)",
+            lastStepIndex = stepIndex,
+            honestNarrative = narrative
+        )
+        LiricaLog.w(TAG, "PressKey blocked: rule=$rule key=${action.keyName}")
+        return AtomicExecutionOutcome.Blocked(rule, reason, narrative)
+    }
+
+    /** 确认类按键的活窗口危险扫描（BFS，节点数受 [MAX_LIVE_NODE_SCAN] 约束） */
+    private fun scanConfirmationKeyWindowDanger(): ConfirmationWindowDanger? {
+        val root = rootNodeProvider() ?: return null
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var scanned = 0
+        while (queue.isNotEmpty() && scanned < MAX_LIVE_NODE_SCAN) {
+            val node = queue.removeFirst()
+            scanned++
+            val resourceId = runCatching { node.viewIdResourceName }.getOrNull() ?: ""
+            val text = runCatching { node.text?.toString() }.getOrNull()
+            val contentDesc = runCatching { node.contentDescription?.toString() }.getOrNull()
+            val isPasswordNode = runCatching { node.isPassword }.getOrDefault(false)
+
+            if (ProhibitedZones.isPasswordTarget(isPasswordNode, resourceId, text ?: "")) {
+                return ConfirmationWindowDanger.PasswordFocused(resourceId)
+            }
+            for (candidate in listOfNotNull(text, contentDesc)) {
+                ProhibitedZones.CRITICAL_PAYMENT_KEYWORDS.firstOrNull { candidate.contains(it, ignoreCase = true) }
+                    ?.let { return ConfirmationWindowDanger.CriticalKeyword(it, system = false) }
+                ProhibitedZones.CRITICAL_SYSTEM_KEYWORDS.firstOrNull { candidate.contains(it, ignoreCase = true) }
+                    ?.let { return ConfirmationWindowDanger.CriticalKeyword(it, system = true) }
+                ProhibitedZones.HIGH_RISK_CONFIRM_KEYWORDS.firstOrNull { candidate.contains(it, ignoreCase = true) }
+                    ?.let { return ConfirmationWindowDanger.HighRiskKeyword(it) }
+            }
+            val childCount = runCatching { node.childCount }.getOrDefault(0)
+            for (i in 0 until childCount) {
+                runCatching { node.getChild(i) }.getOrNull()?.let { queue.add(it) }
+            }
+        }
+        return null
+    }
+
+    private sealed interface ConfirmationWindowDanger {
+        data class PasswordFocused(val nodeHint: String) : ConfirmationWindowDanger
+        data class CriticalKeyword(val keyword: String, val system: Boolean) : ConfirmationWindowDanger
+        data class HighRiskKeyword(val keyword: String) : ConfirmationWindowDanger
     }
 
     /**
@@ -531,7 +794,11 @@ class HelixGuiCoordinatorImpl(
     // 动态闭环委派（M5.2）
     // =====================================================================
 
-    override suspend fun executeAutonomousTask(request: AutonomousTaskRequest): TaskExecutionResult {
+    override suspend fun executeAutonomousTask(request: AutonomousTaskRequest): TaskExecutionResult = taskMutex.withLock {
+        executeAutonomousTaskLocked(request)
+    }
+
+    private suspend fun executeAutonomousTaskLocked(request: AutonomousTaskRequest): TaskExecutionResult {
         val loop = autonomousLoop
             ?: return TaskExecutionResult.Failure("单步动态闭环未装配（AutonomousActionLoop 缺失）", 0)
         isCancelled.set(false)
@@ -875,8 +1142,17 @@ class HelixGuiCoordinatorImpl(
                 when (action) {
                     is CoordinatorAction.Click -> {
                         emitTouch(targetPoint.x, targetPoint.y, targetPoint.x, targetPoint.y, 100L, TouchKind.TAP)
+                        // M6.0 P1-2：触控抑制窗口（无障碍手势与 Shizuku input tap 两条路径都产生触控事件）
+                        userInterruptionDetector?.onAutomationGestureDispatched(100L)
                         if (executionBackend != null && executionBackend.isAvailable()) {
-                            executionBackend.click(targetPoint.x, targetPoint.y)
+                            // M6.0 P3-3：backend 返回值纳入 outcome——静默失败的 input tap
+                            // 不能谎报成功（核销层虽有兜底，但 trace 与自愈策略都会被误导）
+                            val backendOk = executionBackend.click(targetPoint.x, targetPoint.y)
+                            if (!backendOk) {
+                                val reason = "点击派发失败（执行通道返回失败）"
+                                _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                                return AtomicExecutionOutcome.Failed(reason)
+                            }
                         } else {
                             val clickGesture = GestureSpec.Click(
                                 x = targetPoint.x,
@@ -904,6 +1180,31 @@ class HelixGuiCoordinatorImpl(
                                     honestNarrative = narrative
                                 )
                                 return AtomicExecutionOutcome.Blocked(rule, gestureResult.reason, narrative)
+                            }
+                            // M6.0 P3-3：TimedOut / Error / 其余 Cancelled / 服务不可用
+                            // 一律显式失败，不再谎报成功
+                            when (gestureResult) {
+                                is GestureResult.Completed -> Unit
+                                is GestureResult.TimedOut -> {
+                                    val reason = "点击手势派发超时 (${gestureResult.timeoutMs}ms)"
+                                    _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                                    return AtomicExecutionOutcome.Failed(reason)
+                                }
+                                is GestureResult.Error -> {
+                                    val reason = "点击手势派发异常: ${gestureResult.throwable.message}"
+                                    _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                                    return AtomicExecutionOutcome.Failed(reason)
+                                }
+                                is GestureResult.Cancelled -> {
+                                    val reason = "点击手势被系统取消: ${gestureResult.reason}"
+                                    _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                                    return AtomicExecutionOutcome.Failed(reason)
+                                }
+                                GestureResult.ServiceUnavailable -> {
+                                    val reason = "无障碍服务不可用，无法派发点击手势"
+                                    _state.value = TaskExecutionState.Failed(reason, stepIndex)
+                                    return AtomicExecutionOutcome.Failed(reason)
+                                }
                             }
                         }
                         AtomicExecutionOutcome.Succeeded("点击 " + (text ?: resourceId ?: "元素"), bounds)
@@ -1009,18 +1310,68 @@ class HelixGuiCoordinatorImpl(
     private suspend fun applyRecoveryAction(action: HealingAction, currentNodes: List<ExecutionNode>) {
         when (action) {
             is HealingAction.DismissPopup -> {
-                // 在当前树中寻找符合弹窗切除词表的按钮并点击
+                // M6.0 B1 收口（体检报告 P2-2）：自愈点击必须过统一闸门。
+                // 旧实现两处缺陷叠加：
+                // 1. `contains` 宽泛匹配——页面上任意含"取消/关闭"字样的文本
+                //    （如业务列表里的「取消订单」「关闭广告」）都可能被误点，
+                //    触发真实业务副作用；
+                // 2. GestureSpec 不带 targetText，闸门的文本级审查拿不到审查对象。
+                // 新实现：整词匹配 + 必须可点击 + evaluateUiGate 全量裁定 +
+                // GestureSpec 携带完整目标语义（GestureExecutorImpl 内部闸门同样生效）。
+                // 找不到整词候选或闸门不放行时宁可不治——弹窗留给 watchdog
+                // 升级到用户，绝不盲点。
+                // 实现注记：未采用"改走 executeAtomic 重新接地"的方案——自愈发生在
+                // locate 失败之后，重新 dump/locate 会与"先点掉弹窗再验证"的时序
+                // 互相踩踏（测试 testExecuteTask_popupBlocking 建模的正是该时序）。
+                // 闸门覆盖的本质要求由"协调器闸门 + 带语义的 GestureSpec"满足。
                 val popupKeywords = SelfHealingWatchdogImpl.POPUP_KEYWORDS
                 val candidate = currentNodes.firstOrNull { node: ExecutionNode ->
-                    popupKeywords.any { kw: String ->
-                        node.text?.contains(kw) == true || node.contentDescription?.contains(kw) == true
+                    if (!node.isClickable) return@firstOrNull false
+                    val text = node.text?.trim()
+                    val desc = node.contentDescription?.trim()
+                    popupKeywords.any { kw ->
+                        text.equals(kw, ignoreCase = true) || desc.equals(kw, ignoreCase = true)
                     }
                 }
-                if (candidate != null) {
-                    gestureExecutor.execute(
-                        GestureSpec.Click(candidate.bounds.centerX.toFloat(), candidate.bounds.centerY.toFloat())
+                if (candidate == null) {
+                    LiricaLog.w(
+                        TAG,
+                        "自愈未找到整词匹配的可点击弹窗按钮（候选 " + currentNodes.size + " 个节点），放弃盲点"
                     )
+                    return
                 }
+
+                // 自愈点击与正常点击同权过闸：文本/资源 ID/包名全量送审
+                val proposed = ProposedAction(
+                    actionType = "CLICK",
+                    targetText = candidate.text,
+                    targetResourceId = candidate.resourceId,
+                    isPasswordTarget = false,
+                    currentPackage = currentPackageProvider() ?: ""
+                )
+                when (val decision = evaluateUiGate(proposed)) {
+                    is GatekeeperDecision.PhysicalBlocked -> {
+                        LiricaLog.w(TAG, "自愈点击被闸门熔断: ${decision.rule}，放弃并升级")
+                        return
+                    }
+                    // 自愈链路内无法承载交互式确认卡片：需确认 = 不自动点击
+                    is GatekeeperDecision.RequireUserConfirmation -> {
+                        LiricaLog.w(TAG, "自愈点击命中需确认规则，放弃自动点击并升级")
+                        return
+                    }
+                    is GatekeeperDecision.Allowed -> Unit
+                }
+
+                gestureExecutor.execute(
+                    GestureSpec.Click(
+                        x = candidate.bounds.centerX.toFloat(),
+                        y = candidate.bounds.centerY.toFloat(),
+                        targetPackage = currentPackageProvider() ?: "",
+                        targetText = candidate.text,
+                        targetResourceId = candidate.resourceId,
+                        isPasswordTarget = false
+                    )
+                )
             }
             is HealingAction.PhysicalBacktrack -> {
                 serviceHolder.get()?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)

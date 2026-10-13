@@ -155,6 +155,9 @@ class SafetyPolicyEngineImpl(
             request.actionType.contains("LONG", ignoreCase = true) -> SystemActionCatalog.ID_UI_LONG_CLICK
             request.actionType.contains("SWIPE", ignoreCase = true) ||
                 request.actionType.contains("SCROLL", ignoreCase = true) -> SystemActionCatalog.ID_UI_SWIPE
+            // M6.0 P0-1：键事件通道必须在引擎层有目录归属，否则会掉进 else 分支被当成
+            // 低危 CLICK 放行——这正是历史实现的"唯一没有门锁的侧门"
+            request.actionType.contains("KEY", ignoreCase = true) -> SystemActionCatalog.ID_UI_KEY_EVENT
             else -> SystemActionCatalog.ID_UI_CLICK
         }
         val descriptor = SystemActionCatalog.of(actionId)

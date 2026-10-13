@@ -39,6 +39,9 @@ object SafetyRuleIds {
     /** 极高危动作在 Intent 通道的物理熔断 */
     const val INTENT_CRITICAL_BLOCKED = "RULE_INTENT_CRITICAL_BLOCKED"
 
+    /** 键事件确认类按键（ENTER/DPAD_CENTER）的叠加闸门（M6.0 P0-1） */
+    const val KEY_EVENT_CONFIRMATION_GATE = "RULE_KEY_EVENT_CONFIRMATION_GATE"
+
     /** 未知动作默认拒绝（fail-closed） */
     const val UNKNOWN_ACTION_DENIED = "RULE_UNKNOWN_ACTION_DENIED"
 }
@@ -77,6 +80,7 @@ object SystemActionCatalog {
     const val ID_UI_SWIPE = "UI_SWIPE"
     const val ID_UI_GLOBAL_BACK = "UI_GLOBAL_BACK"
     const val ID_UI_SCREENSHOT = "UI_SCREENSHOT"
+    const val ID_UI_KEY_EVENT = "UI_KEY_EVENT"
 
     private val LOW_PASS = SafeActionDescriptor(
         actionId = ID_SET_ALARM,
@@ -281,6 +285,19 @@ object SystemActionCatalog {
             requiresUserConfirmation = false,
             autoPass = false,
             note = "截屏触及隐私面：金融/密码场景由 PrivacyBreaker 整屏熔断，且受温度与电量梯度限流"
+        ),
+
+        SafeActionDescriptor(
+            actionId = ID_UI_KEY_EVENT,
+            channel = ActionChannel.UI_GESTURE,
+            riskGrade = ActionRiskGrade.SENSITIVE,
+            gateRule = SafetyRuleIds.KEY_EVENT_CONFIRMATION_GATE,
+            requiresUserConfirmation = false,
+            autoPass = false,
+            note = "M6.0 P0-1 收口：键事件无目标文本可供文本级审查，ENTER/DPAD_CENTER 可激活焦点" +
+                "默认按钮（支付确认弹窗的默认按钮往往正是它）。除统一引擎包名级零容忍外，" +
+                "协调器对确认类按键叠加：通信应用代发熔断（extraInfo.isTextInput）、活窗口" +
+                "焦点/关键词扫描、漫游只读熔断；数字键码直通已删除（KeycodeMapper 仅白名单符号名）"
         )
     ).associateBy { it.actionId }
 
@@ -320,6 +337,7 @@ object SystemActionCatalog {
         ID_UI_CLICK,
         ID_UI_LONG_CLICK,
         ID_UI_INPUT_TEXT,
+        ID_UI_KEY_EVENT,
         ID_SEND_SMS,
         ID_SEND_EMAIL,
         ID_SHARE_TEXT

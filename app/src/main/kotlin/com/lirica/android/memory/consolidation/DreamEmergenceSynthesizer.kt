@@ -114,7 +114,11 @@ class DreamEmergenceSynthesizer {
             ).trim().removeSurrounding("\"", "\"")
 
             reply.takeIf { it.isNotBlank() }
-        }.getOrNull()
+        }.let { result ->
+            // M6.0 P1-7：取消必须上抛，不得降级为规则模板（被取消的流水线不该产出念头）
+            (result.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
+            result.getOrNull()
+        }
 
         return if (!generatedText.isNullOrBlank()) {
             createThoughtEntity(generatedText, nowMs)

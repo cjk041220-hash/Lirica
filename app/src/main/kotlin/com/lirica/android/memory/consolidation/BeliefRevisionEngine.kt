@@ -195,9 +195,14 @@ class BeliefRevisionEngine {
             ).trim()
 
             parseContradictionJson(response, newMemories)
-        }.getOrElse { e ->
-            LiricaLog.w(TAG, "LLM 认知冲突推理失败，安全回退至规则通道: ${e.message}")
-            emptyMap()
+        }.let { result ->
+            // M6.0 P1-7：runCatching 会吞掉 CancellationException——入梦流水线被取消
+            // 时必须上抛，否则会以"无矛盾"结论继续跑完剩余固化的写入步骤
+            (result.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
+            result.getOrElse { e ->
+                LiricaLog.w(TAG, "LLM 认知冲突推理失败，安全回退至规则通道: ${e.message}")
+                emptyMap()
+            }
         }
     }
 

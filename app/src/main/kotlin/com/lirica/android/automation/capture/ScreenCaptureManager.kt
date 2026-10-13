@@ -112,6 +112,9 @@ class ScreenCaptureManager(
                 lastCaptureTime = now
             }
             frame
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // M6.0 P1-7：协程取消原样上抛，不粉饰成"捕获失败返回 null"
+            throw e
         } catch (e: Throwable) {
             LiricaLog.e("ScreenCaptureManager", "屏幕捕获异常", e)
             null
@@ -123,6 +126,10 @@ class ScreenCaptureManager(
         quality: Int,
         now: Long
     ): FrameCaptureResult? = suspendCancellableCoroutine { continuation ->
+        // M6.0 P1-8：所有 resume 点前必须守 isActive——回调运行在主线程
+        // （service.mainExecutor），用户在截屏在飞的 100-300ms 窗口内取消协程时，
+        // 迟到的 onSuccess/onFailure 会在已取消的 continuation 上 resume 并抛
+        // IllegalStateException 崩溃应用。正确范式见 GestureExecutorImpl。
         val executor = service.mainExecutor
         service.takeScreenshot(
             Display.DEFAULT_DISPLAY,
@@ -134,7 +141,7 @@ class ScreenCaptureManager(
                     try {
                         val bitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
                         if (bitmap == null) {
-                            continuation.resume(null)
+                            if (continuation.isActive) continuation.resume(null)
                             return
                         }
 
@@ -142,17 +149,19 @@ class ScreenCaptureManager(
                         bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(10, 100), stream)
                         val bytes = stream.toByteArray()
 
-                        continuation.resume(
-                            FrameCaptureResult(
-                                bytes = bytes,
-                                widthPx = bitmap.width,
-                                heightPx = bitmap.height,
-                                timestamp = now
+                        if (continuation.isActive) {
+                            continuation.resume(
+                                FrameCaptureResult(
+                                    bytes = bytes,
+                                    widthPx = bitmap.width,
+                                    heightPx = bitmap.height,
+                                    timestamp = now
+                                )
                             )
-                        )
+                        }
                     } catch (e: Throwable) {
                         LiricaLog.e("ScreenCaptureManager", "位图压缩处理异常", e)
-                        continuation.resume(null)
+                        if (continuation.isActive) continuation.resume(null)
                     } finally {
                         // 铁律：显式释放底层硬件缓冲，绝不泄露 GPU 显存
                         hardwareBuffer.close()
@@ -161,7 +170,7 @@ class ScreenCaptureManager(
 
                 override fun onFailure(errorCode: Int) {
                     LiricaLog.w("ScreenCaptureManager", "无障碍截屏失败，错误码: $errorCode")
-                    continuation.resume(null)
+                    if (continuation.isActive) continuation.resume(null)
                 }
             }
         )

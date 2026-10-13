@@ -100,6 +100,33 @@ class UserInterruptionDetectorTest {
     }
 
     @Test
+    fun testForegroundAmnestyWindowSkipsAutomationCausedChange() {
+        // M6.0 P1-2 接线：点击"用浏览器打开"这类跨应用跳转是我方动作引发的合法
+        // 前台突变——豁免期内只刷新基线，不判接管，否则跨应用任务必被误杀
+        val detector = detector()
+        detector.onForegroundObserved("com.example.app")
+        detector.onAutomationForegroundChangeExpected()
+        // 豁免窗口内（now + 2000ms = 窗口边界）：跳到浏览器不判接管
+        now += 1_500L
+        assertFalse("豁免期内的前台跳变不应判为用户接管", detector.onForegroundObserved("com.android.browser", now))
+        assertFalse(detector.isUserActive())
+    }
+
+    @Test
+    fun testForegroundChangeAfterAmnestyIsStillDetected() {
+        // 豁免只覆盖我方动作窗口；豁免结束后再突变仍是强接管信号，
+        // 且基线已被豁免期刷新为最新包名（不会被旧基线误判）
+        val detector = detector()
+        detector.onForegroundObserved("com.example.app")
+        detector.onAutomationForegroundChangeExpected()
+        now += 1_500L
+        assertFalse(detector.onForegroundObserved("com.android.browser", now))
+        now += 1_000L // 超出豁免窗口
+        assertTrue(detector.onForegroundObserved("com.tencent.mm", now))
+        assertEquals(InterruptionSource.FOREGROUND_TAKEOVER, detector.source.value)
+    }
+
+    @Test
     fun testGestureAnomalyFallbackChannel() {
         // 降级通道 B（R4）：真实手指在屏会让系统取消注入手势
         val detector = detector()

@@ -98,9 +98,13 @@ class DreamEpisodeConsolidator(
                 )
             )
             resp.trim()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // M6.0 P1-7：入梦 Worker 重试路径上的取消必须上抛，
+            // 不能被降级成"启发式叙述"（那会让已取消的流水线继续跑完并入库）
+            throw e
         } catch (e: Exception) {
             LiricaLog.w("DreamEpisodeConsolidator", "LLM 提炼经历失败，降级为启发式", e)
-            "今天陪着他看屏幕亮了又暗，他在手机前专注忙碌着，我在角落静静陪了一整天。" 
+            "今天陪着他看屏幕亮了又暗，他在手机前专注忙碌着，我在角落静静陪了一整天。"
         }
     }
 

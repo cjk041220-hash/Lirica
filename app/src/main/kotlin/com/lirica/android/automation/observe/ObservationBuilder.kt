@@ -9,6 +9,7 @@ import com.lirica.android.automation.policy.ReadOnlyGuard
 import com.lirica.android.automation.verify.ActionExecutionBudget
 import com.lirica.android.automation.verify.BudgetDimension
 import com.lirica.android.automation.verify.BudgetLedger
+import com.lirica.android.common.logging.LiricaLog
 
 /**
  * 多级观测表征构建器（主方案5.0 §5.1.1 · P2-1 全量吸收）。
@@ -26,7 +27,7 @@ class ObservationBuilder(
     private val screenHeightProvider: () -> Int,
     private val packageProvider: () -> String?,
     /** Level 1 端侧 OCR（ML Kit）文本提供者；null 表示设备/环境不支持 */
-    private val localOcrProvider: (suspend () -> List<String>)? = null,
+    private val localOcrProvider: (suspend () -> List<com.lirica.android.automation.grounding.VisualDetection>)? = null,
     /** Level 2 云端 VLM 摘要提供者；null 表示未配置多模态通道 */
     private val cloudVlmProvider: (suspend (goal: String, nodeSummary: String) -> String?)? = null,
     private val timeProvider: () -> Long = { System.currentTimeMillis() },
@@ -89,9 +90,17 @@ class ObservationBuilder(
         val ocrProvider = localOcrProvider
         if (ocrProvider != null && visionAllowedProvider()) {
             attempted += ObservationLevel.LOCAL_OCR
-            val ocrLines = runCatching { ocrProvider.invoke() }.getOrDefault(emptyList())
-            if (ocrLines.isNotEmpty()) {
-                val snapshot = buildOcrSnapshot(ocrLines, budget)
+            // M6.0 P1-7：协程取消原样上抛，不粉饰成"OCR 失败"
+            val ocrDetections = try {
+                ocrProvider.invoke()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                LiricaLog.w("ObservationBuilder", "端侧 OCR 调用失败", t)
+                emptyList()
+            }
+            if (ocrDetections.isNotEmpty()) {
+                val snapshot = buildOcrSnapshot(ocrDetections, budget)
                 if (snapshot.nodes.isNotEmpty()) return ObservationResult.Success(snapshot)
             }
         }
@@ -107,7 +116,15 @@ class ObservationBuilder(
                     reason = semanticReason + "；且 " + vlmBudget.reason
                 )
             }
-            val summary = runCatching { vlmProvider.invoke(goal, semanticReason) }.getOrNull()
+            // M6.0 P1-7：协程取消原样上抛，不粉饰成"VLM 无输出"
+            val summary = try {
+                vlmProvider.invoke(goal, semanticReason)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                LiricaLog.w("ObservationBuilder", "云端 VLM 调用失败", t)
+                null
+            }
             if (!summary.isNullOrBlank()) {
                 val snapshot = buildVlmSnapshot(summary, budget)
                 return ObservationResult.Success(snapshot)
@@ -234,17 +251,25 @@ class ObservationBuilder(
     // Level 1 / Level 2
     // ------------------------------------------------------------------
 
-    private fun buildOcrSnapshot(lines: List<String>, budget: ActionExecutionBudget): ObservationSnapshot {
-        val nodes = lines.take(budget.maxObservationNodes).mapIndexed { index, line ->
+    private fun buildOcrSnapshot(
+        detections: List<com.lirica.android.automation.grounding.VisualDetection>,
+        budget: ActionExecutionBudget
+    ): ObservationSnapshot {
+        val nodes = detections.take(budget.maxObservationNodes).mapIndexed { index, detection ->
             ObservationNode(
                 refId = "o" + index,
-                text = line,
+                text = detection.text,
                 contentDescription = null,
                 resourceId = null,
                 className = null,
                 role = NodeRole.TEXT,
-                normalizedX = 500,
-                normalizedY = 500,
+                // M6.0 B12：真实 OCR bounds 换算锚点。历史实现恒填 (500,500)——
+                // 自绘 Canvas 场景（无障碍树为空）下决策层点任一 OCR ref 都会
+                // 落到屏幕正中心。ML Kit 本来就返回行级 bounds，是契约层把
+                // 坐标丢成了纯文本。isClickable 维持 false（OCR 文本未被证实
+                // 可点），但锚点真实后接地层可按文本+锚点精确定位。
+                normalizedX = detection.bounds.centerX().toInt().coerceIn(0, 1000),
+                normalizedY = detection.bounds.centerY().toInt().coerceIn(0, 1000),
                 isClickable = false,
                 isEditable = false,
                 isEnabled = true,
@@ -258,7 +283,7 @@ class ObservationBuilder(
             packageName = packageProvider() ?: "",
             activityName = null,
             nodes = nodes,
-            truncatedCount = (lines.size - nodes.size).coerceAtLeast(0),
+            truncatedCount = (detections.size - nodes.size).coerceAtLeast(0),
             promptText = renderPrompt(header, nodes, budget),
             capturedAtMs = timeProvider()
         )

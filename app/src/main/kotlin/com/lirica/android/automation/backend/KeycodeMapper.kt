@@ -12,11 +12,11 @@ object KeycodeMapper {
 
     private val KEY_NAME_TO_CODE = mapOf(
         "BACK" to KeyEvent.KEYCODE_BACK,
-        "RETURN" to KeyEvent.KEYCODE_BACK,
         "返回" to KeyEvent.KEYCODE_BACK,
         "HOME" to KeyEvent.KEYCODE_HOME,
         "主页" to KeyEvent.KEYCODE_HOME,
         "ENTER" to KeyEvent.KEYCODE_ENTER,
+        "RETURN" to KeyEvent.KEYCODE_ENTER,
         "确认" to KeyEvent.KEYCODE_ENTER,
         "回车" to KeyEvent.KEYCODE_ENTER,
         "DEL" to KeyEvent.KEYCODE_DEL,
@@ -45,19 +45,24 @@ object KeycodeMapper {
     )
 
     /**
-     * 将按键符号名或字符串格式的整数解析为 Android KeyEvent 键码。
+     * 将按键符号名解析为 Android KeyEvent 键码（M6.0 P0-1 收口：仅白名单符号名）。
      *
-     * @param keyNameOrCode 符号名（如 "BACK", "ENTER"）或纯数字字面量（如 "66"）
-     * @return 对应的按键码，无法解析时返回 null
+     * 历史实现接受纯数字键码直通（"66" → KEYCODE_ENTER 等），使模型可绕过
+     * 符号白名单注入任意键码——与闸门的文本级审查完全脱节。现在：
+     * 1. 只接受 [KEY_NAME_TO_CODE] 白名单内的符号名（中英文）；
+     * 2. "RETURN" 修正为 ENTER（键盘语义 RETURN=Enter；旧实现误映射为 BACK，
+     *    模型按直觉使用会打出相反方向的动作）；
+     * 3. 无法解析一律返回 null，由调用方显式失败——绝不静默兜底成 ENTER。
+     *
+     * @param keyNameOrCode 符号名（如 "BACK", "ENTER", "返回"）
+     * @return 对应的按键码；不在白名单内返回 null
      */
     fun resolveKeyCode(keyNameOrCode: String): Int? {
         val trimmed = keyNameOrCode.trim()
         if (trimmed.isEmpty()) return null
 
-        // 纯数字键码直接解析
-        trimmed.toIntOrNull()?.let { return it }
-
-        // 符号名称匹配
+        // M6.0 P0-1：删除纯数字键码直通（旧实现 trimmed.toIntOrNull()?.let { return it }），
+        // 键码注入面收敛到符号白名单。
         return KEY_NAME_TO_CODE[trimmed.uppercase()]
             ?: KEY_NAME_TO_CODE[trimmed]
     }

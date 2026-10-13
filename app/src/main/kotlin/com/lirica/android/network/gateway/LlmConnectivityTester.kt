@@ -62,6 +62,9 @@ class LlmConnectivityTester(
                 diagnosticMessage = e.message ?: "模型调用失败",
                 rawError = e.message ?: ""
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // M6.0 P1-7：连通性探测作为可取消操作，取消必须上抛而非谎报"网络失败"
+            throw e
         } catch (e: Throwable) {
             val latency = System.currentTimeMillis() - start
             ConnectivityResult.Failure(

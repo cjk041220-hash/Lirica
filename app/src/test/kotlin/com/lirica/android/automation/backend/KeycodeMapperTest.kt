@@ -26,9 +26,20 @@ class KeycodeMapperTest {
     }
 
     @Test
-    fun testResolveKeyCode_numericString() {
-        assertEquals(KeyEvent.KEYCODE_ENTER, KeycodeMapper.resolveKeyCode("66"))
-        assertEquals(KeyEvent.KEYCODE_BACK, KeycodeMapper.resolveKeyCode("4"))
+    fun testResolveKeyCode_returnMapsToEnter_notBack() {
+        // M6.0：键盘语义 RETURN=Enter。旧实现误映射为 BACK，模型按直觉使用
+        // "RETURN" 会打出相反方向的动作（体检报告 P3-6①）。
+        assertEquals(KeyEvent.KEYCODE_ENTER, KeycodeMapper.resolveKeyCode("RETURN"))
+    }
+
+    @Test
+    fun testResolveKeyCode_numericString_rejected() {
+        // M6.0 P0-1：数字键码直通已删除。键码注入面收敛到符号白名单——
+        // "66"→ENTER、"4"→BACK 的旧断言守护的是被判定为缺陷的行为（闸门
+        // 无法对任意键码做文本级审查），按 fail-closed 原则反转为 null。
+        assertNull(KeycodeMapper.resolveKeyCode("66"))
+        assertNull(KeycodeMapper.resolveKeyCode("4"))
+        assertNull(KeycodeMapper.resolveKeyCode("-1"))
     }
 
     @Test

@@ -499,4 +499,48 @@ class NativeToolAgentTest {
         assertFalse(result.isSuccess)
         assertTrue(result.output.contains("未能解析目标元素") || result.output.contains("未指定目标元素"))
     }
+
+    @Test
+    fun testExecuteToolCall_executeMacro_unresolvableKeyFailsGracefully() = runTest {
+        val macroArgs = """
+            {
+                "description": "测试未知按键",
+                "actions": [
+                    { "type": "press_key", "key": "UNKNOWN_KEY_NAME" }
+                ]
+            }
+        """.trimIndent()
+
+        val toolCall = ToolCall(
+            id = "call_macro_bad_key",
+            type = "function",
+            function = ToolCallFunction(name = "execute_macro", arguments = macroArgs)
+        )
+
+        val result = agent.executeToolCall(toolCall)
+        assertFalse(result.isSuccess)
+        assertTrue(result.output.contains("按键动作无法解析"))
+    }
+
+    @Test
+    fun testExecuteToolCall_executeMacro_numericKeycodeRejected() = runTest {
+        val macroArgs = """
+            {
+                "description": "测试数字键码直通被拒绝",
+                "actions": [
+                    { "type": "press_key", "key": "66" }
+                ]
+            }
+        """.trimIndent()
+
+        val toolCall = ToolCall(
+            id = "call_macro_num_key",
+            type = "function",
+            function = ToolCallFunction(name = "execute_macro", arguments = macroArgs)
+        )
+
+        val result = agent.executeToolCall(toolCall)
+        assertFalse(result.isSuccess)
+        assertTrue(result.output.contains("按键动作无法解析"))
+    }
 }

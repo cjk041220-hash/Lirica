@@ -619,7 +619,9 @@ class AutonomousActionLoop(
         if (steps.isEmpty()) return null
         val appPackage = observation.packageName.ifBlank { currentPackageProvider() ?: "" }
         if (appPackage.isBlank()) return null
-        val recorded = runCatching {
+        // M6.0 P1-7：CancellationException 原样上抛——宏录制落库被取消时不得
+        // 被粉饰成"录制失败返回 null"（那会误导调用方走失败分支而非终止）
+        val recorded = try {
             memory.record(
                 MacroRecordSpec(
                     intentSignature = signature,
@@ -629,7 +631,12 @@ class AutonomousActionLoop(
                     steps = steps
                 )
             )
-        }.getOrNull() ?: return null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            LiricaLog.w("AutonomousActionLoop", "经验轨迹入库失败", t)
+            null
+        } ?: return null
         LiricaLog.i("AutonomousActionLoop", "经验轨迹已入库：" + signature + " @ " + appPackage + " (" + steps.size + " 步)")
         return recorded.macroId
     }

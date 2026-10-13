@@ -214,9 +214,39 @@ class DynamicStepPlannerTest {
     }
 
     @Test
+    fun testParsePressKeyUnresolvable_returnsNull_noSilentFallback() {
+        // M6.0 P0-1：删除两处静默兜底（缺 key 名默认 "ENTER"、白名单外默认
+        // KEYCODE_ENTER）。按键通道无法做文本级审查，任何"猜出来"的键都可能
+        // 落在支付确认弹窗的默认按钮上——解析失败必须显式失败。
+        val planner = LlmDynamicStepPlanner(chatInvoker = { "" })
+        val observation = snapshot(listOf(node("n0", "搜索框")))
+
+        // 缺 key 名：旧实现默认 ENTER，现在必须 null
+        assertNull(planner.parse("""{"action":{"type":"press_key"}}""", observation))
+        // 白名单外符号名：旧实现默认 ENTER，现在必须 null
+        assertNull(planner.parse("""{"action":{"type":"press_key","key":"LAUNCH_ROCKET"}}""", observation))
+        // 数字键码：KeycodeMapper 已删除数字直通
+        assertNull(planner.parse("""{"action":{"type":"press_key","key":"66"}}""", observation))
+    }
+
+    @Test
     fun testPlanReturnsNullWhenInvokerThrows() = runTest {
         val planner = LlmDynamicStepPlanner(chatInvoker = { throw IllegalStateException("网络断了") })
         assertNull(planner.plan(context(snapshot(listOf(node("n0", "搜索"))))))
+    }
+
+    @Test
+    fun testPlanRethrowsCancellationFromInvoker() = runTest {
+        // M6.0 P1-7：协程取消必须原样上抛。历史实现把取消粉饰成"决策失败返回
+        // null"——用户喊停后闭环仍会消耗自愈额度并落地真实的恢复动作。
+        val planner = LlmDynamicStepPlanner(
+            chatInvoker = { throw kotlinx.coroutines.CancellationException("用户喊停") }
+        )
+        val result = runCatching { planner.plan(context(snapshot(emptyList()))) }
+        assertTrue(
+            "取消必须上抛而不是返回 null，实际: ${result.exceptionOrNull()}",
+            result.exceptionOrNull() is kotlinx.coroutines.CancellationException
+        )
     }
 
     @Test

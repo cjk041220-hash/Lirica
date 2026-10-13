@@ -73,7 +73,15 @@ class ShizukuExecutionBackend(
 
     private suspend fun executeCommand(cmd: String): Boolean {
         if (shellExecutor != null) {
-            return shellExecutor.invoke(cmd)
+            // M6.0 P1-7：外部 shell 执行器的取消必须透传
+            return try {
+                shellExecutor.invoke(cmd)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                LiricaLog.e("ShizukuExecutionBackend", "Shizuku shell 执行异常: $cmd", e)
+                false
+            }
         }
 
         return runCatching {

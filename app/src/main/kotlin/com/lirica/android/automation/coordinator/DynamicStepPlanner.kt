@@ -47,8 +47,15 @@ class LlmDynamicStepPlanner(
     override suspend fun plan(context: PlanningContext): PlannedStep? {
         val prompt = buildPrompt(context)
         repeat(maxParseAttempts) { attempt ->
-            val raw = runCatching { chatInvoker(prompt) }.getOrElse { throwable ->
-                LiricaLog.w("LlmDynamicStepPlanner", "决策调用失败（第 " + (attempt + 1) + " 次）", throwable)
+            // M6.0 P1-7：CancellationException 必须原样上抛。历史实现用 runCatching
+            // 把协程取消粉饰成"决策失败"——用户喊停后闭环仍会消耗自愈额度、落地
+            // 真实的恢复动作（"按了停止、屏幕还在动"的弱化版）。
+            val raw = try {
+                chatInvoker(prompt)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                LiricaLog.w("LlmDynamicStepPlanner", "决策调用失败（第 " + (attempt + 1) + " 次）", t)
                 return null
             }
             usageSink(
@@ -161,8 +168,12 @@ class LlmDynamicStepPlanner(
                 )
             }
             "press_key", "key" -> {
-                val keyStr = action.firstString("key", "name") ?: "ENTER"
-                val keyCode = KeycodeMapper.resolveKeyCode(keyStr) ?: KeyEvent.KEYCODE_ENTER
+                // M6.0 P0-1：删除两处静默兜底（缺 key 名默认 "ENTER"、白名单外默认
+                // KEYCODE_ENTER）。按键是唯一无法做文本级审查的通道，任何"猜出来"的
+                // 键都可能落在支付确认弹窗的默认按钮上。按本类自身铁律——"解析失败
+                // 即 null：不猜、不降级"，无法解析的按键名返回 null 交由闭环处理。
+                val keyStr = action.firstString("key", "name") ?: return null
+                val keyCode = KeycodeMapper.resolveKeyCode(keyStr) ?: return null
                 PlannedStep.act(
                     action = CoordinatorAction.PressKey(keyCode = keyCode, keyName = keyStr, description = "按键 " + keyStr),
                     expectation = expect,

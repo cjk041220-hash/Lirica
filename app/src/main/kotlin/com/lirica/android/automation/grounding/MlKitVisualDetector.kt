@@ -102,11 +102,13 @@ class MlKitVisualDetector(
                             }
                         }
                     }
-                    continuation.resume(results)
+                    // M6.0 P1-8：resume 前守 isActive——识别回调在主线程，协程取消后
+                    // 迟到的成功回调会在已取消 continuation 上崩溃应用
+                    if (continuation.isActive) continuation.resume(results)
                 }
                 .addOnFailureListener { exception ->
                     LiricaLog.e("MlKitVisualDetector", "ML Kit 文字识别异常", exception)
-                    continuation.resume(emptyList())
+                    if (continuation.isActive) continuation.resume(emptyList())
                 }
                 .addOnCompleteListener {
                     // 识别任务结束后显式回收位图内存，防止高频截帧检测时诱发 GC 抖动

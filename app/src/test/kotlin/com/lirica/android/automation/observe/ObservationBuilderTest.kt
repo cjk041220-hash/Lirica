@@ -58,8 +58,19 @@ class ObservationBuilderTest {
         dumpDurationMs = 5L
     )
 
+    private fun ocrDetection(text: String, cx: Int, cy: Int) =
+        com.lirica.android.automation.grounding.VisualDetection(
+            text = text,
+            bounds = com.lirica.android.automation.grounding.NormalizedRect(
+                left = (cx - 50).toFloat(),
+                top = (cy - 20).toFloat(),
+                right = (cx + 50).toFloat(),
+                bottom = (cy + 20).toFloat()
+            )
+        )
+
     private fun builder(
-        ocr: (suspend () -> List<String>)? = null,
+        ocr: (suspend () -> List<com.lirica.android.automation.grounding.VisualDetection>)? = null,
         vlm: (suspend (String, String) -> String?)? = null,
         screenWidth: Int = 1000,
         screenHeight: Int = 2000,
@@ -137,11 +148,35 @@ class ObservationBuilderTest {
                 message = "根节点为空"
             )
 
-        val result = builder(ocr = { listOf("播放", "收藏", "分享") }).observe(ledger(), "看视频")
+        val result = builder(ocr = {
+            listOf(
+                ocrDetection("播放", 200, 400),
+                ocrDetection("收藏", 500, 800),
+                ocrDetection("分享", 800, 1200)
+            )
+        }).observe(ledger(), "看视频")
         assertTrue(result is ObservationResult.Success)
         val snapshot = (result as ObservationResult.Success).snapshot
         assertEquals(ObservationLevel.LOCAL_OCR, snapshot.level)
         assertEquals(3, snapshot.nodeCount)
+    }
+
+    @Test
+    fun testOcrNodesCarryRealBounds_notScreenCenter() {
+        // M6.0 B12：历史实现把 OCR 节点坐标恒填 (500,500)——自绘 Canvas 场景下
+        // 决策层点任一 OCR ref 都会落到屏幕正中心。契约改为携带真实 bounds 后
+        // 锚点必须反映检测框中心。
+        runTest {
+            coEvery { extractor.dumpTree(any(), any(), any(), any(), any()) } returns
+                TreeDumpResult.Empty(com.lirica.android.automation.grounding.EmptyReason.ROOT_NODE_NULL, "空")
+            val result = builder(ocr = { listOf(ocrDetection("开始游戏", 800, 300)) })
+                .observe(ledger(), "开始游戏") as ObservationResult.Success
+            val node = result.snapshot.nodes.first()
+            assertEquals(800, node.normalizedX)
+            assertEquals(300, node.normalizedY)
+            // OCR 文本未被证实可点击，isClickable 保持诚实 false
+            assertEquals(false, node.isClickable)
+        }
     }
 
     @Test
@@ -226,7 +261,7 @@ class ObservationBuilderTest {
         var ocrCalled = false
         var vlmCalled = false
         val result = builder(
-            ocr = { ocrCalled = true; listOf("播放") },
+            ocr = { ocrCalled = true; listOf(ocrDetection("播放", 500, 500)) },
             vlm = { _, _ -> vlmCalled = true; "画面" },
             visionAllowed = false
         ).observe(ledger(), "看视频")

@@ -261,7 +261,7 @@ class NativeToolAgent(
                                         }
                                         putJsonObject("key") {
                                             put("type", "string")
-                                            put("description", "按键名称（如 'ENTER', 'BACK', 'HOME', 'SEARCH'）或数字键码（press_key 必填）")
+                                            put("description", "按键名称，仅支持符号名（如 'ENTER', 'BACK', 'HOME', 'SEARCH', '返回', '主页'），press_key 必填；不支持数字键码")
                                         }
                                         putJsonObject("direction") {
                                             put("type", "string")
@@ -704,8 +704,16 @@ class NativeToolAgent(
                                 coordinatorActions.add(CoordinatorAction.Type(query, text, "输入「$text」"))
                             }
                             "press_key" -> {
-                                val keyStr = actObj["key"]?.jsonPrimitive?.content ?: "ENTER"
-                                val keyCode = KeycodeMapper.resolveKeyCode(keyStr) ?: KeyEvent.KEYCODE_ENTER
+                                // M6.0 P0-1：删除静默兜底（缺 key 名默认 "ENTER"、白名单外
+                                // 默认 KEYCODE_ENTER）。无法解析的按键名直接作为 parseError
+                                // 返回给模型，让它看到错误原因并修正，而不是打出一个未知的键。
+                                val keyStr = actObj["key"]?.jsonPrimitive?.content
+                                val keyCode = keyStr?.let { KeycodeMapper.resolveKeyCode(it) }
+                                if (keyStr.isNullOrBlank() || keyCode == null) {
+                                    parseError = "第 ${idx + 1} 步按键动作无法解析: key=[$keyStr]" +
+                                        "（仅支持符号名，如 ENTER/BACK/HOME/SEARCH/返回/主页）"
+                                    break
+                                }
                                 coordinatorActions.add(CoordinatorAction.PressKey(keyCode, keyStr, "按键 $keyStr"))
                             }
                             "swipe" -> {

@@ -341,7 +341,25 @@ class LiricaApplication : Application() {
             safetyPolicy = policyEngine
         )
         val treeExtractor = ExecutionTreeExtractor()
-        val gestureExecutor = GestureExecutorImpl(serviceProvider = { AccessibilityServiceHolder.get() })
+
+        // 用户抢占熔断器（§6.2）：默认不自动恢复（R4 裁决：用户停手 != 用户同意继续）。
+        // M6.0 P1-2 前移创建：手势执行器与协调器都要在装配期拿到同一实例。
+        userInterruptionDetector = com.lirica.android.automation.verify.UserInterruptionDetector()
+
+        val gestureExecutor = GestureExecutorImpl(
+            serviceProvider = { AccessibilityServiceHolder.get() },
+            // M6.0 P1-2：手势派发观察器——自触发抑制窗口 + 手势异常降级通道 B
+            dispatchObserver = object : com.lirica.android.automation.gesture.GestureDispatchObserver {
+                override fun onAutomationGestureDispatched(estimatedDurationMs: Long) {
+                    userInterruptionDetector.onAutomationGestureDispatched(estimatedDurationMs)
+                }
+
+                override fun onGestureAnomaly() {
+                    userInterruptionDetector.onGestureAnomaly()
+                    LiricaLog.w("UserInterruption", "手势派发回调异常，判定可能存在用户触屏")
+                }
+            }
+        )
         val clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val textInputExecutor = TextInputExecutor(clipboardManager, gestureExecutor)
         val watchdog = SelfHealingWatchdogImpl()
@@ -418,8 +436,7 @@ class LiricaApplication : Application() {
             dao = database.actionMacroDao()
         )
 
-        // 用户抢占熔断器（§6.2）：默认不自动恢复（R4 裁决：用户停手 != 用户同意继续）
-        userInterruptionDetector = com.lirica.android.automation.verify.UserInterruptionDetector()
+        // 用户抢占熔断器已前移至手势执行器装配前创建（M6.0 P1-2）
 
         // 无障碍保活健康监视器（§7.1）
         accessibilityHealthMonitor = com.lirica.android.perception.AccessibilityHealthMonitor()
@@ -439,8 +456,9 @@ class LiricaApplication : Application() {
             }.onFailure { LiricaLog.w("LiricaApplication", "经验轨迹库维护失败", it) }
         }
 
-        // 抢占主通道接线：无障碍物理触控事件。可达性待真机验证（R4），
-        // 因此这里只是"尽力而为"，前台突变与手势异常两条降级通道由闭环内部兜底。
+        // 抢占主通道接线：无障碍物理触控事件。M6.0 已在 accessibility_service_config
+        // 声明 typeTouchInteractionStart，事件可达性由配置保证（真机事件量待实测，
+        // 若触控事件洪峰过大可回调，降级通道 B（手势异常）与前台突变豁免仍兜底）。
         appScope.launch {
             com.lirica.android.perception.LiricaAccessibilityService.physicalTouchEvents.collect { atMs ->
                 if (userInterruptionDetector.onPhysicalTouch(atMs)) {
@@ -496,8 +514,10 @@ class LiricaApplication : Application() {
             packageProvider = currentPackageProvider,
             localOcrProvider = ocr@{
                 val frame = screenCaptureManager.captureScreen() ?: return@ocr emptyList()
+                // M6.0 B12：契约升级——返回完整 VisualDetection（文本+bounds），
+                // 不再把行级坐标丢成纯文本（旧实现丢坐标导致降级观测锚点恒为屏幕中心）
                 runCatching {
-                    visualDetector.detectAll(frame.bytes).mapNotNull { it.text?.takeIf { text -> text.isNotBlank() } }
+                    visualDetector.detectAll(frame.bytes).filter { it.text.isNotBlank() }
                 }.getOrDefault(emptyList())
             },
             visionAllowedProvider = { resourceGuard.isVisionAllowed() }
@@ -574,7 +594,9 @@ class LiricaApplication : Application() {
                 accessibilityHealthMonitor.canDispatchAutomation()
             },
             // §7.3：视觉重通道闸门（温度/电量熔断期间禁止截屏接地）
-            visionAllowedProvider = { resourceGuard.isVisionAllowed() }
+            visionAllowedProvider = { resourceGuard.isVisionAllowed() },
+            // M6.0 P1-2：抢占自触发抑制接线——闭环派发的手势/前台切换不再被误判为用户抢机
+            userInterruptionDetector = userInterruptionDetector
         )
         // 闭环内的每一步原子动作都回流到协调器：静态序列与动态闭环共用同一落地通道，
         // 因此安全闸门/自愈/具身反馈三者对两条路径完全同源

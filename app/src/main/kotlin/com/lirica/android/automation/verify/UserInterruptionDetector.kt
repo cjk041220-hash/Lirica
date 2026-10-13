@@ -77,6 +77,16 @@ class UserInterruptionDetector(
     @Volatile
     private var suppressionUntilMs: Long = 0L
 
+    /**
+     * 前台突变豁免窗口（M6.0 P1-2 接线）。
+     *
+     * 我方派发的动作可能合法切换前台：LaunchApp 自不必说，点击"用浏览器打开"、
+     * 系统权限对话框弹出同样会换前台。豁免期内的包名突变只刷新基线、不判接管——
+     * 否则闭环在"点了一个跨应用链接"后必被 FOREGROUND_TAKEOVER 误杀。
+     */
+    @Volatile
+    private var foregroundAmnestyUntilMs: Long = 0L
+
     @Volatile
     private var lastUserActivityAtMs: Long = 0L
 
@@ -87,6 +97,16 @@ class UserInterruptionDetector(
     fun onAutomationGestureDispatched(estimatedDurationMs: Long) {
         val until = timeProvider() + estimatedDurationMs.coerceAtLeast(0L) + selfTouchSuppressionMs
         if (until > suppressionUntilMs) suppressionUntilMs = until
+    }
+
+    /**
+     * 我方派发一个**可能切换前台**的动作（LaunchApp / 点击跳转 / HOME 键）前登记
+     * 豁免窗口。与触控抑制窗口分离：Intent/键事件不产生触控事件，若把触控抑制
+     * 一并拉长，真实用户在应用冷启动期间抢手机会被漏检。
+     */
+    fun onAutomationForegroundChangeExpected(amnestyLeadMs: Long = 0L) {
+        val until = timeProvider() + amnestyLeadMs.coerceAtLeast(0L) + DEFAULT_FOREGROUND_AMNESTY_MS
+        if (until > foregroundAmnestyUntilMs) foregroundAmnestyUntilMs = until
     }
 
     /**
@@ -112,6 +132,9 @@ class UserInterruptionDetector(
         lastKnownForegroundPackage = packageName
         if (previous == null || packageName == null) return false
         if (previous == packageName) return false
+        // M6.0 P1-2：豁免期内（我方动作引发的合法跳变）只刷新基线，不判接管。
+        // 刷新基线是关键——豁免结束后再发生突变仍会被正确检出。
+        if (atMs <= foregroundAmnestyUntilMs) return false
         raise(InterruptionSource.FOREGROUND_TAKEOVER, atMs)
         return true
     }
@@ -179,5 +202,11 @@ class UserInterruptionDetector(
 
         /** 我方手势结束后额外屏蔽窗口：覆盖手指抬起抖动与系统事件延迟 */
         const val DEFAULT_SELF_TOUCH_SUPPRESSION_MS: Long = 300L
+
+        /**
+         * 前台突变豁免窗口：覆盖应用冷启动跳转（典型 1~3s）与系统弹窗过渡。
+         * 权衡：越长越不容易误杀跨应用任务，但真实抢机的检出延迟也越长。
+         */
+        const val DEFAULT_FOREGROUND_AMNESTY_MS: Long = 2_000L
     }
 }
